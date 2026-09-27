@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
-  <link rel="stylesheet" href="styles.css?v=20260927-5">
+  <link rel="stylesheet" href="styles.css?v=20260927-8">
 </head>
 <body>
   <aside class="sidebar">
@@ -13,10 +13,10 @@
       <button class="nav active" data-screen="shelf">⌂ <span>我的书架</span></button>
       <button class="nav" data-screen="stats">◎ <span>学习记录</span></button>
       <button class="nav" data-screen="vocab">☆ <span>生词复习</span><i id="dueBadge" class="badge hidden">0</i></button>
-      <button class="nav" data-screen="quality">✓ <span>导入质检</span></button>
-      <button class="nav" data-screen="settings">⚙ <span>接口设置</span></button>
+      <button class="nav" data-screen="import">＋ <span>导入书籍</span></button>
+      <button class="nav" data-screen="settings">⚙ <span>系统设置</span></button>
     </nav>
-    <div class="level-card"><span>当前书系</span><b>牛津书虫 · 0级</b><small>所有内容与记录只保存在本机</small></div>
+    <div class="level-card"><span>当前书系</span><select id="seriesSelect" aria-label="切换书系"></select><small>点击这里切换书系</small></div>
   </aside>
 
   <main>
@@ -28,29 +28,42 @@
 
     <section id="shelf" class="screen shelf">
       <div class="welcome"><small>GOOD EVENING</small><h1>今天，读一点英文。</h1><p>从故事里学会真实的表达，而不是孤立地背单词。</p></div>
-      <div class="shelf-title"><div><h2>继续阅读</h2><p>牛津书虫 · 入门级</p></div><span>1 本</span></div>
-      <article class="book-card" id="openBook">
-        <img src="assets/survival-game/pages/page-001.jpg" alt="《生存游戏》封面">
-        <div class="book-info"><span class="tag">LEVEL 0</span><h3>生存游戏</h3><em>Survive!</em><p>一架小飞机坠落在落基山脉。你能做出正确选择，活着离开雪山吗？</p><div class="progress"><i></i></div><small id="shelfProgress">尚未开始 · 约 16 分钟</small></div>
-        <button class="round-play" aria-label="开始阅读">▶</button>
-      </article>
+      <div class="shelf-title"><div><h2 id="shelfSeriesTitle">我的书架</h2><p id="shelfSeriesSubtitle">按书系浏览已导入书籍</p></div><div class="shelf-tools"><span id="shelfCount">0 本</span><div class="view-switch"><button id="tileViewBtn" class="active" title="平铺">▦</button><button id="listViewBtn" title="列表">☷</button></div></div></div>
+      <div id="libraryGrid" class="library-grid"><div class="empty-state">正在从本地数据库读取书架…</div></div>
       <div class="tip"><span>✦</span><div><b>推荐学习路径</b><p>先用泛听了解故事，再用精读点词，最后进入跟读模式模仿原音。</p></div></div>
     </section>
 
     <section id="stats" class="screen dashboard hidden"><div class="page-title"><small>LEARNING LOG</small><h1>学习记录</h1><p>你的数据只保存在这台设备。</p></div><div id="statsContent"></div></section>
     <section id="vocab" class="screen dashboard hidden"><div class="page-title"><small>SPACED REVIEW</small><h1>生词复习</h1><p>根据“认识 / 模糊 / 不认识”自动安排下一次复习。</p></div><div id="reviewContent"></div></section>
-    <section id="quality" class="screen dashboard hidden"><div class="page-title"><small>IMPORT QUALITY</small><h1>导入质检</h1><p>发现 OCR、段落跳转和音频时间轴中的可疑问题。</p></div><div id="qualityContent"></div></section>
+    <section id="import" class="screen dashboard hidden">
+      <div class="page-title"><small>BOOK IMPORTER</small><h1>导入书籍</h1><p>从 <code>books/</code> 选择系列与多本书，后台将严格按顺序逐本导入。</p></div>
+      <div class="panel import-panel">
+        <label>系列<select id="importSeries"><option>正在扫描…</option></select></label>
+        <div class="import-actions"><button id="selectAllBooks" type="button">全选未导入</button><button id="clearBooks" type="button">清空选择</button><button id="startBatchImport" type="button" disabled>按顺序导入所选书籍</button></div>
+        <div id="importBookList" class="import-book-list"><p>请先选择系列</p></div>
+        <div id="importMeta" class="import-meta">只显示同时具有 PDF 和 MP3 的书籍。</div>
+      </div>
+      <div id="importProgress" class="panel import-progress hidden"><div><b id="importStep">等待开始</b><span id="importPercent">0%</span></div><progress id="importBar" max="100" value="0"></progress><p id="importMessage"></p><div id="batchJobs" class="batch-jobs"></div></div>
+    </section>
     <section id="settings" class="screen dashboard hidden">
-      <div class="page-title"><small>LOCAL API SETTINGS</small><h1>接口设置</h1><p>配置只保存在本机，不会写入前端代码或图书数据。</p></div>
+      <div class="page-title"><small>LOCAL SYSTEM SETTINGS</small><h1>系统设置</h1><p>接口凭据、快捷键与书架偏好只保存在本机。</p></div>
       <form id="settingsForm" class="panel settings-form">
         <label>账号邮箱<input id="diocoEmail" type="email" autocomplete="username" placeholder="name@example.com" required></label>
         <label>Dioco 令牌<input id="diocoToken" type="password" autocomplete="off" placeholder="留空表示保留现有令牌"></label>
+        <fieldset class="shortcut-settings"><legend>阅读快捷键</legend>
+          <label>上一句<input id="shortcutPrevious" class="shortcut-input" maxlength="8" readonly></label>
+          <label>复读当前句<input id="shortcutRepeat" class="shortcut-input" maxlength="8" readonly></label>
+          <label>下一句<input id="shortcutNext" class="shortcut-input" maxlength="8" readonly></label>
+          <label>播放 / 暂停<input id="shortcutPlay" class="shortcut-input" maxlength="8" readonly></label>
+        </fieldset>
+        <p class="shortcut-help">点击输入框后按下新按键。四个快捷键不能重复。</p>
         <div class="settings-status"><span id="tokenStatus">正在读取配置…</span><button type="submit">保存设置</button></div>
         <p class="privacy-note">浏览器只把令牌提交给本机 <code>127.0.0.1:8765</code>；本地后端仅在请求上下文解释时转发给 Dioco，并保存到仅当前用户可读的配置文件。</p>
       </form>
     </section>
 
     <section id="reader" class="screen reader hidden">
+      <aside id="pagePanel" class="page-panel"><div class="page-head"><b>原书页</b><button id="closePage">×</button></div><img id="pageImage" alt="原书扫描页"><small id="pageLabel"></small></aside>
       <div class="story-panel">
         <div class="chapter">
           <span>INTERACTIVE STORY</span><h1>Survive!</h1>
@@ -65,16 +78,16 @@
         <div id="sentences" class="sentences"></div>
       </div>
       <aside id="wordPanel" class="word-panel"><div class="word-empty"><span>Aa</span><h3>点一个单词</h3><p>查看语境释义并决定是否加入复习。</p></div></aside>
-      <aside id="pagePanel" class="page-panel hidden"><div class="page-head"><b>原书页</b><button id="closePage">×</button></div><img id="pageImage" alt="原书扫描页"><small id="pageLabel"></small></aside>
     </section>
   </main>
 
   <footer id="player" class="player hidden">
     <button id="prevBtn" title="上一句">↶</button><button id="playBtn" class="play">▶</button><button id="nextBtn" title="下一句">↷</button>
     <span id="currentTime">00:00</span><input id="seek" type="range" min="0" max="1000" value="0"><span id="duration">00:00</span>
-    <button id="speedBtn" class="speed">1×</button><button id="repeatBtn" title="循环当前句">句↻</button>
+    <button id="speedBtn" class="speed">1×</button>
+    <span id="shortcutHint" class="shortcut-hint">A 上一句 · S 复读 · D 下一句 · 空格暂停</span>
     <audio id="audio" preload="metadata"></audio><audio id="recording"></audio>
   </footer>
-  <script src="app.js?v=20260927-5"></script>
+  <script src="app.js?v=20260927-8"></script>
 </body>
 </html>

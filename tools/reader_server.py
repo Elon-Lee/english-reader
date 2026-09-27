@@ -6,14 +6,20 @@ import hashlib
 import mimetypes
 import os
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
+import threading
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from library_db import BOOKS_ROOT, create_job, dictionary, get_book, get_job, get_settings as db_get_settings, library, scan_catalog, set_settings
 
 ROOT=Path(__file__).resolve().parents[1]
 READER=ROOT/"reader"
@@ -22,6 +28,9 @@ MODEL=ROOT/"tools/vendor/whisper.cpp/models/ggml-base.en.bin"
 PRIVATE_CONFIG=ROOT/".dioco.local.json"
 CACHE=ROOT/".cache/dioco"
 CACHE.mkdir(parents=True,exist_ok=True)
+COVER_CACHE=BOOKS_ROOT/".reader/catalog-covers"
+COVER_CACHE.mkdir(parents=True,exist_ok=True)
+COVER_LOCK=threading.Lock()
 UPSTREAM="https://api-cdn-plus.dioco.io"
 UPSTREAM_HEADERS={
     "Accept":"application/json, text/plain, */*",
@@ -29,6 +38,7 @@ UPSTREAM_HEADERS={
     "Referer":"https://www.youtube.com/",
     "User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/153.0 Safari/537.36",
 }
+IMPORT_LOCK=threading.Lock()
 
 class TextExtractor(HTMLParser):
     def __init__(self): super().__init__(); self.parts=[]
@@ -68,9 +78,22 @@ class Handler(SimpleHTTPRequestHandler):
         super().end_headers()
     def do_GET(self):
         route=urlsplit(self.path)
+        if route.path == "/api/library": self.reply({"books":library()}); return
+        if route.path == "/api/local-dictionary": self.reply(dictionary()); return
+        if route.path == "/api/import/catalog": self.reply({"series":scan_catalog()}); return
+        if route.path == "/api/import/cover": self.import_cover(parse_qs(route.query)); return
+        if route.path.startswith("/api/import/jobs/"):
+            try: job=get_job(int(route.path.rsplit("/",1)[1]))
+            except ValueError: job=None
+            self.reply(job or {"error":"job not found"},200 if job else 404); return
+        if route.path.startswith("/api/books/"):
+            book_id=unquote(route.path.split("/api/books/",1)[1]); result=get_book(book_id)
+            self.reply(result or {"error":"book not found"},200 if result else 404); return
         if route.path == "/api/settings": self.get_settings(); return
         if route.path == "/api/word-dictionary": self.word_dictionary(parse_qs(route.query)); return
         if route.path == "/api/word-tts": self.word_tts(parse_qs(route.query)); return
+        if route.path.startswith("/books/"):
+            self.serve_books_file(route.path); return
         range_header=self.headers.get("Range")
         if range_header and self.serve_range(range_header): return
         super().do_GET()
@@ -106,6 +129,9 @@ class Handler(SimpleHTTPRequestHandler):
                 remaining-=len(chunk)
         return True
     def do_POST(self):
+        if self.path == "/api/preferences": self.update_preferences(); return
+        if self.path == "/api/import/batch": self.start_batch_import(); return
+        if self.path == "/api/import": self.start_import(); return
         if self.path == "/api/settings": self.update_settings(); return
         if self.path == "/api/word-context": self.word_context(); return
         if self.path != "/api/transcribe": self.send_error(404); return
@@ -124,10 +150,73 @@ class Handler(SimpleHTTPRequestHandler):
                 self.reply({"text":text,"engine":"whisper.cpp","model":"base.en"})
         except Exception as exc:
             self.reply({"error":str(exc)},500)
+    def start_import(self):
+        length=int(self.headers.get("Content-Length","0"))
+        try: incoming=json.loads(self.rfile.read(length))
+        except Exception: self.reply({"error":"invalid json"},400); return
+        relative=str(incoming.get("path","")).strip()
+        try:
+            source=(BOOKS_ROOT/relative).resolve(); source.relative_to(BOOKS_ROOT.resolve())
+        except Exception: self.reply({"error":"invalid book path"},400); return
+        if not source.is_dir(): self.reply({"error":"book not found"},404); return
+        job_id=create_job(relative)
+        threading.Thread(target=self.run_import_queue,args=([(job_id,relative)],),daemon=True).start()
+        self.reply({"jobId":job_id,"status":"queued"},202)
+    def start_batch_import(self):
+        length=int(self.headers.get("Content-Length","0"))
+        try: incoming=json.loads(self.rfile.read(length)); paths=incoming.get("paths",[])
+        except Exception: self.reply({"error":"invalid json"},400); return
+        if not isinstance(paths,list) or not paths or len(paths)>151: self.reply({"error":"请选择1至151本书"},400); return
+        queue=[]
+        for value in paths:
+            relative=str(value).strip()
+            try: source=(BOOKS_ROOT/relative).resolve(); source.relative_to(BOOKS_ROOT.resolve())
+            except Exception: self.reply({"error":f"invalid book path: {relative}"},400); return
+            if not source.is_dir(): self.reply({"error":f"book not found: {relative}"},404); return
+            queue.append((create_job(relative),relative))
+        threading.Thread(target=self.run_import_queue,args=(queue,),daemon=True).start()
+        self.reply({"jobIds":[job_id for job_id,_ in queue],"status":"queued","mode":"sequential"},202)
+    def run_import_queue(self,queue):
+        with IMPORT_LOCK:
+            for job_id,relative in queue:
+                log=ROOT/".local"/f"import-{job_id}.log"; log.parent.mkdir(parents=True,exist_ok=True)
+                with log.open("w") as output:
+                    subprocess.run([sys.executable,str(ROOT/"tools/import_worker.py"),str(job_id),relative],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
+    def serve_books_file(self,url_path):
+        relative=unquote(url_path.split("/books/",1)[1]); path=(BOOKS_ROOT/relative).resolve()
+        try: path.relative_to(BOOKS_ROOT.resolve())
+        except ValueError: self.send_error(403); return
+        if not path.is_file(): self.send_error(404); return
+        range_header=self.headers.get("Range")
+        if range_header: self.send_path_range(path,range_header); return
+        size=path.stat().st_size; self.send_response(200); self.send_header("Content-Type",mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+        self.send_header("Content-Length",str(size)); self.send_header("Accept-Ranges","bytes"); self.end_headers()
+        with path.open("rb") as source:
+            try: shutil.copyfileobj(source,self.wfile)
+            except BrokenPipeError: pass
+    def send_path_range(self,path,range_header):
+        match=re.fullmatch(r"bytes=(\d*)-(\d*)",range_header.strip()); size=path.stat().st_size
+        if not match: self.send_error(416); return
+        first,last=match.groups()
+        if first: start=int(first); end=min(int(last),size-1) if last else size-1
+        else: length=min(int(last),size); start=size-length; end=size-1
+        if start<0 or start>=size or end<start:
+            self.send_response(416); self.send_header("Content-Range",f"bytes */{size}"); self.end_headers(); return
+        length=end-start+1; self.send_response(206); self.send_header("Content-Type",mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+        self.send_header("Accept-Ranges","bytes"); self.send_header("Content-Range",f"bytes {start}-{end}/{size}"); self.send_header("Content-Length",str(length)); self.end_headers()
+        with path.open("rb") as source:
+            source.seek(start); remaining=length
+            while remaining:
+                chunk=source.read(min(256*1024,remaining))
+                if not chunk: break
+                try: self.wfile.write(chunk)
+                except BrokenPipeError: break
+                remaining-=len(chunk)
     def get_settings(self):
         config=private_config(); token=config.get("diocoToken","")
+        shortcuts=db_get_settings({"shortcutPrevious":"a","shortcutRepeat":"s","shortcutNext":"d","shortcutPlay":"space","shelfView":"tile","currentSeries":""})
         self.reply({"userEmail":config.get("userEmail",""),"tokenConfigured":bool(token),
-                    "tokenMask":("••••••••"+token[-4:]) if token else ""})
+                    "tokenMask":("••••••••"+token[-4:]) if token else "",**shortcuts})
     def update_settings(self):
         length=int(self.headers.get("Content-Length","0"))
         if length<=0 or length>10000: self.reply({"error":"invalid payload"},400); return
@@ -137,9 +226,40 @@ class Handler(SimpleHTTPRequestHandler):
         token=str(incoming.get("diocoToken","")).strip() or current.get("diocoToken","")
         if not email or "@" not in email: self.reply({"error":"请输入有效邮箱"},400); return
         if not token: self.reply({"error":"请输入令牌"},400); return
+        defaults={"shortcutPrevious":"a","shortcutRepeat":"s","shortcutNext":"d","shortcutPlay":"space"}
+        current_shortcuts=db_get_settings(defaults)
+        shortcut_values={key:str(incoming.get(key,current_shortcuts[key])).strip().lower() for key in defaults}
+        if any(not value for value in shortcut_values.values()): self.reply({"error":"快捷键不能为空"},400); return
+        if len(set(shortcut_values.values()))!=len(shortcut_values): self.reply({"error":"快捷键不能重复"},400); return
         PRIVATE_CONFIG.write_text(json.dumps({"userEmail":email,"diocoToken":token},ensure_ascii=False,indent=2))
         os.chmod(PRIVATE_CONFIG,0o600)
+        set_settings(shortcut_values)
         self.get_settings()
+    def update_preferences(self):
+        length=int(self.headers.get("Content-Length","0"))
+        try: incoming=json.loads(self.rfile.read(length))
+        except Exception: self.reply({"error":"invalid json"},400); return
+        allowed={}
+        if incoming.get("shelfView") in {"tile","list"}: allowed["shelfView"]=incoming["shelfView"]
+        if "currentSeries" in incoming: allowed["currentSeries"]=str(incoming["currentSeries"])
+        if not allowed: self.reply({"error":"no valid preferences"},400); return
+        set_settings(allowed); self.reply({"status":"saved",**allowed})
+    def import_cover(self,query):
+        relative=(query.get("path") or [""])[0].strip()
+        try: folder=(BOOKS_ROOT/relative).resolve(); folder.relative_to(BOOKS_ROOT.resolve())
+        except Exception: self.send_error(400); return
+        pdfs=sorted(folder.glob("*.pdf"))
+        if not pdfs: self.send_error(404); return
+        digest=hashlib.sha1(relative.encode()).hexdigest()[:16]; target=COVER_CACHE/f"{digest}.png"
+        try:
+            with COVER_LOCK:
+                if not target.exists():
+                    with tempfile.TemporaryDirectory(prefix="shiyue-cover-") as tmp:
+                        subprocess.run(["qlmanage","-t","-s","420","-o",tmp,str(pdfs[0])],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30)
+                        produced=next(Path(tmp).glob("*.png")); shutil.copy2(produced,target)
+            data=target.read_bytes(); self.send_response(200); self.send_header("Content-Type","image/png")
+            self.send_header("Cache-Control","public, max-age=31536000, immutable"); self.send_header("Content-Length",str(len(data))); self.end_headers(); self.wfile.write(data)
+        except Exception: self.send_error(500)
     def word_dictionary(self,query):
         word=(query.get("word") or [""])[0].strip()
         pos=(query.get("pos") or [""])[0].strip()

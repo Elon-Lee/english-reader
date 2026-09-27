@@ -1,5 +1,7 @@
 .dioco.local.json
 .cache/
+.local/
+books/.reader/
 tools/__pycache__/
 books
 .DS_Store

@@ -2,12 +2,18 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
 let book;
-let qualityReport;
 let localDictionary = {};
+let libraryBooks = [];
+let currentBookId = "";
+let importCatalog = [];
+let importPollTimer = null;
+let displayedPage = null;
 let active = -1;
 let mode = "intensive";
 let pausedForWord = false;
-let loopSentence = false;
+let currentSeries = "";
+let shelfView = "tile";
+let shortcuts = {previous:"a",repeat:"s",next:"d",play:"space"};
 let shadowWaiting = false;
 let shadowTimer;
 let mediaRecorder;
@@ -93,26 +99,47 @@ function sentenceHtml(sentence) {
 }
 
 async function init() {
-  [book, qualityReport, localDictionary] = await Promise.all([
-    fetch("data/survival-game/book.json", {cache:"no-store"}).then(r => r.json()),
-    fetch("data/survival-game/quality-report.json", {cache:"no-store"}).then(r => r.json()),
-    fetch("data/dictionary.json", {cache:"no-store"}).then(r => r.json()),
+  const [libraryData, dictionaryData] = await Promise.all([
+    fetch("/api/library", {cache:"no-store"}).then(r => r.json()),
+    fetch("/api/local-dictionary", {cache:"no-store"}).then(r => r.json()),
   ]);
-  $("#audio").src = book.audio;
-  $("#duration").textContent = fmt(book.duration);
-  renderStory();
-  restoreProgress();
-  refreshDashboards();
+  localDictionary=dictionaryData; libraryBooks=libraryData.books||[];
   bindEvents();
-  loadApiSettings();
+  await loadApiSettings();
+  setupSeriesSelector(); renderLibrary();
+  loadImportCatalog();
+  if(libraryBooks.length) await loadBook(libraryBooks[0].id);
 }
+
+async function loadBook(bookId) {
+  const response=await fetch(`/api/books/${encodeURIComponent(bookId)}`,{cache:"no-store"});
+  if(!response.ok) throw new Error("无法读取图书数据库");
+  const record=await response.json(); currentBookId=bookId; book=record.book;
+  $("#audio").pause(); $("#audio").src=book.audio; $("#duration").textContent=fmt(book.duration);
+  $(".book-heading small").textContent=`${book.level||""}级 · LOCAL BOOK`;
+  $(".book-heading strong").innerHTML=`${escapeHtml(book.title)} <i>${escapeHtml(book.englishTitle||"")}</i>`;
+  $(".chapter h1").textContent=book.englishTitle||book.title;
+  active=-1; displayedPage=null; renderStory(); restoreProgress(); refreshDashboards(); showPage(book.sentences[0]?.page||1);
+}
+
+function renderLibrary() {
+  const grid=$("#libraryGrid");
+  const visible=libraryBooks.filter(item=>!currentSeries||item.series===currentSeries);
+  grid.className=`library-grid ${shelfView}-view`;
+  $("#shelfCount").textContent=`${visible.length} 本`; $("#shelfSeriesTitle").textContent=currentSeries||"全部书籍";
+  $("#tileViewBtn").classList.toggle("active",shelfView==="tile"); $("#listViewBtn").classList.toggle("active",shelfView==="list");
+  if(!visible.length){grid.innerHTML='<div class="empty-state"><h3>当前书系暂无已导入书籍</h3><p>请从“导入书籍”选择书籍。</p></div>';return;}
+  grid.innerHTML=visible.map(item=>`<article class="book-card" data-book-id="${escapeHtml(item.id)}"><img src="${encodeURI(item.cover_url)}" alt="${escapeHtml(item.title)}封面"><div class="book-info"><span class="tag">LEVEL ${escapeHtml(item.level||"-")}</span><h3>${escapeHtml(item.title)}</h3><em>${escapeHtml(item.english_title||"")}</em><p>${escapeHtml(item.series)}</p><div class="progress"><i style="width:${bookProgress(item.id)}%"></i></div><small>${item.alignment==='whisper-word-timestamps'?'Whisper 词级点读':'本地点读'}</small></div><button class="round-play">▶</button></article>`).join("");
+}
+function setupSeriesSelector(){const series=[...new Set(libraryBooks.map(item=>item.series))];if(!currentSeries||!series.includes(currentSeries))currentSeries=series[0]||"";$("#seriesSelect").innerHTML=series.map(name=>`<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");$("#seriesSelect").value=currentSeries;}
+function bookProgress(id){const state=load(`${STORE.state}-${id}`,{});const item=libraryBooks.find(x=>x.id===id);return item?.duration?Math.round((state.time||0)/item.duration*100):0}
 
 function renderStory() {
   const box = $("#sentences");
   box.innerHTML = "";
   let previousSection = null;
   book.sentences.forEach((sentence, index) => {
-    if (sentence.section !== previousSection) {
+    if (sentence.section != null && sentence.section !== previousSection) {
       const marker = document.createElement("div");
       marker.className = "section-marker";
       marker.id = `section-${sentence.section}`;
@@ -130,7 +157,7 @@ function renderStory() {
 }
 
 function bindEvents() {
-  $("#openBook").onclick = () => openReader();
+  $("#libraryGrid").onclick = async event => {const card=event.target.closest("[data-book-id]");if(!card)return;await loadBook(card.dataset.bookId);openReader();};
   $("#backBtn").onclick = () => showScreen("shelf");
   $$(".nav").forEach(button => button.onclick = () => showScreen(button.dataset.screen));
   $$(".mode-switch button").forEach(button => button.onclick = () => setMode(button.dataset.mode));
@@ -161,9 +188,8 @@ function bindEvents() {
   $("#seek").oninput = event => $("#audio").currentTime = event.target.value / 1000 * book.duration;
   const rates = [.75, 1, 1.25, 1.5]; let rateIndex = 1;
   $("#speedBtn").onclick = () => { rateIndex = (rateIndex + 1) % rates.length; $("#audio").playbackRate = rates[rateIndex]; $("#speedBtn").textContent = rates[rateIndex] + "×"; };
-  $("#repeatBtn").onclick = () => { loopSentence = !loopSentence; $("#repeatBtn").classList.toggle("selected", loopSentence); };
-  $("#viewBtn").onclick = () => { $("#pagePanel").classList.remove("hidden"); $("#wordPanel").classList.add("hidden"); showPage(book.sentences[Math.max(0, active)].page); };
-  $("#closePage").onclick = () => { $("#pagePanel").classList.add("hidden"); if (mode === "intensive") $("#wordPanel").classList.remove("hidden"); };
+  $("#viewBtn").onclick = () => { $("#pagePanel").classList.toggle("hidden"); showPage(book.sentences[Math.max(0,active)]?.page||1); };
+  $("#closePage").onclick = () => $("#pagePanel").classList.add("hidden");
   $("#focusBtn").onclick = () => document.body.classList.toggle("focus");
   $("#recordBtn").onclick = toggleRecording;
   $("#playRecordBtn").onclick = () => { if (recordingUrl) { $("#recording").src = recordingUrl; $("#recording").play(); } };
@@ -172,6 +198,32 @@ function bindEvents() {
   $("#audio").onpause = () => $("#playBtn").textContent = "▶";
   window.addEventListener("beforeunload", finishSession);
   $("#settingsForm").onsubmit = saveApiSettings;
+  $("#seriesSelect").onchange = event => {currentSeries=event.target.value;renderLibrary();savePreference({currentSeries});};
+  $("#tileViewBtn").onclick=()=>setShelfView("tile"); $("#listViewBtn").onclick=()=>setShelfView("list");
+  $$(".shortcut-input").forEach(input=>input.onkeydown=captureShortcut);
+  $("#importSeries").onchange = updateImportBooks;
+  $("#importBookList").onchange = updateBatchButton;
+  $("#selectAllBooks").onclick = () => { $$("#importBookList input:not(:disabled)").forEach(input=>input.checked=true); updateBatchButton(); };
+  $("#clearBooks").onclick = () => { $$("#importBookList input").forEach(input=>input.checked=false); updateBatchButton(); };
+  $("#startBatchImport").onclick = startBatchImport;
+  document.addEventListener("keydown",handleReaderShortcut);
+  document.addEventListener("click",event=>{const button=event.target.closest("button");if(button)setTimeout(()=>button.blur(),0);});
+}
+
+function setShelfView(view){shelfView=view;renderLibrary();savePreference({shelfView:view});}
+function savePreference(value){fetch("/api/preferences",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(value)}).catch(()=>{});}
+function keyName(event){return event.key===" "?"space":event.key.toLowerCase();}
+function keyLabel(key){return key==="space"?"空格":key.length===1?key.toUpperCase():key;}
+function captureShortcut(event){event.preventDefault();event.stopPropagation();const key=keyName(event);if(["shift","control","alt","meta"].includes(key))return;event.target.value=keyLabel(key);event.target.dataset.key=key;event.target.blur();}
+
+function handleReaderShortcut(event) {
+  if($("#reader").classList.contains("hidden") || event.metaKey || event.ctrlKey || event.altKey) return;
+  if(event.target.closest("input,textarea,select,button,[contenteditable=true]")) return;
+  const key=keyName(event); const action=Object.entries(shortcuts).find(([,value])=>value===key)?.[0]; if(!action)return; event.preventDefault();
+  if(action==="play") { clearTimeout(audioStopTimer); wordStopAt=null; $("#audio").paused ? $("#audio").play() : $("#audio").pause(); }
+  if(action==="previous" && book) playSentence(Math.max(0,(active<0?0:active)-1));
+  if(action==="repeat" && book) playSentence(Math.max(0,active));
+  if(action==="next" && book) playSentence(Math.min(book.sentences.length-1,(active<0?-1:active)+1));
 }
 
 function showScreen(id) {
@@ -188,7 +240,7 @@ function showScreen(id) {
 function openReader() {
   showScreen("reader");
   if (active < 0) {
-    const saved = load(STORE.state, {}).time || book.sentences[0].start;
+    const saved = load(`${STORE.state}-${currentBookId}`, {}).time || book.sentences[0].start;
     const index = book.sentences.findIndex(s => saved >= s.start && saved < s.end);
     highlight(index >= 0 ? index : 0, true);
   }
@@ -216,17 +268,20 @@ function playSentence(index) {
   highlight(index, true);
   showPage(sentence.page);
   if (mode === "shadow") { $("#shadowStatus").textContent = "先听原音…"; $("#shadowPrompt").textContent = sentence.text; }
-  const state = load(STORE.state, {}); state.sentencesPlayed = (state.sentencesPlayed || 0) + 1; save(STORE.state, state);
+  const stateKey=`${STORE.state}-${currentBookId}`; const state=load(stateKey,{}); state.sentencesPlayed=(state.sentencesPlayed||0)+1; save(stateKey,state);
 }
 
 function onTimeUpdate() {
   const audio = $("#audio"); const time = audio.currentTime;
   $("#currentTime").textContent = fmt(time);
   $("#seek").value = time / book.duration * 1000;
-  const state = load(STORE.state, {}); state.time = time; save(STORE.state, state);
+  const state = load(`${STORE.state}-${currentBookId}`, {}); state.time = time; save(`${STORE.state}-${currentBookId}`, state);
   if (wordStopAt !== null && time >= wordStopAt) { wordStopAt = null; audio.pause(); }
   const index = book.sentences.findIndex(s => time >= s.start && time < s.end);
-  if (index >= 0 && index !== active) highlight(index, mode !== "extensive");
+  if (index >= 0 && index !== active) {
+    highlight(index, true);
+    if(book.sentences[index].page!==displayedPage) showPage(book.sentences[index].page);
+  }
   const nextSpoken = index >= 0 ? $$( `.sentence[data-i="${index}"] .word[data-start][data-end]`).find(word => time >= +word.dataset.start && time < +word.dataset.end) : null;
   if (nextSpoken !== spokenWordElement) {
     spokenWordElement?.classList.remove("spoken"); spokenWordElement = nextSpoken; spokenWordElement?.classList.add("spoken");
@@ -234,7 +289,6 @@ function onTimeUpdate() {
   if (active < 0) return;
   const sentence = book.sentences[active];
   if (time >= sentence.end - .08) {
-    if (loopSentence) { playSentence(active); return; }
     if (mode === "shadow" && !shadowWaiting) beginShadowPause(sentence);
   }
 }
@@ -261,7 +315,7 @@ function highlight(index, scroll = false) {
 function jumpToSection(section) {
   const index = book.sentences.findIndex(sentence => sentence.section === section);
   if (index < 0) { alert(`第 ${section} 段尚未成功识别，请在导入质检中检查。`); return; }
-  const state = load(STORE.state, {}); state.branches = (state.branches || 0) + 1; save(STORE.state, state);
+  const stateKey=`${STORE.state}-${currentBookId}`; const state=load(stateKey,{}); state.branches=(state.branches||0)+1; save(stateKey,state);
   playSentence(index);
 }
 
@@ -284,6 +338,7 @@ async function showWord(raw, sentence, wordElement) {
     <div id="remoteDefinition"><p class="loading-line">正在查询中文释义…</p></div>
     <div class="context"><small>IN THIS STORY · 第 ${sentence.page} 页</small><p>${highlightWord(sentence.text, raw)}</p></div>
     <div id="remoteUsage" class="usage-note"><span class="loading-line">正在分析上下文用法…</span></div>
+    <div id="remoteExamples" class="dict-examples"><span class="loading-line">正在加载例句…</span></div>
     <div class="rating"><small>${saved ? `当前：${ratingName(saved.rating)} · 下次 ${day(saved.due)}` : "加入复习并评级"}</small>
       <div><button data-rating="known">认识</button><button data-rating="fuzzy">模糊</button><button data-rating="unknown">不认识</button></div>
     </div></div>`;
@@ -297,12 +352,13 @@ async function showWord(raw, sentence, wordElement) {
   }).then(data=>{
     if(requestId!==wordRequestId) return;
     const groups=(data.groups||[]).map(group=>`<div class="dict-group"><b>${escapeHtml(group.pos)}</b><p>${group.translations.map(escapeHtml).join("；")}</p></div>`).join("");
-    const examples=(data.examples||[]).length?`<div class="dict-examples"><small>EXAMPLES</small>${data.examples.map(item=>`<p>${escapeHtml(item)}</p>`).join("")}</div>`:"";
     $("#remoteDefinition").innerHTML=groups || `<p class="meaning">${formatText(definition.meaning)}</p><p>${formatText(definition.english)}</p>`;
-    $("#remoteDefinition").insertAdjacentHTML("beforeend",examples+`<small class="api-source">释义来源：${escapeHtml(data.source||"Dioco")}</small>`);
+    $("#remoteDefinition").insertAdjacentHTML("beforeend",`<small class="api-source">释义来源：${escapeHtml(data.source||"Dioco")}</small>`);
+    $("#remoteExamples").innerHTML=(data.examples||[]).length?`<small>EXAMPLES</small>${data.examples.map(item=>`<p>${escapeHtml(item)}</p>`).join("")}`:'<small>暂无例句</small>';
   }).catch(()=>{
     if(requestId!==wordRequestId) return;
     $("#remoteDefinition").innerHTML=`<p class="meaning">${formatText(definition.meaning)}</p><p>${formatText(definition.english)}</p><small class="api-source">接口不可用，已使用本地词典</small>`;
+    $("#remoteExamples").innerHTML='<small>例句接口暂不可用</small>';
   });
   fetch("/api/word-context",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({word:raw,contextSentence:sentence.text,expandedContext:expanded})}).then(async response=>{
     if(!response.ok) throw new Error((await response.json()).error || "分析失败");
@@ -355,11 +411,11 @@ function rateWord(raw, sentence, definition, rating, wordElement) {
   save(STORE.vocab, vocab); showWord(raw, sentence, wordElement); refreshDashboards();
 }
 
-function refreshDashboards() { renderStats(); renderReview(); renderQuality(); }
+function refreshDashboards() { renderStats(); renderReview(); }
 
 function renderStats() {
   if (!book) return;
-  const state = load(STORE.state, {}); const vocab = Object.values(load(STORE.vocab, {}));
+  const state = load(`${STORE.state}-${currentBookId}`, {}); const vocab = Object.values(load(STORE.vocab, {}));
   const percent = Math.round((state.time || 0) / book.duration * 100);
   $("#statsContent").innerHTML = `<div class="metric-grid">
     <article><small>阅读进度</small><b>${percent}%</b><p>${fmt(state.time || 0)} / ${fmt(book.duration)}</p></article>
@@ -387,18 +443,6 @@ function reviewSavedWord(root, rating) {
   save(STORE.vocab, vocab); refreshDashboards();
 }
 
-function renderQuality() {
-  if (!qualityReport) return;
-  const q = qualityReport; const checks = q.checks;
-  const problems = checks.emptyPages.length + checks.missingSections.length + checks.brokenTargets.length + checks.shortTimings.length + checks.longTimings.length + q.summary.lowConfidenceLines;
-  $("#qualityContent").innerHTML = `<div class="quality-hero ${problems ? "warning" : "ok"}"><span>${problems ? "!" : "✓"}</span><div><small>《生存游戏》</small><h2>${problems ? `发现 ${problems} 个待复核项` : "导入检查通过"}</h2><p>报告生成：${new Date(q.generatedAt).toLocaleString("zh-CN")}</p></div></div>
-    <div class="metric-grid quality-metrics"><article><small>正文页</small><b>${q.summary.pages}</b></article><article><small>点读句</small><b>${q.summary.sentences}</b></article><article><small>故事段落</small><b>${q.summary.sections}/40</b></article><article><small>时间轴</small><b class="small-value">${book.alignment === "whisper-word-timestamps" ? "Whisper 词级" : "静音辅助"}</b></article></div>
-    ${book.whisper ? `<div class="panel whisper-status"><h3>Whisper 对齐</h3><p><b>${Math.round(book.whisper.directWordMatch*100)}%</b> 原文单词直接匹配 · ${book.whisper.matchedWords}/${book.whisper.canonicalWords} 词 · ${book.whisper.model}</p></div>` : ""}
-    <div class="panel"><h3>自动检查</h3>${qualityRow("空白正文页", checks.emptyPages, "页")}${qualityRow("缺失故事段落", checks.missingSections, "段")}${qualityRow("无目标的剧情跳转", checks.brokenTargets, "段")}${qualityRow("过短时间片", checks.shortTimings, "句")}${qualityRow("过长时间片", checks.longTimings, "句")}${qualityRow("未解决的低置信度 OCR", q.lowConfidenceLines.map(x => `P${x.page}: ${x.text}`), "行")}${qualityRow("Whisper 已验证 OCR", (q.whisperValidatedLines || []).map(x => `P${x.page}: ${x.text}`), "行")}</div>
-    <div class="panel"><h3>处理建议</h3><ol>${q.recommendations.map(item => `<li>${item}</li>`).join("")}</ol></div>`;
-}
-function qualityRow(label, items, unit) { return `<details class="quality-row"><summary><span>${label}</span><b class="${items.length ? "bad" : "good"}">${items.length ? `${items.length} ${unit}` : "通过"}</b></summary>${items.length ? `<p>${items.map(String).join(" · ")}</p>` : ""}</details>`; }
-
 async function toggleRecording() {
   if (mediaRecorder?.state === "recording") { mediaRecorder.stop(); recognition?.stop(); return; }
   try {
@@ -411,7 +455,7 @@ async function toggleRecording() {
       if (recordingUrl) URL.revokeObjectURL(recordingUrl); recordingUrl = URL.createObjectURL(blob);
       $("#playRecordBtn").disabled = false; $("#recordBtn").textContent = "● 重新录音";
       stream.getTracks().forEach(track => track.stop()); await scoreRecording(blob);
-      const state = load(STORE.state, {}); state.shadowAttempts = (state.shadowAttempts || 0) + 1; save(STORE.state, state);
+      const stateKey=`${STORE.state}-${currentBookId}`; const state=load(stateKey,{}); state.shadowAttempts=(state.shadowAttempts||0)+1; save(stateKey,state);
     };
     startRecognition(); mediaRecorder.start(); $("#recordBtn").textContent = "■ 停止"; $("#shadowStatus").textContent = "正在录音…";
   } catch { $("#shadowStatus").textContent = "无法使用麦克风"; $("#shadowPrompt").textContent = "请在浏览器设置中允许本地页面使用麦克风。"; }
@@ -448,28 +492,77 @@ let lastTick = 0;
 function trackListening() { lastTick = Date.now(); }
 setInterval(() => {
   if (!book || $("#audio").paused || !lastTick) return;
-  const now = Date.now(); const state = load(STORE.state, {}); state.secondsRead = (state.secondsRead || 0) + Math.min(5, (now - lastTick) / 1000); lastTick = now; save(STORE.state, state);
+  const now = Date.now(); const key=`${STORE.state}-${currentBookId}`; const state = load(key, {}); state.secondsRead = (state.secondsRead || 0) + Math.min(5, (now - lastTick) / 1000); lastTick = now; save(key, state);
 }, 5000);
-function logAction(group, value) { const state = load(STORE.state, {}); state[group] ||= {}; state[group][value] = (state[group][value] || 0) + 1; save(STORE.state, state); }
-function finishSession() { if (!book) return; const state = load(STORE.state, {}); state.lastVisit = Date.now(); save(STORE.state, state); }
-function showPage(page) { $("#pageImage").src = `assets/survival-game/pages/page-${String(page).padStart(3,"0")}.jpg`; $("#pageLabel").textContent = `原书第 ${page} 页`; }
-function restoreProgress() { const state = load(STORE.state, {}); const time = state.time || 0; $("#audio").currentTime = time; const percent = Math.min(100, time / book.duration * 100); $(".progress i").style.width = percent + "%"; if (time) $("#shelfProgress").textContent = `已读 ${Math.round(percent)}% · ${fmt(time)}`; $("#backBtn").style.visibility = "hidden"; }
+function logAction(group, value) { if(!currentBookId)return; const key=`${STORE.state}-${currentBookId}`; const state = load(key, {}); state[group] ||= {}; state[group][value] = (state[group][value] || 0) + 1; save(key, state); }
+function finishSession() { if (!book) return; const key=`${STORE.state}-${currentBookId}`; const state = load(key, {}); state.lastVisit = Date.now(); save(key, state); }
+function showPage(page) { if(!book||page===displayedPage)return; displayedPage=page; $("#pageImage").src = `${book.pageBase}/page-${String(page).padStart(3,"0")}.jpg`; $("#pageLabel").textContent = `原书第 ${page} 页`; }
+function restoreProgress() { if(!book)return; const state=load(`${STORE.state}-${currentBookId}`,{});const time=state.time||0;$("#audio").currentTime=time;$("#backBtn").style.visibility="hidden"; }
 
 async function loadApiSettings() {
   try {
     const response=await fetch("/api/settings",{cache:"no-store"}); const data=await response.json();
     $("#diocoEmail").value=data.userEmail||"";
     $("#tokenStatus").textContent=data.tokenConfigured?`令牌已配置：${data.tokenMask}`:"尚未配置令牌";
+    shortcuts={previous:data.shortcutPrevious||"a",repeat:data.shortcutRepeat||"s",next:data.shortcutNext||"d",play:data.shortcutPlay||"space"};
+    shelfView=data.shelfView||"tile"; currentSeries=data.currentSeries||"";
+    for(const [name,key] of Object.entries(shortcuts)){const input=$(`#shortcut${name[0].toUpperCase()+name.slice(1)}`);if(input){input.value=keyLabel(key);input.dataset.key=key;}}
+    updateShortcutHint();
   } catch { $("#tokenStatus").textContent="无法读取本地设置"; }
 }
 async function saveApiSettings(event) {
   event.preventDefault(); const button=event.submitter; button.disabled=true; $("#tokenStatus").textContent="正在保存…";
   try {
-    const response=await fetch("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({userEmail:$("#diocoEmail").value,diocoToken:$("#diocoToken").value})});
+    const proposed={previous:$("#shortcutPrevious").dataset.key,repeat:$("#shortcutRepeat").dataset.key,next:$("#shortcutNext").dataset.key,play:$("#shortcutPlay").dataset.key};
+    const response=await fetch("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({userEmail:$("#diocoEmail").value,diocoToken:$("#diocoToken").value,shortcutPrevious:proposed.previous,shortcutRepeat:proposed.repeat,shortcutNext:proposed.next,shortcutPlay:proposed.play})});
     const data=await response.json(); if(!response.ok) throw new Error(data.error||"保存失败");
-    $("#diocoToken").value=""; $("#tokenStatus").textContent=`已保存：${data.tokenMask}`;
+    shortcuts=proposed;updateShortcutHint();$("#diocoToken").value=""; $("#tokenStatus").textContent=`已保存：${data.tokenMask}`;
   } catch(error) { $("#tokenStatus").textContent=error.message; }
   finally { button.disabled=false; }
+}
+function updateShortcutHint(){$("#shortcutHint").textContent=`${keyLabel(shortcuts.previous)} 上一句 · ${keyLabel(shortcuts.repeat)} 复读 · ${keyLabel(shortcuts.next)} 下一句 · ${keyLabel(shortcuts.play)} 播放/暂停`;}
+
+async function loadImportCatalog() {
+  try {
+    const data=await fetch("/api/import/catalog",{cache:"no-store"}).then(response=>response.json()); importCatalog=data.series||[];
+    $("#importSeries").innerHTML='<option value="">请选择系列</option>'+importCatalog.map((item,index)=>`<option value="${index}">${escapeHtml(item.name)}（${item.books.length}）</option>`).join("");
+    $("#importBookList").innerHTML='<p>请先选择系列</p>';
+  } catch { $("#importMeta").textContent="无法扫描 books 目录"; }
+}
+function updateImportBooks() {
+  const series=importCatalog[+$("#importSeries").value]; const list=$("#importBookList");
+  if(!series){list.innerHTML='<p>请先选择系列</p>';updateBatchButton();return;}
+  const eligible=series.books.filter(item=>item.ready);
+  list.innerHTML=eligible.map(item=>`<label class="import-book-item ${item.importedId?'imported':''}"><img src="${encodeURI(item.coverUrl)}" alt="${escapeHtml(item.title)}封面" loading="lazy"><input type="checkbox" value="${escapeHtml(item.path)}"><span><b>${escapeHtml(item.title)}</b><small>${item.pdfCount} PDF · ${item.audioCount} MP3${item.importedId?' · 已导入，可重新导入':''}</small></span></label>`).join("");
+  $("#importMeta").textContent=`${series.name}：${eligible.length} 本可导入。批量任务将严格逐本顺序执行。`;
+  updateBatchButton();
+}
+function selectedImportPaths(){return $$("#importBookList input:checked").map(input=>input.value)}
+function updateBatchButton(){const count=selectedImportPaths().length;$("#startBatchImport").disabled=!count;$("#startBatchImport").textContent=count?`按顺序导入 ${count} 本`:'按顺序导入所选书籍'}
+async function startBatchImport() {
+  const paths=selectedImportPaths(); if(!paths.length)return;
+  clearInterval(importPollTimer); $("#importProgress").classList.remove("hidden"); $("#importStep").textContent="正在创建顺序队列"; $("#importBar").value=0; $("#importPercent").textContent="0%";
+  try {
+    const response=await fetch("/api/import/batch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({paths})});
+    const data=await response.json(); if(!response.ok)throw new Error(data.error||"无法开始批量导入");
+    pollImportBatch(data.jobIds);
+  } catch(error){$("#importStep").textContent="导入失败";$("#importMessage").textContent=error.message;}
+}
+function pollImportBatch(jobIds) {
+  const check=async()=>{
+    const jobs=await Promise.all(jobIds.map(id=>fetch(`/api/import/jobs/${id}`,{cache:"no-store"}).then(r=>r.json())));
+    const total=Math.round(jobs.reduce((sum,job)=>sum+(job.progress||0),0)/jobs.length); const finished=jobs.filter(job=>["complete","failed"].includes(job.status)).length;
+    const current=jobs.find(job=>job.status==="running")||jobs.find(job=>job.status==="queued")||jobs[jobs.length-1];
+    $("#importBar").value=total; $("#importPercent").textContent=`${total}%`; $("#importStep").textContent=`${finished}/${jobs.length} 完成 · ${current.step||current.status}`;
+    $("#importMessage").textContent="批量任务严格按选择顺序逐本执行；单本失败不会阻止下一本。";
+    $("#batchJobs").innerHTML=jobs.map((job,index)=>`<div class="batch-job ${job.status}"><span>${index+1}. ${escapeHtml(job.source_path.split('/').pop())}</span><b>${job.status==='complete'?'完成':job.status==='failed'?'失败':job.status==='running'?`${job.progress}%`:'排队'}</b>${job.error?`<small>${escapeHtml(job.error)}</small>`:''}</div>`).join("");
+    if(finished===jobs.length){
+      clearInterval(importPollTimer); importPollTimer=null;
+      const data=await fetch("/api/library",{cache:"no-store"}).then(r=>r.json()); libraryBooks=data.books||[]; renderLibrary(); await loadImportCatalog();
+      $("#importMessage").textContent=`批量导入结束：${jobs.filter(j=>j.status==='complete').length} 本成功，${jobs.filter(j=>j.status==='failed').length} 本失败。`;
+    }
+  };
+  check(); importPollTimer=setInterval(check,1500);
 }
 
 init();

@@ -45,6 +45,8 @@ def main():
     ap.add_argument("--audio", required=True, type=Path)
     ap.add_argument("--output", required=True, type=Path)
     ap.add_argument("--title", required=True)
+    ap.add_argument("--id", default="book")
+    ap.add_argument("--english-title", default="")
     ap.add_argument("--level", default="0")
     ap.add_argument("--page-start", type=int, default=1)
     ap.add_argument("--page-end", type=int)
@@ -100,7 +102,7 @@ def main():
         end=chosen[i][0] if i<len(chosen) else total
         row.update(id=f"s{i+1}", start=round(cursor,2), end=round(end,2))
         cursor=chosen[i][1] if i<len(chosen) else total
-    book={"id":"survival-game","title":args.title,"englishTitle":"Survive!","level":args.level,
+    book={"id":args.id,"title":args.title,"englishTitle":args.english_title,"level":args.level,
           "audio":args.audio_url,"pdf":args.pdf_url,"duration":total,"alignment":"silence-assisted-estimate",
           "sentences":rows}
     args.output.parent.mkdir(parents=True,exist_ok=True)
