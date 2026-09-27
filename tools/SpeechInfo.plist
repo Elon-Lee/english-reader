@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>local.english.reader.transcriber</string>
+  <key>CFBundleName</key>
+  <string>English Reader Transcriber</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Generate local word timestamps so narration stays synchronized with the book text.</string>
+</dict>
+</plist>

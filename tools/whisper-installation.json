@@ -1,0 +1,11 @@
+{
+  "installedAt": "2026-09-27",
+  "engine": "whisper.cpp",
+  "sourceCommit": "d09f61a708f3487afa956ff578e60eae5e7a233c",
+  "reportedVersion": "1.9.4-dev",
+  "architecture": "x86_64",
+  "model": "base.en",
+  "modelSha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+  "cliSha256": "5ac737ea056ab92cd5233beb54dadfc89943cee07c5669f0c8420e3ef525b3fb",
+  "processing": "local-only"
+}
