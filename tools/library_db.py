@@ -61,6 +61,9 @@ def connect():
     """)
     columns={row[1] for row in db.execute("PRAGMA table_info(books)")}
     if "last_read_at" not in columns: db.execute("ALTER TABLE books ADD COLUMN last_read_at TEXT")
+    if "source_type" not in columns: db.execute("ALTER TABLE books ADD COLUMN source_type TEXT NOT NULL DEFAULT 'book'")
+    if "video_url" not in columns: db.execute("ALTER TABLE books ADD COLUMN video_url TEXT DEFAULT ''")
+    if "subtitle_type" not in columns: db.execute("ALTER TABLE books ADD COLUMN subtitle_type TEXT DEFAULT ''")
     db.commit()
     return db
 
@@ -102,6 +105,8 @@ def upsert_book(book,quality,source_path,series,page_base_url,cover_url):
        book.get("audio",""),book.get("pdf",""),book.get("duration",0),book.get("alignment",""),json.dumps(book,ensure_ascii=False),
        json.dumps(quality,ensure_ascii=False),stamp,stamp))
     db.commit(); db.close()
+    db=connect(); db.execute("UPDATE books SET source_type=?,video_url=?,subtitle_type=? WHERE id=?",
+      (book.get("sourceType","book"),book.get("video",""),book.get("subtitleType",""),book["id"])); db.commit(); db.close()
 
 def save_artifact(book_id,kind,data):
     db=connect(); db.execute("INSERT INTO book_artifacts(book_id,kind,data_json,created_at) VALUES(?,?,?,?) ON CONFLICT(book_id,kind) DO UPDATE SET data_json=excluded.data_json,created_at=excluded.created_at",
@@ -132,7 +137,7 @@ def set_settings(values):
     db.commit(); db.close()
 
 def library():
-    db=connect(); rows=db.execute("SELECT id,title,english_title,series,level,status,cover_url,duration,alignment,updated_at,last_read_at FROM books ORDER BY (last_read_at IS NULL),last_read_at DESC,created_at ASC").fetchall(); db.close()
+    db=connect(); rows=db.execute("SELECT id,title,english_title,series,level,status,cover_url,duration,alignment,updated_at,last_read_at,source_type,video_url,subtitle_type FROM books ORDER BY (last_read_at IS NULL),last_read_at DESC,created_at ASC").fetchall(); db.close()
     return [dict(row) for row in rows]
 
 def touch_book(book_id):

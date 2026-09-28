@@ -44,6 +44,10 @@ let reviewPageSize=10;
 let manualRepeatCount=3;
 let manualPauseSeconds=2;
 let manualDictation={items:[],index:-1,played:new Set(),running:false,complete:false,timer:null,audio:null,repeatIndex:0,stage:"ready",token:0};
+let visualMode="frames";
+let videoTitleManuallyEdited=false;
+let videoImportPollTimer=null;
+let sentenceAutoPause=false;
 
 const STORE = {
   state: "shiyue-reader-state-v2",
@@ -132,6 +136,7 @@ async function init() {
     fetch("/api/vocabulary", {cache:"no-store"}).then(r => r.json()),
   ]);
   localDictionary=dictionaryData; libraryBooks=libraryData.books||[]; vocabItems=vocabData.items||[];
+  populateVideoSeriesOptions();
   bindEvents();
   await loadApiSettings();
   setupSeriesSelector(); renderLibrary();
@@ -147,7 +152,7 @@ async function loadBook(bookId) {
   $(".book-heading small").textContent=`${book.level||""}级 · LOCAL BOOK`;
   $(".book-heading strong").innerHTML=`${escapeHtml(book.title)} <i>${escapeHtml(book.englishTitle||"")}</i>`;
   $(".chapter h1").textContent=book.englishTitle||book.title;
-  active=-1; displayedPage=null; renderStory(); restoreProgress(); refreshDashboards(); showPage(book.sentences[0]?.page||1);
+  visualMode="frames";configureBookVisual();active=-1; displayedPage=null; renderStory(); restoreProgress(); refreshDashboards(); showPage(book.sentences[0]?.page||1);
   postActivity({bookId,open:true,sessions:1}).then(()=>fetch("/api/library",{cache:"no-store"})).then(r=>r.json()).then(data=>{libraryBooks=data.books||libraryBooks;renderLibrary();}).catch(()=>{});
 }
 
@@ -158,7 +163,12 @@ function renderLibrary() {
   $("#shelfCount").textContent=`${visible.length} 本`; $("#shelfSeriesTitle").textContent=currentSeries||"全部书籍";
   $("#tileViewBtn").classList.toggle("active",shelfView==="tile"); $("#listViewBtn").classList.toggle("active",shelfView==="list");
   if(!visible.length){grid.innerHTML='<div class="empty-state"><h3>当前书系暂无已导入书籍</h3><p>请从“导入书籍”选择书籍。</p></div>';return;}
-  grid.innerHTML=visible.map(item=>`<article class="book-card" data-book-id="${escapeHtml(item.id)}"><img src="${encodeURI(item.cover_url)}" alt="${escapeHtml(item.title)}封面"><div class="book-info"><span class="tag">LEVEL ${escapeHtml(item.level||"-")}</span><h3>${escapeHtml(item.title)}</h3><em>${escapeHtml(item.english_title||"")}</em><p>${escapeHtml(item.series)}</p><div class="progress"><i style="width:${bookProgress(item.id)}%"></i></div><small>${item.alignment.startsWith('whisper-')?'Whisper 词级点读':'本地点读'}</small></div><button class="round-play">▶</button></article>`).join("");
+  grid.innerHTML=visible.map(item=>`<article class="book-card" data-book-id="${escapeHtml(item.id)}" data-source-type="${escapeHtml(item.source_type||'book')}"><img src="${encodeURI(item.cover_url)}" alt="${escapeHtml(item.title)}封面"><div class="book-info"><span class="tag">LEVEL ${escapeHtml(item.level||"-")}</span><h3>${escapeHtml(item.title)}</h3><em>${escapeHtml(item.english_title||"")}</em><p>${escapeHtml(item.series)}</p><div class="progress"><i style="width:${bookProgress(item.id)}%"></i></div><small>${item.alignment.startsWith('whisper-')?'Whisper 词级点读':'本地点读'}</small></div><button class="round-play">▶</button></article>`).join("");
+}
+function populateVideoSeriesOptions(){
+  const datalist=$("#videoSeriesOptions");if(!datalist)return;
+  const history=[...new Set(libraryBooks.map(item=>(item.series||"").trim()).filter(Boolean).filter(name=>!name.includes("牛津")))].sort((left,right)=>left.localeCompare(right,"zh-CN"));
+  datalist.innerHTML=history.map(name=>`<option value="${escapeHtml(name)}"></option>`).join("");
 }
 function setupSeriesSelector(){const series=[...new Set(libraryBooks.map(item=>item.series))];if(!currentSeries||!series.includes(currentSeries))currentSeries=series[0]||"";$("#seriesSelect").innerHTML=series.map(name=>`<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");$("#seriesSelect").value=currentSeries;}
 function bookProgress(id){const state=load(`${STORE.state}-${id}`,{});const item=libraryBooks.find(x=>x.id===id);return item?.duration?Math.round((state.time||0)/item.duration*100):0}
@@ -184,8 +194,11 @@ function renderStory() {
     p.innerHTML = sentenceHtml(sentence);
     box.append(p);
     wordElementsBySentence[index]=[...p.querySelectorAll(".word[data-start][data-end]")];
+    wordElementsBySentence[index].forEach((element,wordIndex)=>applyWordMark(element,sentence,wordIndex));
   });
 }
+function applyWordMark(element,sentence,wordIndex){const annotation=wordAnnotations.find(item=>item.sentence_id===sentence.id&&item.word_index===wordIndex),vocab=vocabItems.find(item=>item.book_id===currentBookId&&item.sentence_id===sentence.id&&item.word_index===wordIndex);element.classList.toggle("annotated-word",!!annotation);element.classList.toggle("vocab-word",!!vocab);if(annotation?.note)element.dataset.note=annotation.note;else delete element.dataset.note;if(annotation?.corrected_word)element.dataset.correction=`OCR订正：${annotation.original_word} → ${annotation.corrected_word}`;else delete element.dataset.correction;element.title=[annotation?.note,element.dataset.correction,vocab?'已加入生词本':''].filter(Boolean).join(' · ');}
+function refreshWordMarks(){book?.sentences.forEach((sentence,index)=>(wordElementsBySentence[index]||[]).forEach((element,wordIndex)=>applyWordMark(element,sentence,wordIndex)));}
 
 function bindEvents() {
   $("#libraryGrid").onclick = async event => {const card=event.target.closest("[data-book-id]");if(!card)return;await loadBook(card.dataset.bookId);openReader();};
@@ -228,8 +241,8 @@ function bindEvents() {
   $("#recordBtn").onclick = toggleRecording;
   $("#playRecordBtn").onclick = () => { if (recordingUrl) { $("#recording").src = recordingUrl; $("#recording").play(); } };
   $("#audio").ontimeupdate = persistAudioProgress;
-  $("#audio").onplay = () => { $("#playBtn").textContent = "Ⅱ"; trackListening(); startPlaybackSync(); };
-  $("#audio").onpause = () => { $("#playBtn").textContent = "▶"; stopPlaybackSync(); syncPlaybackFrame(); };
+  $("#audio").onplay = () => { $("#playBtn").textContent = "Ⅱ"; if(sentenceAutoPause&&active>=0&&mode!=="shadow")wordStopAt=book.sentences[active].end+.03;if(visualMode==="video")$("#videoView").play().catch(()=>{});trackListening(); startPlaybackSync(); };
+  $("#audio").onpause = () => { $("#playBtn").textContent = "▶"; $("#videoView").pause();stopPlaybackSync(); syncPlaybackFrame(); };
   $("#audio").onseeked = syncPlaybackFrame;
   window.addEventListener("beforeunload", finishSession);
   $("#settingsForm").onsubmit = saveApiSettings;
@@ -241,6 +254,12 @@ function bindEvents() {
   $("#selectAllBooks").onclick = () => { $$("#importBookList input:not(:disabled)").forEach(input=>input.checked=true); updateBatchButton(); };
   $("#clearBooks").onclick = () => { $$("#importBookList input").forEach(input=>input.checked=false); updateBatchButton(); };
   $("#startBatchImport").onclick = startBatchImport;
+  $$("[data-import-type]").forEach(button=>button.onclick=()=>setImportType(button.dataset.importType));
+  $("#videoImportPane").onsubmit=startVideoImport;
+  $("#videoFile").onchange=handleVideoFileSelected;
+  $("#videoEnglishTitle").oninput=syncVideoChineseTitle;
+  $("#videoTitle").oninput=()=>{videoTitleManuallyEdited=true;};
+  $("#framesViewBtn").onclick=()=>setVisualMode("frames");$("#videoViewBtn").onclick=()=>setVisualMode("video");
   document.addEventListener("keydown",handleReaderShortcut);
   document.addEventListener("click",event=>{const button=event.target.closest("button");if(button)setTimeout(()=>button.blur(),0);});
   $("#wordQuickTip").onclick=handleWordTipAction;
@@ -252,9 +271,23 @@ function bindEvents() {
   $("#reviewContent").onclick=handleReviewClick;
 }
 
+function configureBookVisual(){const isVideo=book?.sourceType==="video"&&book.video;$("#visualSwitch").classList.toggle("hidden",!isVideo);$("#visualTitle").textContent=isVideo?"视频画面":"原书页";$("#videoView").src=isVideo?book.video:"";setVisualMode("frames");}
+function setVisualMode(mode){visualMode=mode;const isVideo=book?.sourceType==="video"&&book.video;$("#framesViewBtn").classList.toggle("active",mode==="frames");$("#videoViewBtn").classList.toggle("active",mode==="video");$("#pageImage").classList.toggle("hidden",mode==="video");$("#videoView").classList.toggle("hidden",mode!=="video");if(isVideo&&mode==="video"){const video=$("#videoView"),audio=$("#audio");video.currentTime=audio.currentTime;if(!audio.paused)video.play().catch(()=>{});}else $("#videoView").pause();}
+function setImportType(type){$$('[data-import-type]').forEach(button=>button.classList.toggle('active',button.dataset.importType===type));$("#booksImportPane").classList.toggle("hidden",type!=="books");$("#videoImportPane").classList.toggle("hidden",type!=="video");}
+function videoNameWithoutExtension(name){return name.replace(/\.[^.]+$/,'').replace(/[._-]+/g,' ').trim();}
+function handleVideoFileSelected(){const file=$("#videoFile").files[0];if(!file)return;const derived=videoNameWithoutExtension(file.name);if(!$("#videoEnglishTitle").value)$("#videoEnglishTitle").value=derived;if(!$("#videoTitle").value||!videoTitleManuallyEdited)$("#videoTitle").value=$("#videoEnglishTitle").value||derived;}
+function syncVideoChineseTitle(){if(!videoTitleManuallyEdited)$("#videoTitle").value=$("#videoEnglishTitle").value;}
+function setVideoOverallProgress(percent,step,message=''){const value=Math.max(0,Math.min(100,Math.round(percent)));$("#videoUploadBar").value=value;$("#videoUploadPercent").textContent=`${value}%`;$("#videoUploadStep").textContent=step;if(message)$("#videoUploadMessage").textContent=message;}
+function uploadPart(uploadId,kind,file,baseProgress,span){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open("POST",`/api/import/video/upload/${uploadId}?kind=${kind}`);xhr.upload.onprogress=event=>{if(event.lengthComputable)setVideoOverallProgress(baseProgress+event.loaded/event.total*span,kind==='video'?'上传视频':'上传字幕','文件上传只是第一阶段，完成后将继续后台处理。');};xhr.onload=()=>xhr.status<300?resolve():reject(new Error(JSON.parse(xhr.responseText||'{}').error||'上传失败'));xhr.onerror=()=>reject(new Error('网络上传失败'));xhr.send(file);});}
+async function startVideoImport(event){event.preventDefault();const video=$("#videoFile").files[0],subtitle=$("#videoSubtitle").files[0];if(!video)return;const series=$("#videoSeries").value.trim();if(!series){$("#videoSeries").setCustomValidity("请选择历史标签或输入新标签");$("#videoSeries").reportValidity();return;}$("#videoSeries").setCustomValidity("");clearInterval(videoImportPollTimer);$("#videoUploadProgress").classList.remove("hidden");setVideoOverallProgress(0,"创建上传任务","总体进度包含上传、音频提取、关键帧、Whisper、对齐和数据库写入。");try{const englishTitle=$("#videoEnglishTitle").value.trim();const chineseTitle=$("#videoTitle").value.trim()||englishTitle;if(!$("#videoTitle").value.trim())$("#videoTitle").value=chineseTitle;const initResponse=await fetch("/api/import/video/init",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:chineseTitle,englishTitle,series,level:$("#videoLevel").value,subtitleStrategy:$("#videoSubtitleStrategy").value,videoFilename:video.name,subtitleFilename:subtitle?.name||""})});const init=await initResponse.json();if(!initResponse.ok)throw new Error(init.error||"无法创建上传");await uploadPart(init.uploadId,"video",video,1,subtitle?17:19);if(subtitle)await uploadPart(init.uploadId,"subtitle",subtitle,18,2);setVideoOverallProgress(20,"创建后台处理任务","文件上传完成，后台处理即将开始。");const doneResponse=await fetch(`/api/import/video/complete/${init.uploadId}`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});const done=await doneResponse.json();if(!doneResponse.ok)throw new Error(done.error||"无法开始导入");pollVideoImport(done.jobId);}catch(error){clearInterval(videoImportPollTimer);setVideoOverallProgress($("#videoUploadBar").value,"视频导入失败",error.message);}}
+function pollVideoImport(jobId){clearInterval(videoImportPollTimer);const check=async()=>{try{const response=await fetch(`/api/import/jobs/${jobId}`,{cache:'no-store'}),job=await response.json();if(!response.ok)throw new Error(job.error||'无法读取任务');const overall=20+(job.progress||0)*.8;setVideoOverallProgress(overall,job.step||job.status,job.error||`后台处理中：${job.progress||0}%`);if(job.status==='complete'||job.status==='failed'){clearInterval(videoImportPollTimer);videoImportPollTimer=null;if(job.status==='complete'){setVideoOverallProgress(100,'视频导入完成','音频、字幕、关键帧、词级时间轴和SQLite数据均已完成。');const data=await fetch('/api/library',{cache:'no-store'}).then(r=>r.json());libraryBooks=data.books||[];populateVideoSeriesOptions();setupSeriesSelector();renderLibrary();await loadImportCatalog();}else setVideoOverallProgress(overall,'视频导入失败',job.error||'后台任务失败');}}catch(error){clearInterval(videoImportPollTimer);videoImportPollTimer=null;setVideoOverallProgress($("#videoUploadBar").value,'进度查询失败',error.message);}};check();videoImportPollTimer=setInterval(check,1000);}
+
 function showWordQuickTip(element,sentence){
   clearTimeout(wordTipTimer); const rect=element.getBoundingClientRect();
   selectedWordContext={element,sentence,wordIndex:+element.dataset.wordIndex,word:element.textContent,definition:getDefinition(element.textContent,sentence)};
+  const annotation=wordAnnotations.find(item=>item.sentence_id===sentence.id&&item.word_index===selectedWordContext.wordIndex),note=$("#wordTipAnnotation");
+  const annotationText=[annotation?.note,annotation?.corrected_word?`OCR：${annotation.original_word} → ${annotation.corrected_word}`:''].filter(Boolean).join(' · ');
+  note.textContent=annotationText;note.classList.toggle("hidden",!annotationText);
   const tip=$("#wordQuickTip");tip.classList.remove("hidden"); tip.style.left=`${Math.min(innerWidth-tip.offsetWidth-12,Math.max(12,rect.left))}px`;tip.style.top=`${Math.max(12,rect.top-tip.offsetHeight-7)}px`;
   scheduleWordTipHide();
 }
@@ -262,8 +295,8 @@ function scheduleWordTipHide(){clearTimeout(wordTipTimer);wordTipTimer=setTimeou
 function handleWordTipAction(event){const action=event.target.closest("[data-word-action]")?.dataset.wordAction;if(!action||!selectedWordContext)return;clearTimeout(wordTipTimer);if(action==="vocab"){$("#wordQuickTip").classList.add("hidden");addSelectedWordToVocab();}else openWordEditor(action);}
 function openWordEditor(mode){wordEditMode=mode;const tip=$("#wordQuickTip"),editor=$("#wordInlineEditor"),rect=tip.getBoundingClientRect();$("#wordEditTitle").textContent=mode==="correct"?"订正 OCR":"添加备注";const input=$("#wordEditValue");input.placeholder=mode==="correct"?"输入正确单词":"输入简短备注";input.value=mode==="correct"?selectedWordContext.word:(selectedWordContext.note||"");tip.classList.add("hidden");editor.classList.remove("hidden");editor.style.left=`${Math.min(innerWidth-editor.offsetWidth-12,Math.max(12,rect.left))}px`;editor.style.top=`${Math.min(innerHeight-editor.offsetHeight-12,rect.bottom+6)}px`;setTimeout(()=>input.focus(),0);}
 function closeWordEditor(event){event?.preventDefault();$("#wordInlineEditor").classList.add("hidden");}
-async function saveWordEdit(event){event.preventDefault();const value=$("#wordEditValue").value.trim();if(!value)return;const c=selectedWordContext;const payload={bookId:currentBookId,sentenceId:c.sentence.id,wordIndex:c.wordIndex};if(wordEditMode==="correct")payload.correctedWord=value;else payload.note=value;const response=await fetch("/api/word-annotation",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(response.ok){if(wordEditMode==="note")selectedWordContext.note=value;closeWordEditor();if(wordEditMode==="correct"){await loadBook(currentBookId);const sentence=book.sentences.find(s=>s.id===c.sentence.id)||c.sentence;showWord(value,sentence,null);}}}
-async function addSelectedWordToVocab(){const c=selectedWordContext,d=c.definition;const payload={book_id:currentBookId,sentence_id:c.sentence.id,word_index:c.wordIndex,word:c.word,root:d.root,phonetic:d.phonetic,meaning:d.meaning,context:focusedWordContext(c.sentence.text,c.wordIndex),note:c.note||"",rating:"unknown",interval_days:1,due_at:new Date(Date.now()+86400000).toISOString()};const r=await fetch("/api/vocabulary",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(r.ok){vocabItems=(await r.json()).items||[];refreshDashboards();}}
+async function saveWordEdit(event){event.preventDefault();const value=$("#wordEditValue").value.trim();if(!value)return;const c=selectedWordContext;const payload={bookId:currentBookId,sentenceId:c.sentence.id,wordIndex:c.wordIndex};if(wordEditMode==="correct")payload.correctedWord=value;else payload.note=value;const response=await fetch("/api/word-annotation",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(response.ok){const result=await response.json();const existing=wordAnnotations.find(item=>item.sentence_id===c.sentence.id&&item.word_index===c.wordIndex),record={book_id:currentBookId,sentence_id:c.sentence.id,word_index:c.wordIndex,original_word:result.originalWord,corrected_word:result.correctedWord,note:result.note};if(existing)Object.assign(existing,record);else wordAnnotations.push(record);if(wordEditMode==="note")selectedWordContext.note=value;closeWordEditor();if(wordEditMode==="correct"){await loadBook(currentBookId);const sentence=book.sentences.find(s=>s.id===c.sentence.id)||c.sentence;showWord(value,sentence,null);}else refreshWordMarks();}}
+async function addSelectedWordToVocab(){const c=selectedWordContext,d=c.definition;const payload={book_id:currentBookId,sentence_id:c.sentence.id,word_index:c.wordIndex,word:c.word,root:d.root,phonetic:d.phonetic,meaning:d.meaning,context:focusedWordContext(c.sentence.text,c.wordIndex),note:c.note||"",rating:"unknown",interval_days:1,due_at:new Date(Date.now()+86400000).toISOString()};const r=await fetch("/api/vocabulary",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(r.ok){vocabItems=(await r.json()).items||[];refreshWordMarks();refreshDashboards();}}
 
 function setShelfView(view){shelfView=view;renderLibrary();savePreference({shelfView:view});}
 function savePreference(value){fetch("/api/preferences",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(value)}).catch(()=>{});}
@@ -277,12 +310,16 @@ function handleReaderShortcut(event) {
   if(!$("#vocab").classList.contains("hidden")){handleReviewShortcut(event);return;}
   if($("#reader").classList.contains("hidden") || event.metaKey || event.ctrlKey || event.altKey) return;
   if(event.target.closest("input,textarea,select,button,[contenteditable=true]")) return;
-  const key=keyName(event); const action=Object.entries(shortcuts).find(([,value])=>value===key)?.[0]; if(!action)return; event.preventDefault();
+  const key=keyName(event);
+  if(key==="q"){event.preventDefault();toggleSentenceAutoPause();return;}
+  const action=Object.entries(shortcuts).find(([,value])=>value===key)?.[0]; if(!action)return; event.preventDefault();
   if(action==="play") { clearTimeout(audioStopTimer); wordStopAt=null; $("#audio").paused ? $("#audio").play() : $("#audio").pause(); }
   if(action==="previous" && book) playSentence(Math.max(0,(active<0?0:active)-1));
   if(action==="repeat" && book) playSentence(Math.max(0,active));
   if(action==="next" && book) playSentence(Math.min(book.sentences.length-1,(active<0?-1:active)+1));
 }
+function toggleSentenceAutoPause(){sentenceAutoPause=!sentenceAutoPause;if(sentenceAutoPause&&active>=0)wordStopAt=book.sentences[active].end+.03;else wordStopAt=null;updateShortcutHint();savePreference({sentenceAutoPause});showReaderToast(sentenceAutoPause?"句末自动暂停：已开启":"句末自动暂停：已关闭");}
+function showReaderToast(message){let toast=$("#readerToast");if(!toast){toast=document.createElement("div");toast.id="readerToast";toast.className="reader-toast";document.body.append(toast);}toast.textContent=message;toast.classList.add("show");clearTimeout(toast._timer);toast._timer=setTimeout(()=>toast.classList.remove("show"),1400);}
 
 function showScreen(id) {
   $$(".screen").forEach(screen => screen.classList.toggle("hidden", screen.id !== id));
@@ -321,9 +358,9 @@ function playSentence(index) {
   shadowWaiting = false;
   active = index;
   const sentence = book.sentences[index];
-  wordStopAt = mode === "shadow" ? null : sentence.end + .08;
+  wordStopAt = mode === "shadow" || !sentenceAutoPause ? null : sentence.end + .03;
   pausedForWord = false;
-  seekAndPlay(sentence.start, mode === "shadow" ? null : sentence.end + .03);
+  seekAndPlay(sentence.start, mode === "shadow" || !sentenceAutoPause ? null : sentence.end + .03);
   highlight(index, true);
   showPage(sentence.page);
   if (mode === "shadow") { $("#shadowStatus").textContent = "先听原音…"; $("#shadowPrompt").textContent = sentence.text; }
@@ -353,10 +390,12 @@ function syncPlaybackFrame() {
   const audio = $("#audio"); const time = audio.currentTime;
   $("#currentTime").textContent = fmt(time);
   $("#seek").value = time / book.duration * 1000;
+  if(visualMode==="video"&&book.sourceType==="video"){const video=$("#videoView");if(Math.abs(video.currentTime-time)>.25)video.currentTime=time;}
   if (wordStopAt !== null && time >= wordStopAt) { wordStopAt = null; audio.pause(); }
   const index = book.sentences.findIndex(s => time >= s.start && time < s.end);
   if (index >= 0 && index !== active) {
     highlight(index, true);
+    if(sentenceAutoPause&&mode!=="shadow")wordStopAt=book.sentences[index].end+.03;
     if(book.sentences[index].page!==displayedPage) showPage(book.sentences[index].page);
   }
   const nextSpoken = index >= 0 ? (wordElementsBySentence[index]||[]).find(word => time >= +word.dataset.start && time < +word.dataset.end) : null;
@@ -484,7 +523,7 @@ async function rateWord(raw, sentence, definition, rating, wordElement) {
   const base = intervals[rating];
   const nextInterval = rating === "known" && previous ? Math.min(60, Math.max(base, (previous.interval_days || base) * 2)) : base;
   const wordIndex=+(wordElement?.dataset.wordIndex??0);const payload={book_id:currentBookId,sentence_id:sentence.id,word_index:wordIndex,word:raw,root:definition.root,phonetic:definition.phonetic,meaning:definition.meaning,context:focusedWordContext(sentence.text,wordIndex),rating,interval_days:nextInterval,due_at:new Date(Date.now()+nextInterval*86400000).toISOString()};
-  const response=await fetch("/api/vocabulary",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(response.ok)vocabItems=(await response.json()).items||[];showWord(raw,sentence,wordElement);refreshDashboards();
+  const response=await fetch("/api/vocabulary",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(response.ok)vocabItems=(await response.json()).items||[];refreshWordMarks();showWord(raw,sentence,wordElement);refreshDashboards();
 }
 
 function refreshDashboards() { renderStats(); renderReview(); }
@@ -520,14 +559,14 @@ function renderReview() {
   const pages=Math.max(1,Math.ceil(filtered.length/reviewPageSize));reviewPage=Math.max(1,Math.min(reviewPage,pages));
   const items=filtered.slice((reviewPage-1)*reviewPageSize,reviewPage*reviewPageSize);
   const labels={yesterday:"昨日",today:"当日",tomorrow:"明日",all:"所有"};
-  $("#reviewContent").innerHTML=`<div class="review-toolbar"><div class="review-filters">${Object.entries(labels).map(([key,label])=>`<button data-review-filter="${key}" class="${reviewFilter===key?'active':''}">${label}</button>`).join("")}</div><div class="review-mode-switch"><button data-review-mode="review" class="${reviewMode==='review'?'active':''}">复习</button><button data-review-mode="manual" class="${reviewMode==='manual'?'active':''}">手动听写</button></div></div>
+  $("#reviewContent").innerHTML=`<div class="review-toolbar"><div class="review-filters">${Object.entries(labels).map(([key,label])=>`<button data-review-filter="${key}" class="${reviewFilter===key?'active':''}">${label}</button>`).join("")}</div><div class="review-mode-switch"><button data-review-mode="review" class="${reviewMode==='review'?'active':''}">复习</button><button data-review-mode="manual" class="${reviewMode==='manual'?'active':''}">听写</button></div></div>
     <div class="review-summary"><b>${filtered.length}</b><span>${labels[reviewFilter]}词条</span><small>第 ${reviewPage}/${pages} 页 · 每页 ${reviewPageSize} 条</small></div>
     ${items.length?(reviewMode==='manual'?manualDictationView(items):`<div class="vocab-list review">${items.map(entry=>reviewCard(entry)).join("")}</div>`):`<div class="empty-state"><span>☆</span><h3>${labels[reviewFilter]}没有词条</h3><p>在精读模式点击单词，使用浮动工具栏加入生词本。</p></div>`}
     <div class="review-pagination"><button data-review-page="first" ${reviewPage===1?'disabled':''}>F 首页</button><button data-review-page="prev" ${reviewPage===1?'disabled':''}>A 上一页</button><span>${reviewPage} / ${pages}</span><button data-review-page="next" ${reviewPage===pages?'disabled':''}>D 下一页</button><button data-review-page="last" ${reviewPage===pages?'disabled':''}>E 尾页</button></div>`;
   if(reviewMode==='manual'&&items.length)prepareManualDictation(items);
 }
-function reviewCard(entry){return `<article class="vocab-card compact ${new Date(entry.due_at)<=new Date()?'due':''}" data-id="${entry.id}"><div class="review-word-wrap"><button class="review-word" data-review-detail>${escapeHtml(entry.word)} <small>${entry.phonetic}</small></button><button class="review-speaker" title="播放发音">♪</button></div><p class="review-sentence">${escapeHtml(entry.context)}</p><div class="mini-rates hidden"><button data-review="again">忘记</button><button data-review="hard">困难</button><button data-review="good">记得</button><button data-review="easy">简单</button></div></article>`;}
-function manualDictationView(items){return `<section class="manual-dictation"><div class="manual-dictation-head"><div><small>纸笔听写 · 每词 ${manualRepeatCount} 遍 · 停顿 ${manualPauseSeconds} 秒</small><b id="manualStatus">点击开始，共 ${items.length} 个词</b></div><div class="manual-controls"><button id="manualStart" data-manual-action="start">开始</button><button data-manual-action="prev">← 上一个</button><button id="manualPause" data-manual-action="pause" disabled>暂停</button><button data-manual-action="next">下一个 →</button></div></div><div class="manual-dictation-body"><div class="manual-word-grid">${items.map((entry,index)=>`<button class="manual-word" data-manual-index="${index}"><span class="manual-sequence">${index+1}</span><span class="manual-word-text">待听写</span><small>已播词可点击重听</small></button>`).join("")}</div></div></section>`;}
+function reviewCard(entry){return `<article class="vocab-card compact ${new Date(entry.due_at)<=new Date()?'due':''}" data-id="${entry.id}"><div class="review-main-line"><button class="review-word" data-review-detail>${escapeHtml(entry.word)} <small>${entry.phonetic}</small></button><button class="review-speaker" title="播放发音">♪</button><p class="review-sentence">${escapeHtml(entry.context)}</p></div><div class="mini-rates hidden"><button data-review="again">忘记</button><button data-review="hard">困难</button><button data-review="good">记得</button><button data-review="easy">简单</button></div></article>`;}
+function manualDictationView(items){return `<section class="manual-dictation"><div class="manual-dictation-head"><div><small>听写 · 每词 ${manualRepeatCount} 遍 · 停顿 ${manualPauseSeconds} 秒</small><b id="manualStatus">点击开始，共 ${items.length} 个词</b></div><div class="manual-controls"><button id="manualStart" data-manual-action="start">开始</button><button data-manual-action="prev">← 上一个</button><button id="manualPause" data-manual-action="pause" disabled>暂停</button><button data-manual-action="next">下一个 →</button></div></div><div class="manual-dictation-body"><div class="manual-word-grid">${items.map((entry,index)=>`<button class="manual-word" data-manual-index="${index}"><span class="manual-sequence">${index+1}</span><span class="manual-word-text">待听写</span><small>已播词可点击重听</small></button>`).join("")}</div></div></section>`;}
 function sameManualItems(items){return manualDictation.items.length===items.length&&items.every((item,index)=>manualDictation.items[index]?.id===item.id);}
 function newManualState(items){return{items:[...items],index:-1,played:new Set(),running:false,complete:false,timer:null,audio:null,repeatIndex:0,stage:"ready",token:(manualDictation.token||0)+1};}
 function prepareManualDictation(items){if(!sameManualItems(items))manualDictation=newManualState(items);updateManualDictationView();}
@@ -546,7 +585,7 @@ function handleReviewClick(event){
   const filter=event.target.closest('[data-review-filter]');if(filter){stopManualDictation();reviewFilter=filter.dataset.reviewFilter;reviewPage=1;renderReview();return;}
   const modeButton=event.target.closest('[data-review-mode]');if(modeButton){stopManualDictation();reviewMode=modeButton.dataset.reviewMode;reviewPage=1;renderReview();return;}
   const pageButton=event.target.closest('[data-review-page]');if(pageButton){changeReviewPage(pageButton.dataset.reviewPage);return;}
-  const detail=event.target.closest('[data-review-detail]');if(detail){const card=detail.closest('.vocab-card'),entry=vocabItems.find(item=>item.id===+card.dataset.id);card.querySelector('.mini-rates').classList.remove('hidden');if(entry)showReviewWordInfo(entry);return;}
+  const detail=event.target.closest('[data-review-detail]');if(detail){const card=detail.closest('.vocab-card'),entry=vocabItems.find(item=>item.id===+card.dataset.id);card.querySelector('.mini-rates').classList.remove('hidden');if(entry){playWordTts(entry.word);showReviewWordInfo(entry);}return;}
   const speaker=event.target.closest('.review-speaker');if(speaker){const entry=vocabItems.find(item=>item.id===+speaker.closest('.vocab-card').dataset.id);if(entry)playWordTts(entry.word);return;}
   const rating=event.target.closest('[data-review]');if(rating){reviewSavedWord(+rating.closest('.vocab-card').dataset.id,rating.dataset.review);return;}
   const manualControl=event.target.closest('[data-manual-action]');if(manualControl){handleManualAction(manualControl.dataset.manualAction);return;}
@@ -634,7 +673,7 @@ async function loadApiSettings() {
     $("#tokenStatus").textContent=data.tokenConfigured?`令牌已配置：${data.tokenMask}`:"尚未配置令牌";
     shortcuts={previous:data.shortcutPrevious||"a",repeat:data.shortcutRepeat||"s",next:data.shortcutNext||"d",play:data.shortcutPlay||"space"};
     shelfView=data.shelfView||"tile"; currentSeries=data.currentSeries||"";
-    wordTipSeconds=+(data.wordTipSeconds||2);reviewPageSize=+(data.reviewPageSize||10);manualRepeatCount=+(data.manualRepeatCount||3);manualPauseSeconds=+(data.manualPauseSeconds||2);eyeComfort=!!data.eyeComfort;heatmapRange=data.heatmapRange||"year";$("#wordTipSeconds").value=wordTipSeconds;$("#reviewPageSize").value=reviewPageSize;$("#manualRepeatCount").value=manualRepeatCount;$("#manualPauseSeconds").value=manualPauseSeconds;applyEyeComfort();
+    wordTipSeconds=+(data.wordTipSeconds||2);reviewPageSize=+(data.reviewPageSize||10);manualRepeatCount=+(data.manualRepeatCount||3);manualPauseSeconds=+(data.manualPauseSeconds||2);sentenceAutoPause=!!data.sentenceAutoPause;eyeComfort=!!data.eyeComfort;heatmapRange=data.heatmapRange||"year";$("#wordTipSeconds").value=wordTipSeconds;$("#reviewPageSize").value=reviewPageSize;$("#manualRepeatCount").value=manualRepeatCount;$("#manualPauseSeconds").value=manualPauseSeconds;applyEyeComfort();
     for(const [name,key] of Object.entries(shortcuts)){const input=$(`#shortcut${name[0].toUpperCase()+name.slice(1)}`);if(input){input.value=keyLabel(key);input.dataset.key=key;}}
     updateShortcutHint();
   } catch { $("#tokenStatus").textContent="无法读取本地设置"; }
@@ -649,7 +688,7 @@ async function saveApiSettings(event) {
   } catch(error) { $("#tokenStatus").textContent=error.message; }
   finally { button.disabled=false; }
 }
-function updateShortcutHint(){$("#shortcutHint").textContent=`${keyLabel(shortcuts.previous)} 上一句 · ${keyLabel(shortcuts.repeat)} 复读 · ${keyLabel(shortcuts.next)} 下一句 · ${keyLabel(shortcuts.play)} 播放/暂停`;}
+function updateShortcutHint(){$("#shortcutHint").textContent=`${keyLabel(shortcuts.previous)} 上一句 · ${keyLabel(shortcuts.repeat)} 复读 · ${keyLabel(shortcuts.next)} 下一句 · ${keyLabel(shortcuts.play)} 播放/暂停 · Q 句末暂停${sentenceAutoPause?'开':'关'}`;}
 
 async function loadImportCatalog() {
   try {

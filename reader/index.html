@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
-  <link rel="stylesheet" href="styles.css?v=20260928-15">
+  <link rel="stylesheet" href="styles.css?v=20260928-24">
 </head>
 <body>
   <aside class="sidebar">
@@ -36,13 +36,29 @@
     <section id="stats" class="screen dashboard hidden"><div class="page-title"><small>LEARNING LOG</small><h1>学习记录</h1><p>你的数据只保存在这台设备。</p></div><div id="statsContent"></div></section>
     <section id="vocab" class="screen dashboard vocab-screen hidden"><div class="review-workspace"><div id="reviewContent"></div><aside id="reviewWordPanel" class="review-word-panel"><div class="word-empty"><span>Aa</span><h3>点击生词</h3><p>在这里查看完整释义、当前句用法、例句和备注。</p></div></aside></div></section>
     <section id="import" class="screen dashboard hidden">
-      <div class="page-title"><small>BOOK IMPORTER</small><h1>导入书籍</h1><p>从 <code>books/</code> 选择系列与多本书，后台将严格按顺序逐本导入。</p></div>
-      <div class="panel import-panel">
+      <div class="page-title"><small>CONTENT IMPORTER</small><h1>导入内容</h1><p>支持目录书籍和外部MP4视频。</p></div>
+      <div class="import-type-tabs"><button data-import-type="books" class="active">目录书籍</button><button data-import-type="video">视频文件</button></div>
+      <div id="booksImportPane" class="panel import-panel">
         <label>系列<select id="importSeries"><option>正在扫描…</option></select></label>
         <div class="import-actions"><button id="selectAllBooks" type="button">全选未导入</button><button id="clearBooks" type="button">清空选择</button><button id="startBatchImport" type="button" disabled>按顺序导入所选书籍</button></div>
         <div id="importBookList" class="import-book-list"><p>请先选择系列</p></div>
         <div id="importMeta" class="import-meta">只显示同时具有 PDF 和 MP3 的书籍。</div>
       </div>
+      <form id="videoImportPane" class="panel video-import-panel hidden">
+        <label>MP4 / MOV视频<input id="videoFile" type="file" accept="video/mp4,video/quicktime,.m4v" required></label>
+        <label>可选字幕<input id="videoSubtitle" type="file" accept=".srt,.vtt,text/vtt"></label>
+        <label>中文标题<input id="videoTitle" required placeholder="视频课程标题"></label>
+        <label>英文标题<input id="videoEnglishTitle" placeholder="Optional English title"></label>
+        <label>所属标签
+          <input id="videoSeries" list="videoSeriesOptions" value="视频课程" placeholder="选择历史标签或输入新标签" required>
+          <datalist id="videoSeriesOptions"></datalist>
+          <small class="field-help">可选择历史标签或输入新标签；包含“牛津”的标签不会显示。</small>
+        </label>
+        <label>等级<input id="videoLevel" placeholder="例如 0"></label>
+        <label>字幕策略<select id="videoSubtitleStrategy"><option value="auto">自动：外部 → 内嵌 → Whisper</option><option value="external">优先字幕</option><option value="whisper">只使用Whisper</option></select></label>
+        <button type="submit">上传并导入视频</button>
+        <div id="videoUploadProgress" class="video-upload-progress hidden"><div><b id="videoUploadStep">准备上传</b><span id="videoUploadPercent">0%</span></div><progress id="videoUploadBar" max="100" value="0"></progress><p id="videoUploadMessage"></p></div>
+      </form>
       <div id="importProgress" class="panel import-progress hidden"><div><b id="importStep">等待开始</b><span id="importPercent">0%</span></div><progress id="importBar" max="100" value="0"></progress><p id="importMessage"></p><div id="batchJobs" class="batch-jobs"></div></div>
     </section>
     <section id="settings" class="screen dashboard hidden">
@@ -59,8 +75,8 @@
         <fieldset class="display-settings"><legend>阅读体验</legend>
           <label>单词工具栏停留时间<input id="wordTipSeconds" type="number" min="0.5" max="10" step="0.5" value="2"><span>秒</span></label>
           <label>生词每页数量<input id="reviewPageSize" type="number" min="5" max="50" step="5" value="10"><span>条</span></label>
-          <label>手动听写朗读次数<input id="manualRepeatCount" type="number" min="1" max="10" step="1" value="3"><span>遍</span></label>
-          <label>手动听写词间停顿<input id="manualPauseSeconds" type="number" min="0.5" max="10" step="0.5" value="2"><span>秒</span></label>
+          <label>听写朗读次数<input id="manualRepeatCount" type="number" min="1" max="10" step="1" value="3"><span>遍</span></label>
+          <label>听写词间停顿<input id="manualPauseSeconds" type="number" min="0.5" max="10" step="0.5" value="2"><span>秒</span></label>
         </fieldset>
         <p class="shortcut-help">点击输入框后按下新按键。四个快捷键不能重复。</p>
         <div class="settings-status"><span id="tokenStatus">正在读取配置…</span><button type="submit">保存设置</button></div>
@@ -69,7 +85,7 @@
     </section>
 
     <section id="reader" class="screen reader hidden">
-      <aside id="pagePanel" class="page-panel"><div class="page-head"><b>原书页</b><button id="closePage">×</button></div><img id="pageImage" alt="原书扫描页"><small id="pageLabel"></small></aside>
+      <aside id="pagePanel" class="page-panel"><div class="page-head"><b id="visualTitle">原书页</b><div class="visual-switch hidden" id="visualSwitch"><button id="framesViewBtn" class="active">关键帧</button><button id="videoViewBtn">视频</button></div><button id="closePage">×</button></div><img id="pageImage" alt="原书扫描页"><video id="videoView" class="hidden" muted playsinline preload="metadata"></video><small id="pageLabel"></small></aside>
       <div class="story-panel">
         <div class="chapter">
           <span>INTERACTIVE STORY</span><h1>Survive!</h1>
@@ -95,12 +111,13 @@
     <audio id="audio" preload="metadata"></audio><audio id="recording"></audio>
   </footer>
   <div id="wordQuickTip" class="word-quick-tip hidden" role="toolbar">
+    <span id="wordTipAnnotation" class="word-tip-annotation hidden"></span>
     <button data-word-action="vocab">＋ 生词本</button><button data-word-action="correct">✎ 订正OCR</button><button data-word-action="note">▤ 备注</button>
   </div>
   <div id="wordInlineEditor" class="word-inline-editor hidden">
     <div class="inline-editor-head"><b id="wordEditTitle">编辑</b><button id="closeWordEdit">×</button></div>
     <input id="wordEditValue" autocomplete="off"><div class="inline-editor-actions"><button id="cancelWordEdit">取消</button><button id="saveWordEdit">保存</button></div>
   </div>
-  <script src="app.js?v=20260928-15"></script>
+  <script src="app.js?v=20260928-24"></script>
 </body>
 </html>

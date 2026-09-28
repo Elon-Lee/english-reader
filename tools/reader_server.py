@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import uuid
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
@@ -32,6 +33,8 @@ CACHE.mkdir(parents=True,exist_ok=True)
 COVER_CACHE=BOOKS_ROOT/".reader/catalog-covers"
 COVER_CACHE.mkdir(parents=True,exist_ok=True)
 COVER_LOCK=threading.Lock()
+VIDEO_UPLOADS=ROOT/".local/video-uploads"
+VIDEO_UPLOADS.mkdir(parents=True,exist_ok=True)
 UPSTREAM="https://api-cdn-plus.dioco.io"
 UPSTREAM_HEADERS={
     "Accept":"application/json, text/plain, */*",
@@ -132,6 +135,9 @@ class Handler(SimpleHTTPRequestHandler):
                 remaining-=len(chunk)
         return True
     def do_POST(self):
+        if self.path == "/api/import/video/init": self.init_video_upload(); return
+        if self.path.startswith("/api/import/video/upload/"): self.upload_video_part(); return
+        if self.path.startswith("/api/import/video/complete/"): self.complete_video_upload(); return
         if self.path == "/api/activity": self.record_activity(); return
         if self.path == "/api/vocabulary": self.create_vocabulary(); return
         if self.path.startswith("/api/vocabulary/"): self.change_vocabulary(); return
@@ -183,12 +189,63 @@ class Handler(SimpleHTTPRequestHandler):
             queue.append((create_job(relative),relative))
         threading.Thread(target=self.run_import_queue,args=(queue,),daemon=True).start()
         self.reply({"jobIds":[job_id for job_id,_ in queue],"status":"queued","mode":"sequential"},202)
+    def init_video_upload(self):
+        try:item=self.json_body()
+        except Exception:self.reply({"error":"invalid json"},400);return
+        title=str(item.get("title","")).strip();series=str(item.get("series","")).strip() or "视频课程"
+        if not title:self.reply({"error":"请输入视频标题"},400);return
+        upload_id=uuid.uuid4().hex;folder=VIDEO_UPLOADS/upload_id;folder.mkdir(parents=True)
+        metadata={"title":title,"englishTitle":str(item.get("englishTitle","")).strip(),"series":series,"level":str(item.get("level","")).strip(),
+                  "subtitleStrategy":str(item.get("subtitleStrategy","auto")),"videoFilename":str(item.get("videoFilename","source.mp4")),"subtitleFilename":str(item.get("subtitleFilename",""))}
+        (folder/"metadata.json").write_text(json.dumps(metadata,ensure_ascii=False,indent=2));self.reply({"uploadId":upload_id},201)
+    def upload_video_part(self):
+        upload_id=self.path.split("/api/import/video/upload/",1)[1].split("?",1)[0]
+        folder=(VIDEO_UPLOADS/upload_id).resolve()
+        try:folder.relative_to(VIDEO_UPLOADS.resolve())
+        except ValueError:self.reply({"error":"invalid upload"},400);return
+        if not folder.is_dir():self.reply({"error":"upload not found"},404);return
+        query=parse_qs(urlsplit(self.path).query);kind=(query.get("kind") or ["video"])[0]
+        if kind not in {"video","subtitle"}:self.reply({"error":"invalid part"},400);return
+        length=int(self.headers.get("Content-Length","0"));limit=20*1024*1024*1024 if kind=="video" else 20*1024*1024
+        if length<=0 or length>limit:self.reply({"error":"invalid file size"},413);return
+        metadata=json.loads((folder/"metadata.json").read_text());original=metadata.get("videoFilename" if kind=="video" else "subtitleFilename","")
+        suffix=Path(original).suffix.lower() or (".mp4" if kind=="video" else ".srt")
+        if kind=="video" and suffix not in {".mp4",".mov",".m4v"}:suffix=".mp4"
+        if kind=="subtitle" and suffix not in {".srt",".vtt"}:suffix=".srt"
+        target=folder/("source"+suffix if kind=="video" else "subtitles"+suffix)
+        remaining=length
+        with target.open("wb") as output:
+            while remaining:
+                chunk=self.rfile.read(min(1024*1024,remaining))
+                if not chunk:break
+                output.write(chunk);remaining-=len(chunk)
+        if remaining:self.reply({"error":"upload interrupted"},400);return
+        self.reply({"status":"uploaded","kind":kind,"bytes":length})
+    def complete_video_upload(self):
+        length=int(self.headers.get("Content-Length","0"))
+        if length: self.rfile.read(length)
+        upload_id=self.path.split("/api/import/video/complete/",1)[1].split("?",1)[0];folder=(VIDEO_UPLOADS/upload_id).resolve()
+        if not folder.is_dir():self.reply({"error":"upload not found"},404);return
+        metadata=json.loads((folder/"metadata.json").read_text());video=next(iter(folder.glob("source.*")),None)
+        if not video:self.reply({"error":"video missing"},400);return
+        safe=re.sub(r"[^\w\-\u4e00-\u9fff]+","-",metadata["title"]).strip("-") or "video"
+        relative=str(Path(metadata["series"])/f"video.{safe}-{upload_id[:8]}");destination=BOOKS_ROOT/relative;destination.mkdir(parents=True,exist_ok=True)
+        shutil.move(str(video),destination/("source"+video.suffix.lower()))
+        subtitle=next(iter(folder.glob("subtitles.*")),None)
+        if subtitle:shutil.move(str(subtitle),destination/("subtitles"+subtitle.suffix.lower()))
+        (destination/".video-import.json").write_text(json.dumps(metadata,ensure_ascii=False,indent=2));shutil.rmtree(folder)
+        job_id=create_job(relative);threading.Thread(target=self.run_video_import_queue,args=([(job_id,relative)],),daemon=True).start();self.reply({"jobId":job_id,"status":"queued"},202)
     def run_import_queue(self,queue):
         with IMPORT_LOCK:
             for job_id,relative in queue:
                 log=ROOT/".local"/f"import-{job_id}.log"; log.parent.mkdir(parents=True,exist_ok=True)
                 with log.open("w") as output:
                     subprocess.run([sys.executable,str(ROOT/"tools/import_worker.py"),str(job_id),relative],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
+    def run_video_import_queue(self,queue):
+        with IMPORT_LOCK:
+            for job_id,relative in queue:
+                log=ROOT/".local"/f"video-import-{job_id}.log"
+                with log.open("w") as output:subprocess.run([sys.executable,str(ROOT/"tools/import_video_worker.py"),str(job_id),relative],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
     def serve_books_file(self,url_path):
         relative=unquote(url_path.split("/books/",1)[1]); path=(BOOKS_ROOT/relative).resolve()
         try: path.relative_to(BOOKS_ROOT.resolve())
@@ -221,7 +278,7 @@ class Handler(SimpleHTTPRequestHandler):
                 remaining-=len(chunk)
     def get_settings(self):
         config=private_config(); token=config.get("diocoToken","")
-        shortcuts=db_get_settings({"shortcutPrevious":"a","shortcutRepeat":"s","shortcutNext":"d","shortcutPlay":"space","shelfView":"tile","currentSeries":"","wordTipSeconds":2,"reviewPageSize":10,"manualRepeatCount":3,"manualPauseSeconds":2,"eyeComfort":False,"heatmapRange":"year"})
+        shortcuts=db_get_settings({"shortcutPrevious":"a","shortcutRepeat":"s","shortcutNext":"d","shortcutPlay":"space","shelfView":"tile","currentSeries":"","wordTipSeconds":2,"reviewPageSize":10,"manualRepeatCount":3,"manualPauseSeconds":2,"eyeComfort":False,"heatmapRange":"year","sentenceAutoPause":False})
         self.reply({"userEmail":config.get("userEmail",""),"tokenConfigured":bool(token),
                     "tokenMask":("••••••••"+token[-4:]) if token else "",**shortcuts})
     def update_settings(self):
@@ -261,6 +318,7 @@ class Handler(SimpleHTTPRequestHandler):
         if incoming.get("shelfView") in {"tile","list"}: allowed["shelfView"]=incoming["shelfView"]
         if "currentSeries" in incoming: allowed["currentSeries"]=str(incoming["currentSeries"])
         if "eyeComfort" in incoming: allowed["eyeComfort"]=bool(incoming["eyeComfort"])
+        if "sentenceAutoPause" in incoming: allowed["sentenceAutoPause"]=bool(incoming["sentenceAutoPause"])
         if incoming.get("heatmapRange") in {"year","quarter","month","week"}: allowed["heatmapRange"]=incoming["heatmapRange"]
         if not allowed: self.reply({"error":"no valid preferences"},400); return
         set_settings(allowed); self.reply({"status":"saved",**allowed})
