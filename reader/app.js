@@ -48,6 +48,9 @@ let visualMode="frames";
 let videoTitleManuallyEdited=false;
 let videoImportPollTimer=null;
 let sentenceAutoPause=false;
+let youtubeInfo=null;
+let youtubePollTimer=null;
+let youtubeTitleManuallyEdited=false;
 
 const STORE = {
   state: "shiyue-reader-state-v2",
@@ -151,6 +154,7 @@ async function loadBook(bookId) {
   $("#audio").pause(); $("#audio").src=book.audio; $("#duration").textContent=fmt(book.duration);
   $(".book-heading small").textContent=`${book.level||""}级 · LOCAL BOOK`;
   $(".book-heading strong").innerHTML=`${escapeHtml(book.title)} <i>${escapeHtml(book.englishTitle||"")}</i>`;
+  $(".book-heading strong").title=[book.title,book.englishTitle].filter(Boolean).join(" · ");
   $(".chapter h1").textContent=book.englishTitle||book.title;
   visualMode="frames";configureBookVisual();active=-1; displayedPage=null; renderStory(); restoreProgress(); refreshDashboards(); showPage(book.sentences[0]?.page||1);
   postActivity({bookId,open:true,sessions:1}).then(()=>fetch("/api/library",{cache:"no-store"})).then(r=>r.json()).then(data=>{libraryBooks=data.books||libraryBooks;renderLibrary();}).catch(()=>{});
@@ -166,9 +170,9 @@ function renderLibrary() {
   grid.innerHTML=visible.map(item=>`<article class="book-card" data-book-id="${escapeHtml(item.id)}" data-source-type="${escapeHtml(item.source_type||'book')}"><img src="${encodeURI(item.cover_url)}" alt="${escapeHtml(item.title)}封面"><div class="book-info"><span class="tag">LEVEL ${escapeHtml(item.level||"-")}</span><h3>${escapeHtml(item.title)}</h3><em>${escapeHtml(item.english_title||"")}</em><p>${escapeHtml(item.series)}</p><div class="progress"><i style="width:${bookProgress(item.id)}%"></i></div><small>${item.alignment.startsWith('whisper-')?'Whisper 词级点读':'本地点读'}</small></div><button class="round-play">▶</button></article>`).join("");
 }
 function populateVideoSeriesOptions(){
-  const datalist=$("#videoSeriesOptions");if(!datalist)return;
   const history=[...new Set(libraryBooks.map(item=>(item.series||"").trim()).filter(Boolean).filter(name=>!name.includes("牛津")))].sort((left,right)=>left.localeCompare(right,"zh-CN"));
-  datalist.innerHTML=history.map(name=>`<option value="${escapeHtml(name)}"></option>`).join("");
+  const options='<option value="">选择历史标签</option>'+history.map(name=>`<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
+  [$("#videoSeriesHistory"),$("#youtubeSeriesHistory")].forEach(select=>{if(!select)return;const previous=select.value;select.innerHTML=options;if(history.includes(previous))select.value=previous;});
 }
 function setupSeriesSelector(){const series=[...new Set(libraryBooks.map(item=>item.series))];if(!currentSeries||!series.includes(currentSeries))currentSeries=series[0]||"";$("#seriesSelect").innerHTML=series.map(name=>`<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");$("#seriesSelect").value=currentSeries;}
 function bookProgress(id){const state=load(`${STORE.state}-${id}`,{});const item=libraryBooks.find(x=>x.id===id);return item?.duration?Math.round((state.time||0)/item.duration*100):0}
@@ -246,7 +250,12 @@ function bindEvents() {
   $("#audio").onseeked = syncPlaybackFrame;
   window.addEventListener("beforeunload", finishSession);
   $("#settingsForm").onsubmit = saveApiSettings;
-  $("#seriesSelect").onchange = event => {currentSeries=event.target.value;renderLibrary();savePreference({currentSeries});};
+  $("#seriesSelect").onchange = event => {
+    currentSeries=event.target.value;
+    renderLibrary();
+    savePreference({currentSeries});
+    showScreen("shelf");
+  };
   $("#tileViewBtn").onclick=()=>setShelfView("tile"); $("#listViewBtn").onclick=()=>setShelfView("list");
   $$(".shortcut-input").forEach(input=>input.onkeydown=captureShortcut);
   $("#importSeries").onchange = updateImportBooks;
@@ -256,9 +265,15 @@ function bindEvents() {
   $("#startBatchImport").onclick = startBatchImport;
   $$("[data-import-type]").forEach(button=>button.onclick=()=>setImportType(button.dataset.importType));
   $("#videoImportPane").onsubmit=startVideoImport;
+  $("#youtubeImportPane").onsubmit=startYoutubeImport;
+  $("#analyzeYoutubeBtn").onclick=analyzeYoutubeUrl;
+  $("#youtubeEnglishTitle").oninput=()=>{if(!youtubeTitleManuallyEdited)$("#youtubeTitle").value=$("#youtubeEnglishTitle").value;};
+  $("#youtubeTitle").oninput=()=>{youtubeTitleManuallyEdited=true;};
   $("#videoFile").onchange=handleVideoFileSelected;
   $("#videoEnglishTitle").oninput=syncVideoChineseTitle;
   $("#videoTitle").oninput=()=>{videoTitleManuallyEdited=true;};
+  $("#videoSeriesHistory").onchange=event=>{if(event.target.value)$("#videoSeries").value=event.target.value;};
+  $("#youtubeSeriesHistory").onchange=event=>{if(event.target.value)$("#youtubeSeries").value=event.target.value;};
   $("#framesViewBtn").onclick=()=>setVisualMode("frames");$("#videoViewBtn").onclick=()=>setVisualMode("video");
   document.addEventListener("keydown",handleReaderShortcut);
   document.addEventListener("click",event=>{const button=event.target.closest("button");if(button)setTimeout(()=>button.blur(),0);});
@@ -273,7 +288,7 @@ function bindEvents() {
 
 function configureBookVisual(){const isVideo=book?.sourceType==="video"&&book.video;$("#visualSwitch").classList.toggle("hidden",!isVideo);$("#visualTitle").textContent=isVideo?"视频画面":"原书页";$("#videoView").src=isVideo?book.video:"";setVisualMode("frames");}
 function setVisualMode(mode){visualMode=mode;const isVideo=book?.sourceType==="video"&&book.video;$("#framesViewBtn").classList.toggle("active",mode==="frames");$("#videoViewBtn").classList.toggle("active",mode==="video");$("#pageImage").classList.toggle("hidden",mode==="video");$("#videoView").classList.toggle("hidden",mode!=="video");if(isVideo&&mode==="video"){const video=$("#videoView"),audio=$("#audio");video.currentTime=audio.currentTime;if(!audio.paused)video.play().catch(()=>{});}else $("#videoView").pause();}
-function setImportType(type){$$('[data-import-type]').forEach(button=>button.classList.toggle('active',button.dataset.importType===type));$("#booksImportPane").classList.toggle("hidden",type!=="books");$("#videoImportPane").classList.toggle("hidden",type!=="video");}
+function setImportType(type){$$('[data-import-type]').forEach(button=>button.classList.toggle('active',button.dataset.importType===type));$("#booksImportPane").classList.toggle("hidden",type!=="books");$("#videoImportPane").classList.toggle("hidden",type!=="video");$("#youtubeImportPane").classList.toggle("hidden",type!=="youtube");}
 function videoNameWithoutExtension(name){return name.replace(/\.[^.]+$/,'').replace(/[._-]+/g,' ').trim();}
 function handleVideoFileSelected(){const file=$("#videoFile").files[0];if(!file)return;const derived=videoNameWithoutExtension(file.name);if(!$("#videoEnglishTitle").value)$("#videoEnglishTitle").value=derived;if(!$("#videoTitle").value||!videoTitleManuallyEdited)$("#videoTitle").value=$("#videoEnglishTitle").value||derived;}
 function syncVideoChineseTitle(){if(!videoTitleManuallyEdited)$("#videoTitle").value=$("#videoEnglishTitle").value;}
@@ -281,6 +296,12 @@ function setVideoOverallProgress(percent,step,message=''){const value=Math.max(0
 function uploadPart(uploadId,kind,file,baseProgress,span){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open("POST",`/api/import/video/upload/${uploadId}?kind=${kind}`);xhr.upload.onprogress=event=>{if(event.lengthComputable)setVideoOverallProgress(baseProgress+event.loaded/event.total*span,kind==='video'?'上传视频':'上传字幕','文件上传只是第一阶段，完成后将继续后台处理。');};xhr.onload=()=>xhr.status<300?resolve():reject(new Error(JSON.parse(xhr.responseText||'{}').error||'上传失败'));xhr.onerror=()=>reject(new Error('网络上传失败'));xhr.send(file);});}
 async function startVideoImport(event){event.preventDefault();const video=$("#videoFile").files[0],subtitle=$("#videoSubtitle").files[0];if(!video)return;const series=$("#videoSeries").value.trim();if(!series){$("#videoSeries").setCustomValidity("请选择历史标签或输入新标签");$("#videoSeries").reportValidity();return;}$("#videoSeries").setCustomValidity("");clearInterval(videoImportPollTimer);$("#videoUploadProgress").classList.remove("hidden");setVideoOverallProgress(0,"创建上传任务","总体进度包含上传、音频提取、关键帧、Whisper、对齐和数据库写入。");try{const englishTitle=$("#videoEnglishTitle").value.trim();const chineseTitle=$("#videoTitle").value.trim()||englishTitle;if(!$("#videoTitle").value.trim())$("#videoTitle").value=chineseTitle;const initResponse=await fetch("/api/import/video/init",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({title:chineseTitle,englishTitle,series,level:$("#videoLevel").value,subtitleStrategy:$("#videoSubtitleStrategy").value,videoFilename:video.name,subtitleFilename:subtitle?.name||""})});const init=await initResponse.json();if(!initResponse.ok)throw new Error(init.error||"无法创建上传");await uploadPart(init.uploadId,"video",video,1,subtitle?17:19);if(subtitle)await uploadPart(init.uploadId,"subtitle",subtitle,18,2);setVideoOverallProgress(20,"创建后台处理任务","文件上传完成，后台处理即将开始。");const doneResponse=await fetch(`/api/import/video/complete/${init.uploadId}`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});const done=await doneResponse.json();if(!doneResponse.ok)throw new Error(done.error||"无法开始导入");pollVideoImport(done.jobId);}catch(error){clearInterval(videoImportPollTimer);setVideoOverallProgress($("#videoUploadBar").value,"视频导入失败",error.message);}}
 function pollVideoImport(jobId){clearInterval(videoImportPollTimer);const check=async()=>{try{const response=await fetch(`/api/import/jobs/${jobId}`,{cache:'no-store'}),job=await response.json();if(!response.ok)throw new Error(job.error||'无法读取任务');const overall=20+(job.progress||0)*.8;setVideoOverallProgress(overall,job.step||job.status,job.error||`后台处理中：${job.progress||0}%`);if(job.status==='complete'||job.status==='failed'){clearInterval(videoImportPollTimer);videoImportPollTimer=null;if(job.status==='complete'){setVideoOverallProgress(100,'视频导入完成','音频、字幕、关键帧、词级时间轴和SQLite数据均已完成。');const data=await fetch('/api/library',{cache:'no-store'}).then(r=>r.json());libraryBooks=data.books||[];populateVideoSeriesOptions();setupSeriesSelector();renderLibrary();await loadImportCatalog();}else setVideoOverallProgress(overall,'视频导入失败',job.error||'后台任务失败');}}catch(error){clearInterval(videoImportPollTimer);videoImportPollTimer=null;setVideoOverallProgress($("#videoUploadBar").value,'进度查询失败',error.message);}};check();videoImportPollTimer=setInterval(check,1000);}
+
+function setYoutubeProgress(percent,step,message=''){const value=Math.max(0,Math.min(100,Math.round(percent)));$("#youtubeBar").value=value;$("#youtubePercent").textContent=`${value}%`;$("#youtubeStep").textContent=step;if(message)$("#youtubeMessage").textContent=message;}
+async function analyzeYoutubeUrl(){const url=$("#youtubeUrl").value.trim();if(!url)return;$("#analyzeYoutubeBtn").disabled=true;$("#youtubeProgress").classList.remove("hidden");setYoutubeProgress(1,"解析 YouTube 地址","正在读取标题、频道、时长和字幕信息。");try{const response=await fetch('/api/import/youtube/info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})}),data=await response.json();if(!response.ok)throw new Error(data.error||'解析失败');youtubeInfo=data;$("#youtubeThumbnail").src=data.thumbnail||'';$("#youtubeChannel").textContent=data.channel||'YouTube';$("#youtubePreviewTitle").textContent=data.title;$("#youtubeMeta").textContent=`${fmt(data.duration||0)} · ${data.hasEnglishSubtitles?'有人工英文字幕':data.hasEnglishAutoCaptions?'有自动英文字幕':'无英文字幕，将使用Whisper'}`;$("#youtubePreview").classList.remove("hidden");$("#youtubeEnglishTitle").value=data.title;youtubeTitleManuallyEdited=false;$("#youtubeTitle").value=data.title;if(!$("#youtubeSeries").value||$("#youtubeSeries").value==='视频课程')$("#youtubeSeries").value=data.channel||'视频课程';$("#startYoutubeImport").disabled=false;setYoutubeProgress(3,"解析完成","确认标题和标签后开始下载。");}catch(error){youtubeInfo=null;$("#startYoutubeImport").disabled=true;setYoutubeProgress(0,"解析失败",error.message);}finally{$("#analyzeYoutubeBtn").disabled=false;}}
+async function startYoutubeImport(event){event.preventDefault();if(!youtubeInfo)return;const series=$("#youtubeSeries").value.trim();if(!series)return;clearInterval(youtubePollTimer);$("#youtubeProgress").classList.remove("hidden");setYoutubeProgress(1,"创建 YouTube 导入任务","下载、字幕和后续处理将严格顺序执行。");try{const response=await fetch('/api/import/youtube',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:youtubeInfo.webpageUrl||$("#youtubeUrl").value,title:$("#youtubeTitle").value.trim()||youtubeInfo.title,englishTitle:$("#youtubeEnglishTitle").value.trim()||youtubeInfo.title,series,level:$("#youtubeLevel").value.trim(),videoId:youtubeInfo.id,channel:youtubeInfo.channel})}),data=await response.json();if(!response.ok)throw new Error(data.error||'无法开始导入');pollYoutubeImport(data.jobId);}catch(error){setYoutubeProgress($("#youtubeBar").value,'YouTube 导入失败',error.message);}}
+function pollYoutubeImport(jobId){clearInterval(youtubePollTimer);const check=async()=>{try{const response=await fetch(`/api/import/jobs/${jobId}`,{cache:'no-store'}),job=await response.json();if(!response.ok)throw new Error(job.error||'无法读取任务');setYoutubeProgress(job.progress||0,job.step||job.status,job.error||youtubeProgressMessage(job));if(job.status==='complete'||job.status==='failed'){clearInterval(youtubePollTimer);youtubePollTimer=null;if(job.status==='complete'){setYoutubeProgress(100,'YouTube 导入完成','视频、字幕、音频、关键帧、词级时间轴和SQLite数据均已完成。');const data=await fetch('/api/library',{cache:'no-store'}).then(r=>r.json());libraryBooks=data.books||[];populateVideoSeriesOptions();setupSeriesSelector();renderLibrary();}else setYoutubeProgress(job.progress||0,'YouTube 导入失败',job.error||'任务失败');}}catch(error){clearInterval(youtubePollTimer);youtubePollTimer=null;setYoutubeProgress($("#youtubeBar").value,'进度查询失败',error.message);}};check();youtubePollTimer=setInterval(check,1000);}
+function youtubeProgressMessage(job){if((job.progress||0)<25)return '正在下载最高720p视频、英文字幕和缩略图。';return `YouTube下载已完成，正在复用视频处理流程：${job.progress||0}%`;}
 
 function showWordQuickTip(element,sentence){
   clearTimeout(wordTipTimer); const rect=element.getBoundingClientRect();

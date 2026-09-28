@@ -27,6 +27,8 @@ ROOT=Path(__file__).resolve().parents[1]
 READER=ROOT/"reader"
 CLI=ROOT/"tools/vendor/whisper.cpp/build/bin/whisper-cli"
 MODEL=ROOT/"tools/vendor/whisper.cpp/models/ggml-base.en.bin"
+YTDLP=ROOT/".local/bin/yt-dlp"
+NODE=Path(shutil.which("node") or "/usr/local/bin/node")
 PRIVATE_CONFIG=ROOT/".dioco.local.json"
 CACHE=ROOT/".cache/dioco"
 CACHE.mkdir(parents=True,exist_ok=True)
@@ -135,6 +137,8 @@ class Handler(SimpleHTTPRequestHandler):
                 remaining-=len(chunk)
         return True
     def do_POST(self):
+        if self.path == "/api/import/youtube/info": self.youtube_info(); return
+        if self.path == "/api/import/youtube": self.start_youtube_import(); return
         if self.path == "/api/import/video/init": self.init_video_upload(); return
         if self.path.startswith("/api/import/video/upload/"): self.upload_video_part(); return
         if self.path.startswith("/api/import/video/complete/"): self.complete_video_upload(); return
@@ -198,6 +202,36 @@ class Handler(SimpleHTTPRequestHandler):
         metadata={"title":title,"englishTitle":str(item.get("englishTitle","")).strip(),"series":series,"level":str(item.get("level","")).strip(),
                   "subtitleStrategy":str(item.get("subtitleStrategy","auto")),"videoFilename":str(item.get("videoFilename","source.mp4")),"subtitleFilename":str(item.get("subtitleFilename",""))}
         (folder/"metadata.json").write_text(json.dumps(metadata,ensure_ascii=False,indent=2));self.reply({"uploadId":upload_id},201)
+    def valid_youtube_url(self,value):
+        try:
+            parsed=urlsplit(value); host=(parsed.hostname or "").lower()
+            return parsed.scheme in {"http","https"} and (host=="youtu.be" or host=="youtube.com" or host.endswith(".youtube.com"))
+        except Exception:return False
+    def youtube_info(self):
+        try:item=self.json_body(); url=str(item.get("url","")).strip()
+        except Exception:self.reply({"error":"invalid json"},400);return
+        if not self.valid_youtube_url(url):self.reply({"error":"请输入有效的 YouTube 地址"},400);return
+        try:
+            output=subprocess.check_output([str(YTDLP),"--js-runtimes",f"node:{NODE}","--dump-single-json","--no-playlist","--skip-download",url],text=True,stderr=subprocess.STDOUT,timeout=90)
+            data=json.loads(output); subtitles=data.get("subtitles") or {}; automatic=data.get("automatic_captions") or {}
+            self.reply({"id":data.get("id",""),"title":data.get("title","") or "YouTube Video","channel":data.get("channel") or data.get("uploader","") or "YouTube",
+                        "duration":data.get("duration",0),"thumbnail":data.get("thumbnail","") or "","hasEnglishSubtitles":any(key.startswith("en") for key in subtitles),
+                        "hasEnglishAutoCaptions":any(key.startswith("en") for key in automatic),"webpageUrl":data.get("webpage_url",url)})
+        except subprocess.TimeoutExpired:self.reply({"error":"解析超时，请稍后重试"},504)
+        except subprocess.CalledProcessError as exc:self.reply({"error":"无法解析视频，可能需要登录、Cookie或该视频不可访问","detail":exc.output[-800:]},502)
+        except Exception as exc:self.reply({"error":str(exc)},502)
+    def start_youtube_import(self):
+        try:item=self.json_body(); url=str(item.get("url","")).strip(); title=str(item.get("title","")).strip(); series=str(item.get("series","")).strip()
+        except Exception:self.reply({"error":"invalid json"},400);return
+        if not self.valid_youtube_url(url):self.reply({"error":"请输入有效的 YouTube 地址"},400);return
+        if not title or not series:self.reply({"error":"标题和标签不能为空"},400);return
+        request_id=uuid.uuid4().hex; request_file=ROOT/".local"/f"youtube-request-{request_id}.json"; request_file.write_text(json.dumps(item,ensure_ascii=False,indent=2))
+        job_id=create_job(f"youtube:{item.get('videoId','') or request_id[:8]}")
+        def launch():
+            with IMPORT_LOCK:
+                log=ROOT/".local"/f"youtube-import-{job_id}.log"
+                with log.open("w") as output:subprocess.run([sys.executable,str(ROOT/"tools/import_youtube_worker.py"),str(job_id),request_file],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
+        threading.Thread(target=launch,daemon=True).start();self.reply({"jobId":job_id,"status":"queued"},202)
     def upload_video_part(self):
         upload_id=self.path.split("/api/import/video/upload/",1)[1].split("?",1)[0]
         folder=(VIDEO_UPLOADS/upload_id).resolve()
