@@ -75,9 +75,9 @@ def import_book(job_id,relative):
          "--audio-url",audio_url,"--pdf-url",pdf_url])
 
     whisper_prefix=generated/"whisper"
-    set_job(job_id,63,"Whisper 正在生成词级时间轴")
+    set_job(job_id,63,"Whisper DTW 正在生成词级时间轴")
     whisper_log=ROOT/".local"/f"whisper-{job_id}.log"
-    run([WHISPER,"-m",MODEL,"-f",audio_out,"-l","en","-t","4","-p","2","-ng","-ml","1","-sow","-ojf","-of",whisper_prefix,"-np"],
+    run([WHISPER,"-m",MODEL,"-f",audio_out,"-l","en","-t","4","-p","2","-ng","-dtw","base.en","-ml","1","-sow","-ojf","-of",whisper_prefix,"-np"],
         stdout=subprocess.DEVNULL,stderr=whisper_log.open("w"))
     set_job(job_id,88,"对齐原文与音频")
     run([sys.executable,ROOT/"tools/align_whisper.py","--book",book_json,"--whisper",str(whisper_prefix)+".json",

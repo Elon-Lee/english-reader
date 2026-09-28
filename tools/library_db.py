@@ -39,7 +39,29 @@ def connect():
     CREATE TABLE IF NOT EXISTS dictionary_entries (
       surface TEXT PRIMARY KEY, entry_json TEXT NOT NULL, updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS vocabulary (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, book_id TEXT NOT NULL, sentence_id TEXT NOT NULL,
+      word_index INTEGER NOT NULL, word TEXT NOT NULL, root TEXT NOT NULL, phonetic TEXT DEFAULT '',
+      meaning TEXT DEFAULT '', context TEXT DEFAULT '', note TEXT DEFAULT '', rating TEXT DEFAULT 'unknown',
+      interval_days INTEGER NOT NULL DEFAULT 1, due_at TEXT NOT NULL, reviews INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE(book_id,sentence_id,word_index)
+    );
+    CREATE TABLE IF NOT EXISTS word_annotations (
+      book_id TEXT NOT NULL, sentence_id TEXT NOT NULL, word_index INTEGER NOT NULL,
+      original_word TEXT NOT NULL, corrected_word TEXT DEFAULT '', note TEXT DEFAULT '', updated_at TEXT NOT NULL,
+      PRIMARY KEY(book_id,sentence_id,word_index)
+    );
+    CREATE TABLE IF NOT EXISTS learning_daily (
+      day TEXT PRIMARY KEY, reading_seconds REAL NOT NULL DEFAULT 0, sentences INTEGER NOT NULL DEFAULT 0,
+      lookups INTEGER NOT NULL DEFAULT 0, reviews INTEGER NOT NULL DEFAULT 0,
+      shadow_attempts INTEGER NOT NULL DEFAULT 0, sessions INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
     """)
+    columns={row[1] for row in db.execute("PRAGMA table_info(books)")}
+    if "last_read_at" not in columns: db.execute("ALTER TABLE books ADD COLUMN last_read_at TEXT")
+    db.commit()
     return db
 
 def slug_for(relative):
@@ -110,13 +132,70 @@ def set_settings(values):
     db.commit(); db.close()
 
 def library():
-    db=connect(); rows=db.execute("SELECT id,title,english_title,series,level,status,cover_url,duration,alignment,updated_at FROM books ORDER BY series,title").fetchall(); db.close()
+    db=connect(); rows=db.execute("SELECT id,title,english_title,series,level,status,cover_url,duration,alignment,updated_at,last_read_at FROM books ORDER BY (last_read_at IS NULL),last_read_at DESC,created_at ASC").fetchall(); db.close()
     return [dict(row) for row in rows]
 
+def touch_book(book_id):
+    db=connect(); db.execute("UPDATE books SET last_read_at=? WHERE id=?",(now(),book_id)); db.commit(); db.close()
+
+def add_daily(reading_seconds=0,sentences=0,lookups=0,reviews=0,shadow_attempts=0,sessions=0):
+    day=datetime.now().astimezone().date().isoformat(); stamp=now(); db=connect()
+    db.execute("""INSERT INTO learning_daily(day,reading_seconds,sentences,lookups,reviews,shadow_attempts,sessions,updated_at)
+      VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(day) DO UPDATE SET
+      reading_seconds=reading_seconds+excluded.reading_seconds,sentences=sentences+excluded.sentences,
+      lookups=lookups+excluded.lookups,reviews=reviews+excluded.reviews,
+      shadow_attempts=shadow_attempts+excluded.shadow_attempts,sessions=sessions+excluded.sessions,updated_at=excluded.updated_at""",
+      (day,reading_seconds,sentences,lookups,reviews,shadow_attempts,sessions,stamp)); db.commit(); db.close()
+
+def learning_days(limit=365):
+    db=connect(); rows=db.execute("SELECT * FROM learning_daily ORDER BY day DESC LIMIT ?",(limit,)).fetchall(); db.close(); return [dict(row) for row in rows]
+
+def vocabulary_list():
+    db=connect(); rows=db.execute("SELECT * FROM vocabulary ORDER BY due_at,updated_at DESC").fetchall(); db.close(); return [dict(row) for row in rows]
+
+def save_vocab(item):
+    stamp=now(); due=item.get("due_at") or stamp; db=connect()
+    db.execute("""INSERT INTO vocabulary(book_id,sentence_id,word_index,word,root,phonetic,meaning,context,note,rating,interval_days,due_at,reviews,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(book_id,sentence_id,word_index) DO UPDATE SET
+      word=excluded.word,root=excluded.root,phonetic=excluded.phonetic,meaning=excluded.meaning,context=excluded.context,
+      note=CASE WHEN excluded.note='' THEN vocabulary.note ELSE excluded.note END,rating=excluded.rating,
+      interval_days=excluded.interval_days,due_at=excluded.due_at,reviews=vocabulary.reviews+1,updated_at=excluded.updated_at""",
+      (item["book_id"],item["sentence_id"],int(item["word_index"]),item["word"],item.get("root",item["word"].lower()),item.get("phonetic",""),
+       item.get("meaning",""),item.get("context",""),item.get("note",""),item.get("rating","unknown"),int(item.get("interval_days",1)),due,
+       int(item.get("reviews",0)),stamp,stamp)); db.commit(); db.close()
+
+def update_vocab(vocab_id,values):
+    allowed={k:v for k,v in values.items() if k in {"note","rating","interval_days","due_at","word","meaning"}}
+    if not allowed:return
+    allowed["updated_at"]=now(); fields=",".join(f"{key}=?" for key in allowed); db=connect()
+    db.execute(f"UPDATE vocabulary SET {fields},reviews=reviews+1 WHERE id=?",[*allowed.values(),vocab_id]); db.commit(); db.close()
+
+def annotate_word(book_id,sentence_id,word_index,corrected_word=None,note=None):
+    db=connect(); row=db.execute("SELECT data_json FROM books WHERE id=?",(book_id,)).fetchone()
+    if not row: db.close(); raise ValueError("book not found")
+    book=json.loads(row[0]); sentence=next((s for s in book["sentences"] if s["id"]==sentence_id),None)
+    if not sentence or word_index<0 or word_index>=len(sentence.get("words",[])): db.close(); raise ValueError("word not found")
+    original=sentence["words"][word_index]["text"]
+    if corrected_word:
+        matches=list(re.finditer(r"[A-Za-z]+(?:['’][A-Za-z]+)?|\d+",sentence["text"]))
+        if word_index<len(matches):
+            match=matches[word_index]; sentence["text"]=sentence["text"][:match.start()]+corrected_word+sentence["text"][match.end():]
+        sentence["words"][word_index]["text"]=corrected_word
+        db.execute("UPDATE books SET data_json=?,updated_at=? WHERE id=?",(json.dumps(book,ensure_ascii=False),now(),book_id))
+    previous=db.execute("SELECT corrected_word,note FROM word_annotations WHERE book_id=? AND sentence_id=? AND word_index=?",(book_id,sentence_id,word_index)).fetchone()
+    corrected=corrected_word if corrected_word is not None else (previous[0] if previous else "")
+    saved_note=note if note is not None else (previous[1] if previous else "")
+    db.execute("INSERT INTO word_annotations(book_id,sentence_id,word_index,original_word,corrected_word,note,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(book_id,sentence_id,word_index) DO UPDATE SET corrected_word=excluded.corrected_word,note=excluded.note,updated_at=excluded.updated_at",
+      (book_id,sentence_id,word_index,original,corrected,saved_note,now())); db.commit(); db.close()
+    if note is not None:
+        db=connect(); db.execute("UPDATE vocabulary SET note=?,updated_at=? WHERE book_id=? AND sentence_id=? AND word_index=?",(saved_note,now(),book_id,sentence_id,word_index)); db.commit(); db.close()
+    return {"originalWord":original,"correctedWord":corrected,"note":saved_note}
+
 def get_book(book_id):
-    db=connect(); row=db.execute("SELECT * FROM books WHERE id=?",(book_id,)).fetchone(); db.close()
+    db=connect(); row=db.execute("SELECT * FROM books WHERE id=?",(book_id,)).fetchone()
+    annotations=[dict(item) for item in db.execute("SELECT * FROM word_annotations WHERE book_id=?",(book_id,)).fetchall()]; db.close()
     if not row: return None
-    result=dict(row); result["book"]=json.loads(result.pop("data_json")); result["quality"]=json.loads(result.pop("quality_json") or "{}")
+    result=dict(row); result["book"]=json.loads(result.pop("data_json")); result["quality"]=json.loads(result.pop("quality_json") or "{}"); result["annotations"]=annotations
     return result
 
 def create_job(source_path):

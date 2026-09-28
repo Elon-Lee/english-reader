@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
-  <link rel="stylesheet" href="styles.css?v=20260927-8">
+  <link rel="stylesheet" href="styles.css?v=20260928-15">
 </head>
 <body>
   <aside class="sidebar">
@@ -23,7 +23,7 @@
     <header class="topbar">
       <button class="back" id="backBtn">← 书架</button>
       <div class="book-heading"><small>0级 · STARTERS</small><strong>生存游戏 <i>Survive!</i></strong></div>
-      <div class="top-actions"><button id="viewBtn">原书页</button><button id="focusBtn">专注模式</button></div>
+      <div class="top-actions"><button id="eyeComfortBtn" class="eye-comfort-btn" aria-pressed="false">◐ 护眼</button><button id="viewBtn">原书页</button><button id="focusBtn">专注模式</button></div>
     </header>
 
     <section id="shelf" class="screen shelf">
@@ -34,7 +34,7 @@
     </section>
 
     <section id="stats" class="screen dashboard hidden"><div class="page-title"><small>LEARNING LOG</small><h1>学习记录</h1><p>你的数据只保存在这台设备。</p></div><div id="statsContent"></div></section>
-    <section id="vocab" class="screen dashboard hidden"><div class="page-title"><small>SPACED REVIEW</small><h1>生词复习</h1><p>根据“认识 / 模糊 / 不认识”自动安排下一次复习。</p></div><div id="reviewContent"></div></section>
+    <section id="vocab" class="screen dashboard vocab-screen hidden"><div class="review-workspace"><div id="reviewContent"></div><aside id="reviewWordPanel" class="review-word-panel"><div class="word-empty"><span>Aa</span><h3>点击生词</h3><p>在这里查看完整释义、当前句用法、例句和备注。</p></div></aside></div></section>
     <section id="import" class="screen dashboard hidden">
       <div class="page-title"><small>BOOK IMPORTER</small><h1>导入书籍</h1><p>从 <code>books/</code> 选择系列与多本书，后台将严格按顺序逐本导入。</p></div>
       <div class="panel import-panel">
@@ -55,6 +55,12 @@
           <label>复读当前句<input id="shortcutRepeat" class="shortcut-input" maxlength="8" readonly></label>
           <label>下一句<input id="shortcutNext" class="shortcut-input" maxlength="8" readonly></label>
           <label>播放 / 暂停<input id="shortcutPlay" class="shortcut-input" maxlength="8" readonly></label>
+        </fieldset>
+        <fieldset class="display-settings"><legend>阅读体验</legend>
+          <label>单词工具栏停留时间<input id="wordTipSeconds" type="number" min="0.5" max="10" step="0.5" value="2"><span>秒</span></label>
+          <label>生词每页数量<input id="reviewPageSize" type="number" min="5" max="50" step="5" value="10"><span>条</span></label>
+          <label>手动听写朗读次数<input id="manualRepeatCount" type="number" min="1" max="10" step="1" value="3"><span>遍</span></label>
+          <label>手动听写词间停顿<input id="manualPauseSeconds" type="number" min="0.5" max="10" step="0.5" value="2"><span>秒</span></label>
         </fieldset>
         <p class="shortcut-help">点击输入框后按下新按键。四个快捷键不能重复。</p>
         <div class="settings-status"><span id="tokenStatus">正在读取配置…</span><button type="submit">保存设置</button></div>
@@ -88,6 +94,13 @@
     <span id="shortcutHint" class="shortcut-hint">A 上一句 · S 复读 · D 下一句 · 空格暂停</span>
     <audio id="audio" preload="metadata"></audio><audio id="recording"></audio>
   </footer>
-  <script src="app.js?v=20260927-8"></script>
+  <div id="wordQuickTip" class="word-quick-tip hidden" role="toolbar">
+    <button data-word-action="vocab">＋ 生词本</button><button data-word-action="correct">✎ 订正OCR</button><button data-word-action="note">▤ 备注</button>
+  </div>
+  <div id="wordInlineEditor" class="word-inline-editor hidden">
+    <div class="inline-editor-head"><b id="wordEditTitle">编辑</b><button id="closeWordEdit">×</button></div>
+    <input id="wordEditValue" autocomplete="off"><div class="inline-editor-actions"><button id="cancelWordEdit">取消</button><button id="saveWordEdit">保存</button></div>
+  </div>
+  <script src="app.js?v=20260928-15"></script>
 </body>
 </html>

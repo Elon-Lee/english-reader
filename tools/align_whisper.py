@@ -76,6 +76,35 @@ def interpolate(mapping, canonical, whisper, old_book):
             mapping[index]={"start":start,"end":sentence["start"]+span*(item["word"]+1)/count,
                             "confidence":0,"estimated":True}
 
+def max_word_duration(text):
+    letters=len(re.sub(r"[^A-Za-z0-9]","",text))
+    return min(1.35,max(.38,.28+letters*.095))
+
+def normalize_words(words):
+    """Remove overlaps and prevent timestamp tokens from absorbing long pauses."""
+    if not words: return {"overlapsFixed":0,"durationsCapped":0}
+    overlaps=0; capped=0
+    for word in words:
+        word["start"]=max(0,float(word["start"])); word["end"]=max(word["start"]+.04,float(word["end"]))
+    for index in range(1,len(words)):
+        words[index]["start"]=max(words[index]["start"],words[index-1]["start"]+.04)
+        words[index]["end"]=max(words[index]["end"],words[index]["start"]+.04)
+    for left,right in zip(words,words[1:]):
+        if right["start"] < left["end"]:
+            low=left["start"]+.04; high=right["end"]-.04
+            boundary=(left["end"]+right["start"])/2
+            boundary=max(low,min(high,boundary)) if high>=low else max(low,right["start"])
+            left["end"]=boundary; right["start"]=boundary; overlaps+=1
+    for index,word in enumerate(words):
+        maximum=max_word_duration(word["text"])
+        original_end=word["end"]
+        ceiling=word["start"]+maximum
+        if index+1<len(words): ceiling=min(ceiling,words[index+1]["start"])
+        word["end"]=max(word["start"]+.03,min(original_end,ceiling))
+        if original_end-word["start"] > maximum: capped+=1
+        word["start"]=round(word["start"],3); word["end"]=round(word["end"],3)
+    return {"overlapsFixed":overlaps,"durationsCapped":capped}
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument("--book",required=True,type=Path)
@@ -105,7 +134,10 @@ def main():
         per_sentence[item["sentence"]].append({"text":item["text"],"start":round(timing["start"],3),
             "end":round(max(timing["start"]+.03,timing["end"]),3),
             "confidence":round(timing.get("confidence",0),3),"aligned":not timing.get("estimated",False)})
+    normalization={"overlapsFixed":0,"durationsCapped":0}
     for sentence,words in zip(book["sentences"],per_sentence):
+        result=normalize_words(words)
+        for key,value in result.items(): normalization[key]+=value
         sentence["words"]=words
         if words:
             sentence["start"]=round(words[0]["start"],3)
@@ -113,20 +145,21 @@ def main():
     ratio=direct/max(1,len(canonical))
     if ratio < args.min_match:
         raise SystemExit(f"Alignment rejected: direct word match {ratio:.1%} is below {args.min_match:.0%}")
-    book["alignment"]="whisper-word-timestamps"
+    book["alignment"]="whisper-dtw-normalized"
     book["whisper"]={"engine":"whisper.cpp","model":args.model,"directWordMatch":round(ratio,4),
+                     "timestampMethod":"dtw","normalization":normalization,
                      "canonicalWords":len(canonical),"matchedWords":direct,"transcribedWords":len(heard)}
     output=args.output or args.book
     output.write_text(json.dumps(book,ensure_ascii=False,indent=2))
     report={"engine":"whisper.cpp","model":args.model,"canonicalWords":len(canonical),
             "transcribedWords":len(heard),"directMatches":direct,"directMatchRate":round(ratio,4),
-            "estimatedWords":len(canonical)-direct,
+            "estimatedWords":len(canonical)-direct,"timestampMethod":"dtw","normalization":normalization,
             "firstSpeechWord":heard[0] if heard else None,"lastSpeechWord":heard[-1] if heard else None}
     if args.report: args.report.write_text(json.dumps(report,ensure_ascii=False,indent=2))
     quality_path=output.with_name("quality-report.json")
     if quality_path.exists():
         quality=json.loads(quality_path.read_text())
-        quality["summary"]["alignment"]="whisper-word-timestamps"
+        quality["summary"]["alignment"]="whisper-dtw-normalized"
         quality["whisper"]=report
         validated={(book["sentences"][item["sentence"]]["page"],item["text"]) for ci,item in enumerate(canonical) if ci in direct_mapping}
         unresolved=[]; confirmed=[]

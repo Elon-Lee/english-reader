@@ -11,5 +11,5 @@ PREFIX=$3
 mkdir -p "$(dirname "$PREFIX")"
 CLI="$ROOT_DIR/tools/vendor/whisper.cpp/build/bin/whisper-cli"
 MODEL="$ROOT_DIR/tools/vendor/whisper.cpp/models/ggml-base.en.bin"
-"$CLI" -m "$MODEL" -f "$AUDIO" -l en -t 4 -p 2 -ng -ml 1 -sow -ojf -of "$PREFIX" -np
+"$CLI" -m "$MODEL" -f "$AUDIO" -l en -t 4 -p 2 -ng -dtw base.en -ml 1 -sow -ojf -of "$PREFIX" -np
 python3 "$ROOT_DIR/tools/align_whisper.py" --book "$BOOK" --whisper "$PREFIX.json" --report "$PREFIX-alignment.json"

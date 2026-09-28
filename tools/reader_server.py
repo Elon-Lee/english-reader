@@ -7,6 +7,7 @@ import mimetypes
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -19,7 +20,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from library_db import BOOKS_ROOT, create_job, dictionary, get_book, get_job, get_settings as db_get_settings, library, scan_catalog, set_settings
+from library_db import BOOKS_ROOT, add_daily, annotate_word, create_job, dictionary, get_book, get_job, get_settings as db_get_settings, learning_days, library, save_vocab, scan_catalog, set_settings, touch_book, update_vocab, vocabulary_list
 
 ROOT=Path(__file__).resolve().parents[1]
 READER=ROOT/"reader"
@@ -79,6 +80,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         route=urlsplit(self.path)
         if route.path == "/api/library": self.reply({"books":library()}); return
+        if route.path == "/api/vocabulary": self.reply({"items":vocabulary_list()}); return
+        if route.path == "/api/learning/days": self.reply({"days":learning_days(365)}); return
         if route.path == "/api/local-dictionary": self.reply(dictionary()); return
         if route.path == "/api/import/catalog": self.reply({"series":scan_catalog()}); return
         if route.path == "/api/import/cover": self.import_cover(parse_qs(route.query)); return
@@ -129,6 +132,10 @@ class Handler(SimpleHTTPRequestHandler):
                 remaining-=len(chunk)
         return True
     def do_POST(self):
+        if self.path == "/api/activity": self.record_activity(); return
+        if self.path == "/api/vocabulary": self.create_vocabulary(); return
+        if self.path.startswith("/api/vocabulary/"): self.change_vocabulary(); return
+        if self.path == "/api/word-annotation": self.save_annotation(); return
         if self.path == "/api/preferences": self.update_preferences(); return
         if self.path == "/api/import/batch": self.start_batch_import(); return
         if self.path == "/api/import": self.start_import(); return
@@ -214,7 +221,7 @@ class Handler(SimpleHTTPRequestHandler):
                 remaining-=len(chunk)
     def get_settings(self):
         config=private_config(); token=config.get("diocoToken","")
-        shortcuts=db_get_settings({"shortcutPrevious":"a","shortcutRepeat":"s","shortcutNext":"d","shortcutPlay":"space","shelfView":"tile","currentSeries":""})
+        shortcuts=db_get_settings({"shortcutPrevious":"a","shortcutRepeat":"s","shortcutNext":"d","shortcutPlay":"space","shelfView":"tile","currentSeries":"","wordTipSeconds":2,"reviewPageSize":10,"manualRepeatCount":3,"manualPauseSeconds":2,"eyeComfort":False,"heatmapRange":"year"})
         self.reply({"userEmail":config.get("userEmail",""),"tokenConfigured":bool(token),
                     "tokenMask":("••••••••"+token[-4:]) if token else "",**shortcuts})
     def update_settings(self):
@@ -234,6 +241,17 @@ class Handler(SimpleHTTPRequestHandler):
         PRIVATE_CONFIG.write_text(json.dumps({"userEmail":email,"diocoToken":token},ensure_ascii=False,indent=2))
         os.chmod(PRIVATE_CONFIG,0o600)
         set_settings(shortcut_values)
+        extra={}
+        try: extra["wordTipSeconds"]=max(.5,min(10,float(incoming.get("wordTipSeconds",2))))
+        except (TypeError,ValueError): extra["wordTipSeconds"]=2
+        try: extra["reviewPageSize"]=max(5,min(50,int(incoming.get("reviewPageSize",10))))
+        except (TypeError,ValueError): extra["reviewPageSize"]=10
+        try: extra["manualRepeatCount"]=max(1,min(10,int(incoming.get("manualRepeatCount",3))))
+        except (TypeError,ValueError): extra["manualRepeatCount"]=3
+        try: extra["manualPauseSeconds"]=max(.5,min(10,float(incoming.get("manualPauseSeconds",2))))
+        except (TypeError,ValueError): extra["manualPauseSeconds"]=2
+        extra["eyeComfort"]=bool(incoming.get("eyeComfort",False))
+        set_settings(extra)
         self.get_settings()
     def update_preferences(self):
         length=int(self.headers.get("Content-Length","0"))
@@ -242,8 +260,37 @@ class Handler(SimpleHTTPRequestHandler):
         allowed={}
         if incoming.get("shelfView") in {"tile","list"}: allowed["shelfView"]=incoming["shelfView"]
         if "currentSeries" in incoming: allowed["currentSeries"]=str(incoming["currentSeries"])
+        if "eyeComfort" in incoming: allowed["eyeComfort"]=bool(incoming["eyeComfort"])
+        if incoming.get("heatmapRange") in {"year","quarter","month","week"}: allowed["heatmapRange"]=incoming["heatmapRange"]
         if not allowed: self.reply({"error":"no valid preferences"},400); return
         set_settings(allowed); self.reply({"status":"saved",**allowed})
+    def json_body(self,max_length=100000):
+        length=int(self.headers.get("Content-Length","0"))
+        if length<=0 or length>max_length: raise ValueError("invalid payload")
+        return json.loads(self.rfile.read(length))
+    def record_activity(self):
+        try: item=self.json_body()
+        except Exception: self.reply({"error":"invalid json"},400); return
+        book_id=str(item.get("bookId","")).strip()
+        if book_id and item.get("open"): touch_book(book_id)
+        add_daily(reading_seconds=max(0,float(item.get("readingSeconds",0) or 0)),sentences=max(0,int(item.get("sentences",0) or 0)),
+                  lookups=max(0,int(item.get("lookups",0) or 0)),reviews=max(0,int(item.get("reviews",0) or 0)),
+                  shadow_attempts=max(0,int(item.get("shadowAttempts",0) or 0)),sessions=max(0,int(item.get("sessions",0) or 0)))
+        self.reply({"status":"saved"})
+    def create_vocabulary(self):
+        try: item=self.json_body(); save_vocab(item); add_daily(reviews=0)
+        except Exception as exc: self.reply({"error":str(exc)},400); return
+        self.reply({"status":"saved","items":vocabulary_list()})
+    def change_vocabulary(self):
+        try: vocab_id=int(self.path.rsplit("/",1)[1]); item=self.json_body(); update_vocab(vocab_id,item); add_daily(reviews=1)
+        except Exception as exc: self.reply({"error":str(exc)},400); return
+        self.reply({"status":"saved","items":vocabulary_list()})
+    def save_annotation(self):
+        try:
+            item=self.json_body(); result=annotate_word(str(item["bookId"]),str(item["sentenceId"]),int(item["wordIndex"]),
+                corrected_word=item.get("correctedWord"),note=item.get("note"))
+        except Exception as exc: self.reply({"error":str(exc)},400); return
+        self.reply({"status":"saved",**result})
     def import_cover(self,query):
         relative=(query.get("path") or [""])[0].strip()
         try: folder=(BOOKS_ROOT/relative).resolve(); folder.relative_to(BOOKS_ROOT.resolve())
@@ -326,6 +373,16 @@ class Handler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     os.chdir(READER)
-    server=ThreadingHTTPServer(("127.0.0.1",8765),Handler)
-    print("拾页已启动：http://localhost:8765",flush=True)
+    host=os.environ.get("READER_HOST","0.0.0.0")
+    port=int(os.environ.get("READER_PORT","8765"))
+    server=ThreadingHTTPServer((host,port),Handler)
+    addresses=[]
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(),None,socket.AF_INET):
+            address=info[4][0]
+            if not address.startswith("127.") and address not in addresses: addresses.append(address)
+    except OSError: pass
+    print(f"拾页已启动：http://localhost:{port}",flush=True)
+    for address in addresses: print(f"局域网访问：http://{address}:{port}",flush=True)
+    print(f"监听地址：{host}:{port}",flush=True)
     server.serve_forever()
