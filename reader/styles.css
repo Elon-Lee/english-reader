@@ -54,3 +54,6 @@ body.focus .sidebar{display:none}body.focus main{margin-left:0}body.focus .playe
 @media(max-width:700px){.youtube-import-panel{grid-template-columns:1fr}.youtube-url-field,.youtube-preview,.youtube-import-panel>button,.youtube-import-panel>.video-upload-progress{grid-column:1}.youtube-url-field>div{align-items:stretch;flex-direction:column}.youtube-preview{grid-template-columns:110px minmax(0,1fr)}.youtube-preview img{width:110px;height:70px}}
 .tag-picker{display:grid;grid-template-columns:minmax(140px,.8fr) minmax(160px,1.2fr);gap:8px}.tag-picker select,.tag-picker input{width:100%;min-width:0;border:1px solid var(--line);background:#fafaf7;border-radius:8px;padding:10px;color:var(--ink)}.tag-picker select:focus,.tag-picker input:focus{outline:2px solid #88a69655;border-color:var(--green)}
 @media(max-width:650px){.tag-picker{grid-template-columns:1fr}}
+/* Word synchronization must switch instantly; no visual easing delay. */
+.word{transition:none!important}.word.spoken{transition:none!important}
+.display-settings .field-help{flex-basis:100%;font-size:10px;font-weight:400;color:var(--muted);line-height:1.4}

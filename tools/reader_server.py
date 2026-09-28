@@ -312,7 +312,7 @@ class Handler(SimpleHTTPRequestHandler):
                 remaining-=len(chunk)
     def get_settings(self):
         config=private_config(); token=config.get("diocoToken","")
-        shortcuts=db_get_settings({"shortcutPrevious":"a","shortcutRepeat":"s","shortcutNext":"d","shortcutPlay":"space","shelfView":"tile","currentSeries":"","wordTipSeconds":2,"reviewPageSize":10,"manualRepeatCount":3,"manualPauseSeconds":2,"eyeComfort":False,"heatmapRange":"year","sentenceAutoPause":False})
+        shortcuts=db_get_settings({"shortcutPrevious":"a","shortcutRepeat":"s","shortcutNext":"d","shortcutPlay":"space","shelfView":"tile","currentSeries":"","wordTipSeconds":2,"reviewPageSize":10,"manualRepeatCount":3,"manualPauseSeconds":2,"highlightLeadMs":0,"eyeComfort":False,"heatmapRange":"year","sentenceAutoPause":False})
         self.reply({"userEmail":config.get("userEmail",""),"tokenConfigured":bool(token),
                     "tokenMask":("••••••••"+token[-4:]) if token else "",**shortcuts})
     def update_settings(self):
@@ -341,6 +341,8 @@ class Handler(SimpleHTTPRequestHandler):
         except (TypeError,ValueError): extra["manualRepeatCount"]=3
         try: extra["manualPauseSeconds"]=max(.5,min(10,float(incoming.get("manualPauseSeconds",2))))
         except (TypeError,ValueError): extra["manualPauseSeconds"]=2
+        try: extra["highlightLeadMs"]=max(-300,min(600,int(incoming.get("highlightLeadMs",0))))
+        except (TypeError,ValueError): extra["highlightLeadMs"]=0
         extra["eyeComfort"]=bool(incoming.get("eyeComfort",False))
         set_settings(extra)
         self.get_settings()

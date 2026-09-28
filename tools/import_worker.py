@@ -94,6 +94,10 @@ def import_book(job_id,relative):
     dictionary_file=ROOT/".local"/f"dictionary-{job_id}.json"
     run([sys.executable,ROOT/"tools/build_local_dictionary.py","--book",book_json,"--output",dictionary_file])
     save_dictionary(json.loads(dictionary_file.read_text())); dictionary_file.unlink()
+    aligner_python=ROOT/".local/forced-aligner/venv/bin/python"
+    if aligner_python.exists():
+        set_job(job_id,98,"wav2vec2 CTC 强制对齐")
+        subprocess.run([aligner_python,ROOT/"tools/ctc_forced_align.py","--book-id",book_id,"--update-db"],cwd=ROOT,stdout=(ROOT/".local"/f"ctc-{book_id}.log").open("w"),stderr=subprocess.STDOUT)
     for artifact in [ocr_file,book_json,generated/"quality-report.json",Path(str(whisper_prefix)+".json"),alignment_file,audio_out.with_suffix(".concat.txt")]:
         if artifact.exists(): artifact.unlink()
     update_job(job_id,status="complete",progress=100,step="导入完成")

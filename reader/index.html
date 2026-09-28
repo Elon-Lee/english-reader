@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
-  <link rel="stylesheet" href="styles.css?v=20260928-29">
+  <link rel="stylesheet" href="styles.css?v=20260928-32">
 </head>
 <body>
   <aside class="sidebar">
@@ -89,6 +89,7 @@
           <label>生词每页数量<input id="reviewPageSize" type="number" min="5" max="50" step="5" value="10"><span>条</span></label>
           <label>听写朗读次数<input id="manualRepeatCount" type="number" min="1" max="10" step="1" value="3"><span>遍</span></label>
           <label>听写词间停顿<input id="manualPauseSeconds" type="number" min="0.5" max="10" step="0.5" value="2"><span>秒</span></label>
+          <label>单词高亮提前量<input id="highlightLeadMs" type="number" min="-300" max="600" step="20" value="0"><span>毫秒</span><small class="field-help">音素强制对齐默认无需补偿；设备延迟时再调整。</small></label>
         </fieldset>
         <p class="shortcut-help">点击输入框后按下新按键。四个快捷键不能重复。</p>
         <div class="settings-status"><span id="tokenStatus">正在读取配置…</span><button type="submit">保存设置</button></div>
@@ -130,6 +131,6 @@
     <div class="inline-editor-head"><b id="wordEditTitle">编辑</b><button id="closeWordEdit">×</button></div>
     <input id="wordEditValue" autocomplete="off"><div class="inline-editor-actions"><button id="cancelWordEdit">取消</button><button id="saveWordEdit">保存</button></div>
   </div>
-  <script src="app.js?v=20260928-29"></script>
+  <script src="app.js?v=20260928-32"></script>
 </body>
 </html>

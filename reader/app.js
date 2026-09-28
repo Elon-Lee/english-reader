@@ -48,6 +48,8 @@ let visualMode="frames";
 let videoTitleManuallyEdited=false;
 let videoImportPollTimer=null;
 let sentenceAutoPause=false;
+let highlightLeadMs=0;
+let paintedSentenceIndex=-1;
 let youtubeInfo=null;
 let youtubePollTimer=null;
 let youtubeTitleManuallyEdited=false;
@@ -180,6 +182,7 @@ function bookProgress(id){const state=load(`${STORE.state}-${id}`,{});const item
 function renderStory() {
   const box = $("#sentences");
   box.innerHTML = "";
+  paintedSentenceIndex=-1;
   wordElementsBySentence=[];
   let previousSection = null;
   book.sentences.forEach((sentence, index) => {
@@ -413,13 +416,16 @@ function syncPlaybackFrame() {
   $("#seek").value = time / book.duration * 1000;
   if(visualMode==="video"&&book.sourceType==="video"){const video=$("#videoView");if(Math.abs(video.currentTime-time)>.25)video.currentTime=time;}
   if (wordStopAt !== null && time >= wordStopAt) { wordStopAt = null; audio.pause(); }
-  const index = book.sentences.findIndex(s => time >= s.start && time < s.end);
-  if (index >= 0 && index !== active) {
-    highlight(index, true);
-    if(sentenceAutoPause&&mode!=="shadow")wordStopAt=book.sentences[index].end+.03;
-    if(book.sentences[index].page!==displayedPage) showPage(book.sentences[index].page);
+  const rawIndex=sentenceIndexAt(time);
+  if (rawIndex >= 0 && rawIndex !== active) {
+    active=rawIndex;
+    if(sentenceAutoPause&&mode!=="shadow")wordStopAt=book.sentences[rawIndex].end+.03;
+    if(book.sentences[rawIndex].page!==displayedPage) showPage(book.sentences[rawIndex].page);
   }
-  const nextSpoken = index >= 0 ? (wordElementsBySentence[index]||[]).find(word => time >= +word.dataset.start && time < +word.dataset.end) : null;
+  const visualTime=Math.max(0,time+highlightLeadMs/1000);
+  const visualIndex=sentenceIndexAt(visualTime);
+  if(visualIndex!==paintedSentenceIndex)paintSentence(visualIndex,true);
+  const nextSpoken=visualIndex>=0?wordElementAt(visualIndex,visualTime):null;
   if (nextSpoken !== spokenWordElement) {
     spokenWordElement?.classList.remove("spoken"); spokenWordElement = nextSpoken; spokenWordElement?.classList.add("spoken");
   }
@@ -444,10 +450,13 @@ function beginShadowPause(sentence) {
 }
 
 function highlight(index, scroll = false) {
-  $$(".sentence").forEach((element, i) => element.classList.toggle("active", i === index));
   active = index;
-  if (scroll) $$(".sentence")[index]?.scrollIntoView({ behavior:"smooth", block:"center" });
+  paintSentence(index,scroll);
 }
+function paintSentence(index,scroll=false){if(index===paintedSentenceIndex&&!scroll)return;const sentences=$$(".sentence");if(paintedSentenceIndex>=0)sentences[paintedSentenceIndex]?.classList.remove("active");if(index>=0)sentences[index]?.classList.add("active");paintedSentenceIndex=index;if(scroll&&index>=0)sentences[index]?.scrollIntoView({behavior:"smooth",block:"center"});}
+function lastStartedIndex(items,time,getStart){let low=0,high=items.length-1,result=-1;while(low<=high){const middle=(low+high)>>1;if(getStart(items[middle])<=time){result=middle;low=middle+1;}else high=middle-1;}return result;}
+function sentenceIndexAt(time){return book?.sentences?.length?lastStartedIndex(book.sentences,time,item=>item.start):-1;}
+function wordElementAt(sentenceIndex,time){const sentence=book?.sentences?.[sentenceIndex],words=sentence?.words||[],elements=wordElementsBySentence[sentenceIndex]||[];if(!words.length||time<words[0].start||time>sentence.end+.18)return null;const index=lastStartedIndex(words,time,item=>item.start);if(index<0)return null;const word=words[index];if(word.alignment==="ctc"&&time>word.end+.035)return null;return elements[index]||null;}
 
 function jumpToSection(section) {
   const index = book.sentences.findIndex(sentence => sentence.section === section);
@@ -694,7 +703,7 @@ async function loadApiSettings() {
     $("#tokenStatus").textContent=data.tokenConfigured?`令牌已配置：${data.tokenMask}`:"尚未配置令牌";
     shortcuts={previous:data.shortcutPrevious||"a",repeat:data.shortcutRepeat||"s",next:data.shortcutNext||"d",play:data.shortcutPlay||"space"};
     shelfView=data.shelfView||"tile"; currentSeries=data.currentSeries||"";
-    wordTipSeconds=+(data.wordTipSeconds||2);reviewPageSize=+(data.reviewPageSize||10);manualRepeatCount=+(data.manualRepeatCount||3);manualPauseSeconds=+(data.manualPauseSeconds||2);sentenceAutoPause=!!data.sentenceAutoPause;eyeComfort=!!data.eyeComfort;heatmapRange=data.heatmapRange||"year";$("#wordTipSeconds").value=wordTipSeconds;$("#reviewPageSize").value=reviewPageSize;$("#manualRepeatCount").value=manualRepeatCount;$("#manualPauseSeconds").value=manualPauseSeconds;applyEyeComfort();
+    wordTipSeconds=+(data.wordTipSeconds||2);reviewPageSize=+(data.reviewPageSize||10);manualRepeatCount=+(data.manualRepeatCount||3);manualPauseSeconds=+(data.manualPauseSeconds||2);highlightLeadMs=Number.isFinite(+data.highlightLeadMs)?+data.highlightLeadMs:0;sentenceAutoPause=!!data.sentenceAutoPause;eyeComfort=!!data.eyeComfort;heatmapRange=data.heatmapRange||"year";$("#wordTipSeconds").value=wordTipSeconds;$("#reviewPageSize").value=reviewPageSize;$("#manualRepeatCount").value=manualRepeatCount;$("#manualPauseSeconds").value=manualPauseSeconds;$("#highlightLeadMs").value=highlightLeadMs;applyEyeComfort();
     for(const [name,key] of Object.entries(shortcuts)){const input=$(`#shortcut${name[0].toUpperCase()+name.slice(1)}`);if(input){input.value=keyLabel(key);input.dataset.key=key;}}
     updateShortcutHint();
   } catch { $("#tokenStatus").textContent="无法读取本地设置"; }
@@ -703,9 +712,9 @@ async function saveApiSettings(event) {
   event.preventDefault(); const button=event.submitter; button.disabled=true; $("#tokenStatus").textContent="正在保存…";
   try {
     const proposed={previous:$("#shortcutPrevious").dataset.key,repeat:$("#shortcutRepeat").dataset.key,next:$("#shortcutNext").dataset.key,play:$("#shortcutPlay").dataset.key};
-    const response=await fetch("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({userEmail:$("#diocoEmail").value,diocoToken:$("#diocoToken").value,shortcutPrevious:proposed.previous,shortcutRepeat:proposed.repeat,shortcutNext:proposed.next,shortcutPlay:proposed.play,wordTipSeconds:+$("#wordTipSeconds").value,reviewPageSize:+$("#reviewPageSize").value,manualRepeatCount:+$("#manualRepeatCount").value,manualPauseSeconds:+$("#manualPauseSeconds").value,eyeComfort})});
+    const response=await fetch("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({userEmail:$("#diocoEmail").value,diocoToken:$("#diocoToken").value,shortcutPrevious:proposed.previous,shortcutRepeat:proposed.repeat,shortcutNext:proposed.next,shortcutPlay:proposed.play,wordTipSeconds:+$("#wordTipSeconds").value,reviewPageSize:+$("#reviewPageSize").value,manualRepeatCount:+$("#manualRepeatCount").value,manualPauseSeconds:+$("#manualPauseSeconds").value,highlightLeadMs:+$("#highlightLeadMs").value,eyeComfort})});
     const data=await response.json(); if(!response.ok) throw new Error(data.error||"保存失败");
-    shortcuts=proposed;wordTipSeconds=+$("#wordTipSeconds").value;reviewPageSize=+$("#reviewPageSize").value;manualRepeatCount=+$("#manualRepeatCount").value;manualPauseSeconds=+$("#manualPauseSeconds").value;reviewPage=1;stopManualDictation();applyEyeComfort();updateShortcutHint();$("#diocoToken").value=""; $("#tokenStatus").textContent=`已保存：${data.tokenMask}`;
+    shortcuts=proposed;wordTipSeconds=+$("#wordTipSeconds").value;reviewPageSize=+$("#reviewPageSize").value;manualRepeatCount=+$("#manualRepeatCount").value;manualPauseSeconds=+$("#manualPauseSeconds").value;highlightLeadMs=+$("#highlightLeadMs").value;reviewPage=1;stopManualDictation();applyEyeComfort();updateShortcutHint();syncPlaybackFrame();$("#diocoToken").value=""; $("#tokenStatus").textContent=`已保存：${data.tokenMask}`;
   } catch(error) { $("#tokenStatus").textContent=error.message; }
   finally { button.disabled=false; }
 }
