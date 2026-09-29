@@ -456,7 +456,15 @@ function highlight(index, scroll = false) {
 function paintSentence(index,scroll=false){if(index===paintedSentenceIndex&&!scroll)return;const sentences=$$(".sentence");if(paintedSentenceIndex>=0)sentences[paintedSentenceIndex]?.classList.remove("active");if(index>=0)sentences[index]?.classList.add("active");paintedSentenceIndex=index;if(scroll&&index>=0)sentences[index]?.scrollIntoView({behavior:"smooth",block:"center"});}
 function lastStartedIndex(items,time,getStart){let low=0,high=items.length-1,result=-1;while(low<=high){const middle=(low+high)>>1;if(getStart(items[middle])<=time){result=middle;low=middle+1;}else high=middle-1;}return result;}
 function sentenceIndexAt(time){return book?.sentences?.length?lastStartedIndex(book.sentences,time,item=>item.start):-1;}
-function wordElementAt(sentenceIndex,time){const sentence=book?.sentences?.[sentenceIndex],words=sentence?.words||[],elements=wordElementsBySentence[sentenceIndex]||[];if(!words.length||time<words[0].start||time>sentence.end+.18)return null;const index=lastStartedIndex(words,time,item=>item.start);if(index<0)return null;const word=words[index];if(word.alignment==="ctc"&&time>word.end+.035)return null;return elements[index]||null;}
+function wordElementAt(sentenceIndex,time){
+  const sentence=book?.sentences?.[sentenceIndex],words=sentence?.words||[],elements=wordElementsBySentence[sentenceIndex]||[];
+  if(!words.length||time<words[0].start)return null;
+  const index=lastStartedIndex(words,time,item=>item.start);
+  if(index<0)return null;
+  // Once a word starts, keep it highlighted until the next word starts.
+  // This also keeps the final word active throughout a sentence-ending pause.
+  return elements[index]||null;
+}
 
 function jumpToSection(section) {
   const index = book.sentences.findIndex(sentence => sentence.section === section);
