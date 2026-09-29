@@ -95,6 +95,7 @@ CTC无法可靠对齐的句子自动保留DTW时间戳。
 - FFmpeg/FFprobe：音视频处理
 - CMake + Apple Clang：编译whisper.cpp
 - SQLite：macOS自带
+- 7-Zip：提取CHM电子书正文
 
 关键版本：
 
@@ -105,6 +106,20 @@ torch        2.2.2
 torchaudio   2.2.2
 Python       3.11.16
 ```
+
+正文与Whisper时间轴匹配固定使用CTC环境中的Python 3.11，而不是主服务的Python 3.14。对齐子进程发生非业务异常时会自动重试一次，并将完整返回码、stdout和stderr写入：
+
+```text
+.local/align-<job-id>.log
+```
+
+已经完成OCR和Whisper、但在88%对齐阶段失败的任务，可以复用中间文件恢复：
+
+```bash
+python3 tools/import_worker.py <job-id> '<books相对路径>' --resume-alignment
+```
+
+恢复模式不会重新执行OCR或Whisper。
 
 安装本地Whisper：
 
@@ -141,6 +156,14 @@ tools/vendor/whisper.cpp/models/ggml-base.en.bin
 ```bash
 ./tools/install_yt_dlp.sh
 ```
+
+安装CHM支持：
+
+```bash
+./tools/install_chm_support.sh
+```
+
+脚本支持检测`7zz`、`7z`或`extract_chmLib`。macOS默认通过Homebrew安装`sevenzip`。
 
 二进制：
 
@@ -220,6 +243,26 @@ wav2vec2 CTC强制对齐
   ↓
 SQLite books.data_json
 ```
+
+目录扫描会展示`books`下全部二级书籍目录，不再只展示同时具有PDF和MP3的目录。支持以下组合：
+
+```text
+PDF + 音频       → PDF OCR + Whisper + CTC
+DOC/DOCX/TXT + 音频 → 权威正文 + Whisper + CTC
+CHM + 音频       → 7-Zip提取HTML正文；错版时自动降级为仅音频
+仅音频           → Whisper直接生成正文和词级时间轴
+```
+
+来源选择优先按书名匹配PDF，其次DOC/DOCX、CHM、TXT，最后使用正文规模、音频时长和PDF页数兜底。多章节音频按章节执行Whisper并支持断点复用。
+
+长书阅读性能策略：
+
+- 导入时按英文标点拆分正文，无空格标点也可识别；单句最多60词，超长内容按分号、冒号、逗号或词边界继续拆分。
+- 已导入书可用`tools/resegment_book.py --book-id <id>`保留词级时间并重新分句，同时迁移生词和注解坐标。
+- 阅读页只渲染当前句前后各45句，并在播放接近窗口边缘时自动切换窗口。
+- 生词和注解使用Map索引，标记刷新只处理当前可见窗口。
+- 句子DOM节点按索引缓存；播放时间和进度条限制为每秒10次，单词高亮仍使用逐帧同步。
+- 导入worker使用较低系统优先级；Whisper默认3线程，wav2vec2 CTC默认3线程，避免后台处理占满整机CPU。
 
 ### 视频对齐链
 

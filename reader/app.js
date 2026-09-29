@@ -40,12 +40,27 @@ let wordTtsAudio = null;
 let wordRequestId = 0;
 let playbackFrameId = null;
 let wordElementsBySentence = [];
+let sentenceElementsByIndex=[];
+let annotationIndex=new Map();
+let vocabWordIndex=new Map();
+let storyWindowStart=0;
+let storyWindowEnd=0;
+let virtualStory=false;
+let lastPlaybackUiUpdate=0;
+const STORY_WINDOW_RADIUS=45;
+const STORY_WINDOW_EDGE=10;
+const PLAYBACK_UI_INTERVAL_MS=100;
 let wordAnnotations=[];
 let vocabItems=[];
 let wordTipSeconds=2;
 let eyeComfort=false;
 let selectedWordContext=null;
 let wordTipTimer=null;
+let wordHoverMeaningTimer=null;
+let wordHoverMeaningRequestId=0;
+let wordHoverMeaningElement=null;
+const wordHoverMeaningCache=new Map();
+const WORD_HOVER_MEANING_DELAY_MS=200;
 let wordEditMode="";
 let heatmapRange="year";
 let learningDays=[];
@@ -127,6 +142,11 @@ function focusedWordContext(text,wordIndex){
   if(result.length>240||(!match&&end-start>240)){const from=Math.max(0,wordIndex-10),to=Math.min(matches.length,wordIndex+11);const first=matches[from],last=matches[to-1];result=text.slice(first.index,last.index+last[0].length).trim();if(from>0)result="… "+result;if(to<matches.length)result+=" …";}
   return result;
 }
+function wordRecordKey(sentenceId,wordIndex,bookId=currentBookId){return `${bookId}|${sentenceId}|${wordIndex}`;}
+function rebuildWordIndexes(){
+  annotationIndex=new Map(wordAnnotations.map(item=>[wordRecordKey(item.sentence_id,item.word_index,item.book_id||currentBookId),item]));
+  vocabWordIndex=new Map(vocabItems.map(item=>[wordRecordKey(item.sentence_id,item.word_index,item.book_id),item]));
+}
 function rootWord(word) { const w = word.toLowerCase().replace("’", "'"); if (dictionary[w] || localDictionary[w]) return w; return [w.replace(/ies$/, "y"), w.replace(/ing$/, ""), w.replace(/ing$/, "e"), w.replace(/ed$/, ""), w.replace(/ed$/, "e"), w.replace(/es$/, ""), w.replace(/s$/, "")].find(x => dictionary[x] || localDictionary[x]) || w; }
 function wordHtml(text, sentence, cursor = { index:0 }) {
   let html = ""; let last = 0; const regex = /[A-Za-z]+(?:['’][A-Za-z]+)?|\d+/g; let match;
@@ -155,7 +175,7 @@ async function init() {
     fetch("/api/local-dictionary", {cache:"no-store"}).then(r => r.json()),
     fetch("/api/vocabulary", {cache:"no-store"}).then(r => r.json()),
   ]);
-  localDictionary=dictionaryData; libraryBooks=libraryData.books||[]; vocabItems=vocabData.items||[];
+  localDictionary=dictionaryData; libraryBooks=libraryData.books||[]; vocabItems=vocabData.items||[];rebuildWordIndexes();
   populateVideoSeriesOptions();
   bindEvents();
   await loadApiSettings();
@@ -168,7 +188,7 @@ async function init() {
 async function loadBook(bookId) {
   const response=await fetch(`/api/books/${encodeURIComponent(bookId)}`,{cache:"no-store"});
   if(!response.ok) throw new Error("无法读取图书数据库");
-  const record=await response.json(); currentBookId=bookId; book=record.book;wordAnnotations=record.annotations||[];
+  const record=await response.json(); currentBookId=bookId; book=record.book;wordAnnotations=record.annotations||[];rebuildWordIndexes();
   $("#audio").pause(); $("#audio").src=book.audio; $("#duration").textContent=fmt(book.duration);
   $(".book-heading small").textContent=`${book.level||""}级 · LOCAL BOOK`;
   $(".book-heading strong").innerHTML=`${escapeHtml(book.title)} <i>${escapeHtml(book.englishTitle||"")}</i>`;
@@ -196,12 +216,22 @@ function setupSeriesSelector(){const series=[...new Set(libraryBooks.map(item=>i
 function bookProgress(id){const state=load(`${STORE.state}-${id}`,{});const item=libraryBooks.find(x=>x.id===id);return item?.duration?Math.round((state.time||0)/item.duration*100):0}
 
 function renderStory() {
-  const box = $("#sentences");
-  box.innerHTML = "";
-  paintedSentenceIndex=-1;
-  wordElementsBySentence=[];
-  let previousSection = null;
-  book.sentences.forEach((sentence, index) => {
+  const saved=load(`${STORE.state}-${currentBookId}`,{}).time||book.sentences[0]?.start||0;
+  const center=Math.max(0,sentenceIndexAt(saved));
+  virtualStory=book.sentences.length>180||book.sentences.reduce((sum,sentence)=>sum+(sentence.words?.length||0),0)>12000;
+  paintedSentenceIndex=-1;spokenWordElement=null;
+  renderStoryWindow(center,false);
+}
+function renderStoryWindow(center,scroll=false){
+  const box=$("#sentences"),total=book.sentences.length;
+  const start=virtualStory?Math.max(0,center-STORY_WINDOW_RADIUS):0;
+  const end=virtualStory?Math.min(total,center+STORY_WINDOW_RADIUS+1):total;
+  storyWindowStart=start;storyWindowEnd=end;box.innerHTML="";
+  sentenceElementsByIndex=new Array(total);wordElementsBySentence=new Array(total);spokenWordElement=null;
+  if(start>0)box.insertAdjacentHTML("beforeend",`<button class="story-window-nav" data-window-center="${Math.max(0,start-STORY_WINDOW_RADIUS)}">↑ 加载前文</button>`);
+  let previousSection=start>0?book.sentences[start-1].section:null;
+  for(let index=start;index<end;index++){
+    const sentence=book.sentences[index];
     if (sentence.section != null && sentence.section !== previousSection) {
       const marker = document.createElement("div");
       marker.className = "section-marker";
@@ -215,13 +245,23 @@ function renderStory() {
     p.dataset.i = index;
     p.dataset.section = sentence.section;
     p.innerHTML = sentenceHtml(sentence);
+    if(index===paintedSentenceIndex)p.classList.add("active");
     box.append(p);
+    sentenceElementsByIndex[index]=p;
     wordElementsBySentence[index]=[...p.querySelectorAll(".word[data-start][data-end]")];
     wordElementsBySentence[index].forEach((element,wordIndex)=>applyWordMark(element,sentence,wordIndex));
-  });
+  }
+  if(end<total)box.insertAdjacentHTML("beforeend",`<button class="story-window-nav" data-window-center="${Math.min(total-1,end+STORY_WINDOW_RADIUS-1)}">加载后文 ↓</button>`);
+  if(scroll&&sentenceElementsByIndex[center])requestAnimationFrame(()=>sentenceElementsByIndex[center]?.scrollIntoView({behavior:"auto",block:"center"}));
 }
-function applyWordMark(element,sentence,wordIndex){const annotation=wordAnnotations.find(item=>item.sentence_id===sentence.id&&item.word_index===wordIndex),vocab=vocabItems.find(item=>item.book_id===currentBookId&&item.sentence_id===sentence.id&&item.word_index===wordIndex);element.classList.toggle("annotated-word",!!annotation);element.classList.toggle("vocab-word",!!vocab);if(annotation?.note)element.dataset.note=annotation.note;else delete element.dataset.note;if(annotation?.corrected_word)element.dataset.correction=`OCR订正：${annotation.original_word} → ${annotation.corrected_word}`;else delete element.dataset.correction;element.title=[annotation?.note,element.dataset.correction,vocab?'已加入生词本':''].filter(Boolean).join(' · ');}
-function refreshWordMarks(){book?.sentences.forEach((sentence,index)=>(wordElementsBySentence[index]||[]).forEach((element,wordIndex)=>applyWordMark(element,sentence,wordIndex)));}
+function ensureSentenceRendered(index,scroll=false){
+  if(!virtualStory)return sentenceElementsByIndex[index];
+  const outside=!sentenceElementsByIndex[index],nearEdge=index<storyWindowStart+STORY_WINDOW_EDGE||index>=storyWindowEnd-STORY_WINDOW_EDGE;
+  if(outside||nearEdge){const previous=paintedSentenceIndex;renderStoryWindow(index,scroll);if(previous!==index)sentenceElementsByIndex[previous]?.classList.remove("active");}
+  return sentenceElementsByIndex[index];
+}
+function applyWordMark(element,sentence,wordIndex){const key=wordRecordKey(sentence.id,wordIndex),annotation=annotationIndex.get(key),vocab=vocabWordIndex.get(key);element.classList.toggle("annotated-word",!!annotation);element.classList.toggle("vocab-word",!!vocab);if(annotation?.note)element.dataset.note=annotation.note;else delete element.dataset.note;if(annotation?.corrected_word)element.dataset.correction=`OCR订正：${annotation.original_word} → ${annotation.corrected_word}`;else delete element.dataset.correction;element.title=[annotation?.note,element.dataset.correction,vocab?'已加入生词本':''].filter(Boolean).join(' · ');}
+function refreshWordMarks(){for(let index=storyWindowStart;index<storyWindowEnd;index++){const sentence=book?.sentences?.[index];(wordElementsBySentence[index]||[]).forEach((element,wordIndex)=>applyWordMark(element,sentence,wordIndex));}}
 
 function bindEvents() {
   $("#libraryGrid").onclick = async event => {
@@ -234,6 +274,8 @@ function bindEvents() {
   $$(".nav").forEach(button => button.onclick = () => showScreen(button.dataset.screen));
   $$(".mode-switch button").forEach(button => button.onclick = () => setMode(button.dataset.mode));
   $("#sentences").addEventListener("click", event => {
+    const windowButton=event.target.closest("[data-window-center]");
+    if(windowButton){renderStoryWindow(+windowButton.dataset.windowCenter,true);return;}
     const branch = event.target.closest(".branch-link");
     if (branch) { event.stopPropagation(); jumpToSection(+branch.dataset.target); return; }
     const sentenceElement = event.target.closest(".sentence");
@@ -242,6 +284,7 @@ function bindEvents() {
     if (event.target.classList.contains("word") && mode === "intensive") {
       event.stopPropagation();
       const word = event.target;
+      hideWordHoverMeaning();
       const audio=$("#audio");
       // A click happens after pointer-over has already paused the main track.
       // Preserve that position so leaving the word can resume the book audio.
@@ -290,7 +333,7 @@ function bindEvents() {
   $$(".shortcut-input").forEach(input=>input.onkeydown=captureShortcut);
   $("#importSeries").onchange = updateImportBooks;
   $("#importBookList").onchange = updateBatchButton;
-  $("#selectAllBooks").onclick = () => { $$("#importBookList input:not(:disabled)").forEach(input=>input.checked=true); updateBatchButton(); };
+  $("#selectAllBooks").onclick = () => { $$("#importBookList .import-book-item:not(.imported) input:not(:disabled)").forEach(input=>input.checked=true); updateBatchButton(); };
   $("#clearBooks").onclick = () => { $$("#importBookList input").forEach(input=>input.checked=false); updateBatchButton(); };
   $("#startBatchImport").onclick = startBatchImport;
   $$("[data-import-type]").forEach(button=>button.onclick=()=>setImportType(button.dataset.importType));
@@ -312,6 +355,7 @@ function bindEvents() {
   $("#wordQuickTip").onmouseleave=event=>{scheduleWordTipHide();if(!wordTarget(event.relatedTarget)&&$("#wordInlineEditor").classList.contains("hidden"))scheduleWordResume();};
   $("#wordInlineEditor").onmouseenter=cancelWordResume;
   $("#wordInlineEditor").onmouseleave=event=>{if(!wordTarget(event.relatedTarget))scheduleWordResume();};
+  document.addEventListener("click",handleContextToggle);
   $("#saveWordEdit").onclick=saveWordEdit;
   $("#closeWordEdit").onclick=closeWordEditor;$("#cancelWordEdit").onclick=closeWordEditor;
   $("#statsContent").onclick=event=>{const button=event.target.closest("[data-heatmap-range]");if(button)setHeatmapRange(button.dataset.heatmapRange);};
@@ -336,14 +380,14 @@ async function confirmDeleteBook(){
   try{
     const response=await fetch(`/api/books/${encodeURIComponent(target.id)}/delete`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({confirmTitle:$("#deleteBookConfirmInput").value.trim()})});
     const result=await response.json();if(!response.ok)throw new Error(result.error||"删除失败");
-    localStorage.removeItem(`${STORE.state}-${target.id}`);vocabItems=vocabItems.filter(item=>item.book_id!==target.id);libraryBooks=libraryBooks.filter(item=>item.id!==target.id);
-    if(currentBookId===target.id){$("#audio").pause();$("#audio").removeAttribute("src");$("#videoView").removeAttribute("src");book=null;currentBookId="";active=-1;wordAnnotations=[];}
+    localStorage.removeItem(`${STORE.state}-${target.id}`);vocabItems=vocabItems.filter(item=>item.book_id!==target.id);libraryBooks=libraryBooks.filter(item=>item.id!==target.id);rebuildWordIndexes();
+    if(currentBookId===target.id){$("#audio").pause();$("#audio").removeAttribute("src");$("#videoView").removeAttribute("src");book=null;currentBookId="";active=-1;wordAnnotations=[];rebuildWordIndexes();}
     $("#deleteBookDialog").close();setupSeriesSelector();populateVideoSeriesOptions();renderLibrary();await loadImportCatalog();showScreen("shelf");showReaderToast(`已永久删除《${target.title}》`);
   }catch(error){$("#deleteBookError").textContent=error.message;button.disabled=false;}
   finally{button.textContent="永久删除";}
 }
 
-function configureBookVisual(){const isVideo=book?.sourceType==="video"&&book.video;$("#visualSwitch").classList.toggle("hidden",!isVideo);$("#visualTitle").textContent=isVideo?"视频画面":"原书页";$("#videoView").src=isVideo?book.video:"";setVisualMode("frames");}
+function configureBookVisual(){const isVideo=book?.sourceType==="video"&&book.video,hasPages=book?.hasOriginalPages!==false&&!!book?.pageBase;$("#visualSwitch").classList.toggle("hidden",!isVideo);$("#visualTitle").textContent=isVideo?"视频画面":hasPages?"原书页":"无原书页面";$("#videoView").src=isVideo?book.video:"";$("#viewBtn").classList.toggle("hidden",!isVideo&&!hasPages);if(!isVideo&&!hasPages)$("#pagePanel").classList.add("hidden");setVisualMode("frames");}
 function setVisualMode(mode){visualMode=mode;const isVideo=book?.sourceType==="video"&&book.video;$("#framesViewBtn").classList.toggle("active",mode==="frames");$("#videoViewBtn").classList.toggle("active",mode==="video");$("#pageImage").classList.toggle("hidden",mode==="video");$("#videoView").classList.toggle("hidden",mode!=="video");if(isVideo&&mode==="video"){const video=$("#videoView"),audio=$("#audio");video.currentTime=audio.currentTime;if(!audio.paused)video.play().catch(()=>{});}else $("#videoView").pause();}
 function setImportType(type){$$('[data-import-type]').forEach(button=>button.classList.toggle('active',button.dataset.importType===type));$("#booksImportPane").classList.toggle("hidden",type!=="books");$("#videoImportPane").classList.toggle("hidden",type!=="video");$("#youtubeImportPane").classList.toggle("hidden",type!=="youtube");}
 function videoNameWithoutExtension(name){return name.replace(/\.[^.]+$/,'').replace(/[._-]+/g,' ').trim();}
@@ -363,13 +407,43 @@ function youtubeProgressMessage(job){if((job.progress||0)<25)return '正在下�
 function showWordQuickTip(element,sentence){
   clearTimeout(wordTipTimer); const rect=element.getBoundingClientRect();
   selectedWordContext={element,sentence,wordIndex:+element.dataset.wordIndex,word:element.textContent,definition:getDefinition(element.textContent,sentence)};
-  const annotation=wordAnnotations.find(item=>item.sentence_id===sentence.id&&item.word_index===selectedWordContext.wordIndex),note=$("#wordTipAnnotation");
+  const annotation=annotationIndex.get(wordRecordKey(sentence.id,selectedWordContext.wordIndex)),note=$("#wordTipAnnotation");
   const annotationText=[annotation?.note,annotation?.corrected_word?`OCR：${annotation.original_word} → ${annotation.corrected_word}`:''].filter(Boolean).join(' · ');
   note.textContent=annotationText;note.classList.toggle("hidden",!annotationText);
   const tip=$("#wordQuickTip");tip.classList.remove("hidden"); tip.style.left=`${Math.min(innerWidth-tip.offsetWidth-12,Math.max(12,rect.left))}px`;tip.style.top=`${Math.max(12,rect.top-tip.offsetHeight-7)}px`;
   scheduleWordTipHide();
 }
 function wordTarget(node){return node?.nodeType===1?node.closest?.(".word"):null;}
+function hideWordHoverMeaning(){
+  clearTimeout(wordHoverMeaningTimer);wordHoverMeaningTimer=null;wordHoverMeaningElement=null;wordHoverMeaningRequestId++;
+  const tip=$("#wordHoverMeaning");tip.classList.add("hidden");tip.textContent="";
+}
+function positionWordHoverMeaning(element){
+  const tip=$("#wordHoverMeaning"),rect=element.getBoundingClientRect();
+  const left=Math.min(innerWidth-tip.offsetWidth-12,Math.max(12,rect.left+(rect.width-tip.offsetWidth)/2));
+  const below=rect.bottom+8,top=below+tip.offsetHeight<innerHeight-12?below:Math.max(12,rect.top-tip.offsetHeight-8);
+  tip.style.left=`${left}px`;tip.style.top=`${top}px`;
+}
+function showWordHoverMeaning(element,entries){
+  if(wordHoverMeaningElement!==element||!element.isConnected||mode!=="intensive")return;
+  const tip=$("#wordHoverMeaning");tip.innerHTML=`<b>${escapeHtml(element.textContent.trim())}</b><span>${entries.map(escapeHtml).join("；")}</span>`;
+  tip.classList.remove("hidden");positionWordHoverMeaning(element);
+}
+function scheduleWordHoverMeaning(element){
+  clearTimeout(wordHoverMeaningTimer);const word=element.textContent.trim();if(!word)return;
+  wordHoverMeaningElement=element;const requestId=++wordHoverMeaningRequestId,key=word.toLowerCase();
+  wordHoverMeaningTimer=setTimeout(async()=>{
+    if(wordHoverMeaningElement!==element||requestId!==wordHoverMeaningRequestId||mode!=="intensive")return;
+    const cached=wordHoverMeaningCache.get(key);if(cached){showWordHoverMeaning(element,cached);return;}
+    showWordHoverMeaning(element,["查询中…"]);
+    try{
+      const response=await fetch(`/api/word-hover?word=${encodeURIComponent(word)}`,{cache:"no-store"});const data=await response.json();
+      if(!response.ok)throw new Error(data.error||"查询失败");
+      const entries=(data.entries||[]).filter(Boolean);if(entries.length)wordHoverMeaningCache.set(key,entries);
+      if(requestId===wordHoverMeaningRequestId&&entries.length)showWordHoverMeaning(element,entries);
+    }catch{if(requestId===wordHoverMeaningRequestId)hideWordHoverMeaning();}
+  },WORD_HOVER_MEANING_DELAY_MS);
+}
 function cancelWordResume(){clearTimeout(wordResumeTimer);wordResumeTimer=null;}
 function cancelMainAudioFade(restoreVolume=false){
   mainAudioFadeToken++;
@@ -400,6 +474,7 @@ function fadeMainAudio(target,duration,onComplete){
 }
 function resetWordHoverSession(){
   cancelWordResume();
+  hideWordHoverMeaning();
   cancelMainAudioFade(true);
   pausedForWord=false; hoverPausedTime=null; hoverPausedSentence=-1;
   clickedWordPausedMain=false; clickedWordResumeTime=null; clickedWordResumeSentence=-1;
@@ -436,6 +511,7 @@ function handleWordPointerOver(event){
   if(mode!=="intensive")return;
   const word=wordTarget(event.target),from=wordTarget(event.relatedTarget);
   if(!word||from===word)return;
+  hideWordHoverMeaning();scheduleWordHoverMeaning(word);
   cancelWordResume();
   if(!$("#audio").paused&&!pausedForWord){
     const audio=$("#audio");
@@ -451,6 +527,7 @@ function handleWordPointerOver(event){
 function handleWordPointerOut(event){
   if(mode!=="intensive")return;
   const word=wordTarget(event.target),to=wordTarget(event.relatedTarget);
+  if(word&&to!==word)hideWordHoverMeaning();
   const movingToTip=event.relatedTarget?.nodeType===1 && event.relatedTarget.closest?.("#wordQuickTip,#wordInlineEditor");
   if(!word||to===word||to||movingToTip)return;
   if(!pausedForWord&&!clickedWordPausedMain)return;
@@ -460,8 +537,8 @@ function scheduleWordTipHide(){clearTimeout(wordTipTimer);wordTipTimer=setTimeou
 function handleWordTipAction(event){const action=event.target.closest("[data-word-action]")?.dataset.wordAction;if(!action||!selectedWordContext)return;clearTimeout(wordTipTimer);if(action==="vocab"){$("#wordQuickTip").classList.add("hidden");addSelectedWordToVocab();}else openWordEditor(action);}
 function openWordEditor(mode){cancelWordResume();wordEditMode=mode;const tip=$("#wordQuickTip"),editor=$("#wordInlineEditor"),rect=tip.getBoundingClientRect();$("#wordEditTitle").textContent=mode==="correct"?"订正 OCR":"添加备注";const input=$("#wordEditValue");input.placeholder=mode==="correct"?"输入正确单词":"输入简短备注";input.value=mode==="correct"?selectedWordContext.word:(selectedWordContext.note||"");tip.classList.add("hidden");editor.classList.remove("hidden");editor.style.left=`${Math.min(innerWidth-editor.offsetWidth-12,Math.max(12,rect.left))}px`;editor.style.top=`${Math.min(innerHeight-editor.offsetHeight-12,rect.bottom+6)}px`;setTimeout(()=>input.focus(),0);}
 function closeWordEditor(event){event?.preventDefault();$("#wordInlineEditor").classList.add("hidden");scheduleWordResume();}
-async function saveWordEdit(event){event.preventDefault();const value=$("#wordEditValue").value.trim();if(!value)return;const c=selectedWordContext;const payload={bookId:currentBookId,sentenceId:c.sentence.id,wordIndex:c.wordIndex};if(wordEditMode==="correct")payload.correctedWord=value;else payload.note=value;const response=await fetch("/api/word-annotation",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(response.ok){const result=await response.json();const existing=wordAnnotations.find(item=>item.sentence_id===c.sentence.id&&item.word_index===c.wordIndex),record={book_id:currentBookId,sentence_id:c.sentence.id,word_index:c.wordIndex,original_word:result.originalWord,corrected_word:result.correctedWord,note:result.note};if(existing)Object.assign(existing,record);else wordAnnotations.push(record);if(wordEditMode==="note")selectedWordContext.note=value;closeWordEditor();if(wordEditMode==="correct"){await loadBook(currentBookId);const sentence=book.sentences.find(s=>s.id===c.sentence.id)||c.sentence;showWord(value,sentence,null);}else refreshWordMarks();}}
-async function addSelectedWordToVocab(){const c=selectedWordContext,d=c.definition;const payload={book_id:currentBookId,sentence_id:c.sentence.id,word_index:c.wordIndex,word:c.word,root:d.root,phonetic:d.phonetic,meaning:d.meaning,context:focusedWordContext(c.sentence.text,c.wordIndex),note:c.note||"",rating:"unknown",interval_days:1,due_at:new Date(Date.now()+86400000).toISOString()};const r=await fetch("/api/vocabulary",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(r.ok){vocabItems=(await r.json()).items||[];refreshWordMarks();refreshDashboards();}}
+async function saveWordEdit(event){event.preventDefault();const value=$("#wordEditValue").value.trim();if(!value)return;const c=selectedWordContext;const payload={bookId:currentBookId,sentenceId:c.sentence.id,wordIndex:c.wordIndex};if(wordEditMode==="correct")payload.correctedWord=value;else payload.note=value;const response=await fetch("/api/word-annotation",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(response.ok){const result=await response.json();const key=wordRecordKey(c.sentence.id,c.wordIndex),existing=annotationIndex.get(key),record={book_id:currentBookId,sentence_id:c.sentence.id,word_index:c.wordIndex,original_word:result.originalWord,corrected_word:result.correctedWord,note:result.note};if(existing)Object.assign(existing,record);else wordAnnotations.push(record);annotationIndex.set(key,existing||record);if(wordEditMode==="note")selectedWordContext.note=value;closeWordEditor();if(wordEditMode==="correct"){await loadBook(currentBookId);const sentence=book.sentences.find(s=>s.id===c.sentence.id)||c.sentence;showWord(value,sentence,null);}else refreshWordMarks();}}
+async function addSelectedWordToVocab(){const c=selectedWordContext,d=c.definition;const payload={book_id:currentBookId,sentence_id:c.sentence.id,word_index:c.wordIndex,word:c.word,root:d.root,phonetic:d.phonetic,meaning:d.meaning,context:focusedWordContext(c.sentence.text,c.wordIndex),note:c.note||"",rating:"unknown",interval_days:1,due_at:new Date(Date.now()+86400000).toISOString()};const r=await fetch("/api/vocabulary",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(r.ok){vocabItems=(await r.json()).items||[];rebuildWordIndexes();refreshWordMarks();refreshDashboards();}}
 
 function setShelfView(view){shelfView=view;renderLibrary();savePreference({shelfView:view});}
 function savePreference(value){fetch("/api/preferences",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(value)}).catch(()=>{});}
@@ -508,6 +585,7 @@ function openReader() {
 }
 
 function setMode(nextMode) {
+  hideWordHoverMeaning();
   mode = nextMode;
   $$(".mode-switch button").forEach(button => button.classList.toggle("active", button.dataset.mode === mode));
   $("#reader").dataset.mode = mode;
@@ -553,8 +631,8 @@ function stopPlaybackSync() {
 function syncPlaybackFrame() {
   if(!book)return;
   const audio = $("#audio"); const time = audio.currentTime;
-  $("#currentTime").textContent = fmt(time);
-  $("#seek").value = time / book.duration * 1000;
+  const now=performance.now();
+  if(audio.paused||now-lastPlaybackUiUpdate>=PLAYBACK_UI_INTERVAL_MS){$("#currentTime").textContent=fmt(time);$("#seek").value=time/book.duration*1000;lastPlaybackUiUpdate=now;}
   if(visualMode==="video"&&book.sourceType==="video"){const video=$("#videoView");if(Math.abs(video.currentTime-time)>.25)video.currentTime=time;}
   if (wordStopAt !== null && time >= wordStopAt) { wordStopAt = null; audio.pause(); }
   const rawIndex=sentenceIndexAt(time);
@@ -594,7 +672,13 @@ function highlight(index, scroll = false) {
   active = index;
   paintSentence(index,scroll);
 }
-function paintSentence(index,scroll=false){if(index===paintedSentenceIndex&&!scroll)return;const sentences=$$(".sentence");if(paintedSentenceIndex>=0)sentences[paintedSentenceIndex]?.classList.remove("active");if(index>=0)sentences[index]?.classList.add("active");paintedSentenceIndex=index;if(scroll&&index>=0)sentences[index]?.scrollIntoView({behavior:"smooth",block:"center"});}
+function paintSentence(index,scroll=false){
+  if(index===paintedSentenceIndex&&!scroll)return;
+  sentenceElementsByIndex[paintedSentenceIndex]?.classList.remove("active");
+  const element=index>=0?ensureSentenceRendered(index,scroll):null;
+  element?.classList.add("active");paintedSentenceIndex=index;
+  if(scroll&&element)element.scrollIntoView({behavior:"smooth",block:"center"});
+}
 function lastStartedIndex(items,time,getStart){let low=0,high=items.length-1,result=-1;while(low<=high){const middle=(low+high)>>1;if(getStart(items[middle])<=time){result=middle;low=middle+1;}else high=middle-1;}return result;}
 function sentenceIndexAt(time){return book?.sentences?.length?lastStartedIndex(book.sentences,time,item=>item.start):-1;}
 function wordElementAt(sentenceIndex,time){
@@ -625,13 +709,14 @@ function getDefinition(raw, sentence) {
 
 async function showWord(raw, sentence, wordElement) {
   const definition = getDefinition(raw, sentence);
-  const annotation=wordAnnotations.find(item=>item.sentence_id===sentence.id&&item.word_index===+(wordElement?.dataset.wordIndex??-1));
-  const saved = vocabItems.find(item=>item.book_id===currentBookId&&item.sentence_id===sentence.id&&item.word_index===+(wordElement?.dataset.wordIndex??-1));
+  const selectedIndex=+(wordElement?.dataset.wordIndex??-1),key=wordRecordKey(sentence.id,selectedIndex);
+  const annotation=annotationIndex.get(key);
+  const saved = vocabWordIndex.get(key);
   const requestId=++wordRequestId;
   $("#wordPanel").innerHTML = `<div class="definition">
     <button class="speak" id="speakWord" title="播放接口发音">♪</button><span class="phonetic">${formatText(definition.phonetic)}</span><h2>${escapeHtml(raw)}</h2>
     <div id="remoteDefinition"><p class="loading-line">正在查询中文释义…</p></div>
-    <div class="context"><small>IN THIS STORY · 第 ${sentence.page} 页</small><p>${highlightWord(sentence.text, raw)}</p></div>
+    ${contextBlockHtml(`IN THIS STORY · 第 ${sentence.page} 页`,highlightWord(sentence.text,raw),sentence.text)}
     <div id="remoteUsage" class="usage-note"><span class="loading-line">正在分析上下文用法…</span></div>
     <div id="remoteExamples" class="dict-examples"><span class="loading-line">正在加载例句…</span></div>
     ${annotation?.note?`<div class="saved-word-note"><small>我的备注</small><p>${escapeHtml(annotation.note)}</p></div>`:""}
@@ -672,6 +757,16 @@ function highlightWord(sentence, word) {
   const safe = wordHtml(sentence);
   return safe.replace(new RegExp(`(<span class="word">)${escapeRegExp(word)}(</span>)`, "i"), `$1<em>${escapeHtml(word)}</em>$2`);
 }
+function contextBlockHtml(label,contentHtml,plainText){
+  const text=plainText||"",long=text.length>260||(text.match(/[A-Za-z]+(?:['’][A-Za-z]+)?|\d+/g)||[]).length>45;
+  return `<div class="context${long?' context-collapsible is-collapsed':''}"><small>${escapeHtml(label)}</small><p class="context-text">${contentHtml}</p>${long?'<button type="button" class="context-toggle" data-context-toggle aria-expanded="false">展开全文</button>':''}</div>`;
+}
+function handleContextToggle(event){
+  const button=event.target.closest("[data-context-toggle]");if(!button)return;
+  const context=button.closest(".context-collapsible");if(!context)return;
+  const expanded=context.classList.toggle("is-expanded");context.classList.toggle("is-collapsed",!expanded);
+  button.textContent=expanded?"收起":"展开全文";button.setAttribute("aria-expanded",String(expanded));
+}
 function escapeRegExp(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function speak(word) { speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(word); utterance.lang = "en-US"; utterance.rate = .78; speechSynthesis.speak(utterance); }
 async function playWordTts(word) {
@@ -697,12 +792,12 @@ async function seekAndPlay(time, stopAt=null) {
 function ratingName(rating) { return ({ known:"认识", fuzzy:"模糊", unknown:"不认识" })[rating]; }
 
 async function rateWord(raw, sentence, definition, rating, wordElement) {
-  const previous=vocabItems.find(item=>item.book_id===currentBookId&&item.sentence_id===sentence.id&&item.word_index===+(wordElement?.dataset.wordIndex??-1));
+  const previous=vocabWordIndex.get(wordRecordKey(sentence.id,+(wordElement?.dataset.wordIndex??-1)));
   const intervals = { known:7, fuzzy:3, unknown:1 };
   const base = intervals[rating];
   const nextInterval = rating === "known" && previous ? Math.min(60, Math.max(base, (previous.interval_days || base) * 2)) : base;
   const wordIndex=+(wordElement?.dataset.wordIndex??0);const payload={book_id:currentBookId,sentence_id:sentence.id,word_index:wordIndex,word:raw,root:definition.root,phonetic:definition.phonetic,meaning:definition.meaning,context:focusedWordContext(sentence.text,wordIndex),rating,interval_days:nextInterval,due_at:new Date(Date.now()+nextInterval*86400000).toISOString()};
-  const response=await fetch("/api/vocabulary",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(response.ok)vocabItems=(await response.json()).items||[];refreshWordMarks();showWord(raw,sentence,wordElement);refreshDashboards();
+  const response=await fetch("/api/vocabulary",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(response.ok){vocabItems=(await response.json()).items||[];rebuildWordIndexes();}refreshWordMarks();showWord(raw,sentence,wordElement);refreshDashboards();
 }
 
 function refreshDashboards() { renderStats(); renderReview(); }
@@ -773,7 +868,7 @@ function handleReviewClick(event){
 }
 async function showReviewWordInfo(entry){
   const panel=$("#reviewWordPanel"),requestId=++wordRequestId,bookInfo=libraryBooks.find(item=>item.id===entry.book_id);
-  panel.innerHTML=`<div class="manual-info-card"><button class="manual-info-speaker" data-word="${escapeHtml(entry.word)}">♪</button><span class="phonetic">${formatText(entry.phonetic)}</span><h3>${escapeHtml(entry.word)}</h3><p class="manual-info-meaning">${formatText(entry.meaning)}</p><div id="manualRemoteDefinition"><span class="loading-line">正在加载完整释义…</span></div><div class="context"><small>${escapeHtml(bookInfo?.title||'当前句子')}</small><p>${escapeHtml(entry.context)}</p></div><div id="manualRemoteUsage" class="usage-note"><span class="loading-line">正在分析当前句中的用法…</span></div><div id="manualRemoteExamples" class="dict-examples"><span class="loading-line">正在加载例句…</span></div>${entry.note?`<div class="saved-word-note"><small>我的备注</small><p>${escapeHtml(entry.note)}</p></div>`:''}</div>`;
+  panel.innerHTML=`<div class="manual-info-card"><button class="manual-info-speaker" data-word="${escapeHtml(entry.word)}">♪</button><span class="phonetic">${formatText(entry.phonetic)}</span><h3>${escapeHtml(entry.word)}</h3><p class="manual-info-meaning">${formatText(entry.meaning)}</p><div id="manualRemoteDefinition"><span class="loading-line">正在加载完整释义…</span></div>${contextBlockHtml(bookInfo?.title||'当前句子',escapeHtml(entry.context),entry.context)}<div id="manualRemoteUsage" class="usage-note"><span class="loading-line">正在分析当前句中的用法…</span></div><div id="manualRemoteExamples" class="dict-examples"><span class="loading-line">正在加载例句…</span></div>${entry.note?`<div class="saved-word-note"><small>我的备注</small><p>${escapeHtml(entry.note)}</p></div>`:''}</div>`;
   fetch(`/api/word-dictionary?word=${encodeURIComponent(entry.word)}`,{cache:'no-store'}).then(async response=>response.ok?response.json():Promise.reject()).then(data=>{if(requestId!==wordRequestId)return;const groups=(data.groups||[]).map(group=>`<div class="dict-group"><b>${escapeHtml(group.pos)}</b><p>${group.translations.map(escapeHtml).join('；')}</p></div>`).join('');$("#manualRemoteDefinition").innerHTML=groups||`<p>${formatText(entry.meaning)}</p>`;$("#manualRemoteExamples").innerHTML=(data.examples||[]).length?`<small>EXAMPLES</small>${data.examples.map(example=>`<p>${escapeHtml(example)}</p>`).join('')}`:'<small>暂无例句</small>';}).catch(()=>{if(requestId===wordRequestId){$("#manualRemoteDefinition").innerHTML=`<p>${formatText(entry.meaning)}</p>`;$("#manualRemoteExamples").innerHTML='';}});
   fetch('/api/word-context',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({word:entry.word,contextSentence:entry.context,expandedContext:entry.context})}).then(async response=>response.ok?response.json():Promise.reject()).then(data=>{if(requestId===wordRequestId)$("#manualRemoteUsage").innerHTML=formatText(data.explanation||'结合当前句理解该词的具体用法。');}).catch(()=>{if(requestId===wordRequestId)$("#manualRemoteUsage").textContent='结合当前句理解该词的具体用法。';});
 }
@@ -785,7 +880,7 @@ function handleReviewShortcut(event){if(event.metaKey||event.ctrlKey||event.altK
 async function reviewSavedWord(id,rating) {
   const entry=vocabItems.find(item=>item.id===id);if(!entry)return;
   const old=entry.interval_days||1;const interval=rating==="again"?1:rating==="hard"?Math.max(2,Math.round(old*1.2)):rating==="good"?Math.max(7,old*2):Math.max(14,old*3);
-  const r=await fetch(`/api/vocabulary/${id}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({rating,interval_days:Math.min(180,interval),due_at:new Date(Date.now()+Math.min(180,interval)*86400000).toISOString()})});if(r.ok)vocabItems=(await r.json()).items||[];renderReview();renderStats();
+  const r=await fetch(`/api/vocabulary/${id}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({rating,interval_days:Math.min(180,interval),due_at:new Date(Date.now()+Math.min(180,interval)*86400000).toISOString()})});if(r.ok){vocabItems=(await r.json()).items||[];rebuildWordIndexes();}renderReview();renderStats();
 }
 
 async function toggleRecording() {
@@ -842,7 +937,7 @@ setInterval(() => {
 function postActivity(payload){return fetch("/api/activity",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}).catch(()=>null);}
 function logAction(group, value) { if(!currentBookId)return; const key=`${STORE.state}-${currentBookId}`; const state = load(key, {}); state[group] ||= {}; state[group][value] = (state[group][value] || 0) + 1; save(key, state); }
 function finishSession() { if (!book) return; const key=`${STORE.state}-${currentBookId}`; const state = load(key, {}); state.lastVisit = Date.now(); save(key, state); }
-function showPage(page) { if(!book||page===displayedPage)return; displayedPage=page; $("#pageImage").src = `${book.pageBase}/page-${String(page).padStart(3,"0")}.jpg`; $("#pageLabel").textContent = `原书第 ${page} 页`; }
+function showPage(page) { if(!book||!book.pageBase||book.hasOriginalPages===false||page===displayedPage)return; displayedPage=page; $("#pageImage").src = `${book.pageBase}/page-${String(page).padStart(3,"0")}.jpg`; $("#pageLabel").textContent = `原书第 ${page} 页`; }
 function restoreProgress() { if(!book)return; const state=load(`${STORE.state}-${currentBookId}`,{});const time=state.time||0;$("#audio").currentTime=time;$("#backBtn").style.visibility="hidden"; }
 
 async function loadApiSettings() {
@@ -879,9 +974,10 @@ async function loadImportCatalog() {
 function updateImportBooks() {
   const series=importCatalog[+$("#importSeries").value]; const list=$("#importBookList");
   if(!series){list.innerHTML='<p>请先选择系列</p>';updateBatchButton();return;}
-  const eligible=series.books.filter(item=>item.ready);
-  list.innerHTML=eligible.map(item=>`<label class="import-book-item ${item.importedId?'imported':''}"><img src="${encodeURI(item.coverUrl)}" alt="${escapeHtml(item.title)}封面" loading="lazy"><input type="checkbox" value="${escapeHtml(item.path)}"><span><b>${escapeHtml(item.title)}</b><small>${item.pdfCount} PDF · ${item.audioCount} MP3${item.importedId?' · 已导入，可重新导入':''}</small></span></label>`).join("");
-  $("#importMeta").textContent=`${series.name}：${eligible.length} 本可导入。批量任务将严格逐本顺序执行。`;
+  const resourceText=item=>[[item.audioCount,"音频"],[item.pdfCount,"PDF"],[item.docCount,"DOC"],[item.txtCount,"TXT"],[item.chmCount,"CHM"]].filter(([count])=>count).map(([count,name])=>`${count} ${name}`).join(" · ")||"无支持资源";
+  list.innerHTML=series.books.map(item=>`<label class="import-book-item ${item.importedId?'imported':''} ${item.ready?'':'unavailable'}"><img src="${encodeURI(item.coverUrl)}" alt="${escapeHtml(item.title)}封面" loading="lazy"><input type="checkbox" value="${escapeHtml(item.path)}" ${item.ready?'':'disabled'}><span><b>${escapeHtml(item.title)}</b><small>${escapeHtml(resourceText(item))}</small><small class="import-mode">${escapeHtml(item.importMode||"")}${item.importedId?' · 已导入，可重新导入':''}</small>${item.issue?`<small class="import-issue">${escapeHtml(item.issue)}</small>`:''}</span></label>`).join("");
+  const ready=series.books.filter(item=>item.ready).length,blocked=series.books.length-ready;
+  $("#importMeta").textContent=`${series.name}：扫描到 ${series.books.length} 个目录，${ready} 本可导入${blocked?`，${blocked} 本缺少音频或支持资源`:''}。批量任务将严格逐本顺序执行。`;
   updateBatchButton();
 }
 function selectedImportPaths(){return $$("#importBookList input:checked").map(input=>input.value)}

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -39,6 +40,8 @@ def download_english_subtitle(url,destination,log,job_id):
     return (subtitle,"automatic") if code==0 and subtitle else (None,"none")
 
 def main():
+    try:os.nice(10)
+    except OSError:pass
     job_id=int(sys.argv[1]); request_file=Path(sys.argv[2]); request=json.loads(request_file.read_text())
     url=request["url"]; title=request["title"]; series=request["series"]; video_id=request.get("videoId","") or "video"
     relative=str(Path(series)/f"youtube.{safe_name(title)}-{safe_name(video_id)}")

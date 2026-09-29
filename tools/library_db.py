@@ -6,6 +6,7 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote
+from import_source_plan import available_resources
 
 ROOT=Path(__file__).resolve().parents[1]
 BOOKS_ROOT=ROOT/"books"
@@ -91,10 +92,12 @@ def scan_catalog():
         books=[]
         for folder in sorted(p for p in series_dir.iterdir() if p.is_dir()):
             relative=str(folder.relative_to(BOOKS_ROOT))
-            pdfs=sorted(folder.glob("*.pdf")); audios=sorted(folder.glob("*.mp3"))
+            counts,audio_count,text_count,mode=available_resources(folder)
             found=imported.get(relative)
             books.append({"path":relative,"name":folder.name,"title":display_title(folder.name),
-                          "pdfCount":len(pdfs),"audioCount":len(audios),"ready":bool(pdfs and audios),
+                          "pdfCount":counts["pdf"],"docCount":counts["doc"]+counts["docx"],"txtCount":counts["txt"],"chmCount":counts["chm"],
+                          "audioCount":audio_count,"ready":bool(audio_count),"importMode":mode,
+                          "issue":"" if audio_count else ("缺少音频文件" if text_count else "未发现支持的音频或正文文件"),
                           "importedId":found["id"] if found else None,
                           "coverUrl":found["cover"] if found else "/api/import/cover?path="+__import__("urllib.parse").parse.quote(relative)})
         series.append({"name":series_dir.name,"books":books})

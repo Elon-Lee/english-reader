@@ -34,6 +34,8 @@ NODE=Path(shutil.which("node") or "/usr/local/bin/node")
 PRIVATE_CONFIG=ROOT/".dioco.local.json"
 CACHE=ROOT/".cache/dioco"
 CACHE.mkdir(parents=True,exist_ok=True)
+LEMMA_FILE=ROOT/"tools/vendor/ECDICT/lemma.en.txt"
+LEMMA_INDEX=None
 COVER_CACHE=BOOKS_ROOT/".reader/catalog-covers"
 COVER_CACHE.mkdir(parents=True,exist_ok=True)
 COVER_LOCK=threading.Lock()
@@ -117,6 +119,22 @@ def cache_path(kind,key,suffix="json"):
     folder=CACHE/kind; folder.mkdir(parents=True,exist_ok=True)
     return folder/f"{digest}.{suffix}"
 
+def lemma_index():
+    global LEMMA_INDEX
+    if LEMMA_INDEX is not None:return LEMMA_INDEX
+    index={}
+    if LEMMA_FILE.exists():
+        for line in LEMMA_FILE.read_text(errors="replace").splitlines():
+            match=re.match(r"^([^/]+)/([0-9]+)\s*->\s*(.+)$",line)
+            if not match:continue
+            root,frequency,forms=match.group(1).casefold(),int(match.group(2)),match.group(3)
+            for form in [root,*forms.split(",")]:
+                form=form.strip().casefold()
+                if form and frequency>index.get(form,("",-1))[1]:index[form]=(root,frequency)
+    LEMMA_INDEX=index;return index
+
+def infer_lemma(word):return lemma_index().get(word.casefold(),("",0))[0]
+
 def upstream_json(path,params=None,payload=None,timeout=20):
     url=UPSTREAM+path
     if params: url += "?"+urlencode(params)
@@ -154,6 +172,7 @@ class Handler(SimpleHTTPRequestHandler):
             book_id=unquote(route.path.split("/api/books/",1)[1]); result=get_book(book_id)
             self.reply(result or {"error":"book not found"},200 if result else 404); return
         if route.path == "/api/settings": self.get_settings(); return
+        if route.path == "/api/word-hover": self.word_hover(parse_qs(route.query)); return
         if route.path == "/api/word-dictionary": self.word_dictionary(parse_qs(route.query)); return
         if route.path == "/api/word-tts": self.word_tts(parse_qs(route.query)); return
         if route.path.startswith("/books/"):
@@ -489,7 +508,9 @@ class Handler(SimpleHTTPRequestHandler):
         try: folder=(BOOKS_ROOT/relative).resolve(); folder.relative_to(BOOKS_ROOT.resolve())
         except Exception: self.send_error(400); return
         pdfs=sorted(folder.glob("*.pdf"))
-        if not pdfs: self.send_error(404); return
+        if not pdfs:
+            data=(READER/"shiyue-mark.svg").read_bytes();self.send_response(200);self.send_header("Content-Type","image/svg+xml")
+            self.send_header("Cache-Control","public, max-age=3600");self.send_header("Content-Length",str(len(data)));self.end_headers();self.wfile.write(data);return
         digest=hashlib.sha1(relative.encode()).hexdigest()[:16]; target=COVER_CACHE/f"{digest}.png"
         try:
             with COVER_LOCK:
@@ -524,6 +545,24 @@ class Handler(SimpleHTTPRequestHandler):
                 cached.write_text(json.dumps(result,ensure_ascii=False))
             self.reply(result)
         except Exception as exc: self.reply({"error":f"dictionary upstream failed: {exc}"},502)
+    def word_hover(self,query):
+        word=(query.get("word") or query.get("form") or [""])[0].strip()
+        lemma=(query.get("lemma") or [""])[0].strip() or infer_lemma(word)
+        pos=(query.get("pos") or [""])[0].strip().upper()
+        if not word or len(word)>80:self.reply({"error":"invalid word"},400);return
+        key=f"{word.casefold()}|{lemma.casefold()}|{pos}";cached=cache_path("hover-dictionary",key)
+        try:
+            if cached.exists():result=json.loads(cached.read_text())
+            else:
+                raw=upstream_json("/base_dict_getHoverDict_8",{"form":word,"lemma":lemma,"sl":"en","tl":"zh-CN","pos":pos,"pow":"n"})
+                entries=[]
+                for value in raw.get("data",{}).get("hoverDictEntries",[]):
+                    value=str(value).strip()
+                    if value and value not in entries:entries.append(value)
+                result={"word":word,"entries":entries[:6],"source":"Dioco Hover Dictionary"}
+                cached.write_text(json.dumps(result,ensure_ascii=False))
+            self.reply(result)
+        except Exception as exc:self.reply({"error":f"hover dictionary upstream failed: {exc}"},502)
     def word_tts(self,query):
         word=(query.get("word") or [""])[0].strip()
         if not word or len(word)>80: self.reply({"error":"invalid word"},400); return

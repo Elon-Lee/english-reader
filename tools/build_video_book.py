@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from align_whisper import WORD_RE, normalize_words, whisper_words
+from text_segmentation import split_sentences
 
 TIME_RE=re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)")
 
@@ -32,10 +33,12 @@ def subtitle_entries(path):
 
 def subtitle_book(entries):
     sentences=[]
-    for index,item in enumerate(entries,1):
-        matches=list(WORD_RE.finditer(item["text"])); span=max(.1,item["end"]-item["start"])
-        words=[{"text":match.group(),"start":round(item["start"]+span*i/len(matches),3),"end":round(item["start"]+span*(i+1)/len(matches),3),"confidence":1,"aligned":False} for i,match in enumerate(matches)]
-        sentences.append({"id":f"s{index}","page":int(item["start"]//15)+1,"text":item["text"],"start":item["start"],"end":item["end"],"section":None,"targets":[],"words":words})
+    for item in entries:
+        parts=split_sentences(item["text"],max_words=60);total=max(1,sum(len(WORD_RE.findall(part)) for part in parts));cursor=0
+        for part in parts:
+            matches=list(WORD_RE.finditer(part));span=max(.1,item["end"]-item["start"]);start=item["start"]+span*cursor/total;cursor+=len(matches);end=item["start"]+span*cursor/total
+            words=[{"text":match.group(),"start":round(start+(end-start)*i/max(1,len(matches)),3),"end":round(start+(end-start)*(i+1)/max(1,len(matches)),3),"confidence":1,"aligned":False} for i,match in enumerate(matches)]
+            index=len(sentences)+1;sentences.append({"id":f"s{index}","page":int(start//15)+1,"text":part,"start":start,"end":end,"section":None,"targets":[],"words":words})
     return sentences
 
 def whisper_book(data):

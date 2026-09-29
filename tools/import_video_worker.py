@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -10,6 +11,7 @@ from library_db import BOOKS_ROOT, ROOT, save_artifact, save_dictionary, slug_fo
 
 WHISPER=ROOT/"tools/vendor/whisper.cpp/build/bin/whisper-cli"
 MODEL=ROOT/"tools/vendor/whisper.cpp/models/ggml-base.en.bin"
+WHISPER_THREADS=os.environ.get("SHIYUE_WHISPER_THREADS","3")
 
 def run(command,**kwargs):return subprocess.run([str(item) for item in command],check=True,**kwargs)
 def set_job(job_id,progress,step,**extra):update_job(job_id,progress=progress,step=step,**extra)
@@ -45,7 +47,7 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
     progress(35,"Whisper DTW 正在转写视频")
     prefix=generated/"whisper";log=ROOT/".local"/f"video-whisper-{job_id}.log"
     with log.open("w") as output:
-        run([WHISPER,"-m",MODEL,"-f",audio,"-l","en","-t","4","-p","2","-ng","-dtw","base.en","-ml","1","-sow","-ojf","-of",prefix,"-np"],stdout=subprocess.DEVNULL,stderr=output)
+        run([WHISPER,"-m",MODEL,"-f",audio,"-l","en","-t",WHISPER_THREADS,"-p","2","-ng","-dtw","base.en","-ml","1","-sow","-ojf","-of",prefix,"-np"],stdout=subprocess.DEVNULL,stderr=output)
     progress(72,"构建视频正文与词级时间轴")
     page_base="/books/"+str(pages.relative_to(BOOKS_ROOT));audio_url="/books/"+str(audio.relative_to(BOOKS_ROOT));video_url="/books/"+str(video.relative_to(BOOKS_ROOT))
     book_file=generated/"book.json"
@@ -75,6 +77,8 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
     update_job(job_id,status="complete",progress=100,step="视频导入完成")
 
 def main():
+    try:os.nice(10)
+    except OSError:pass
     job_id=int(sys.argv[1]);relative=sys.argv[2]
     try:import_video(job_id,relative)
     except Exception as exc:update_job(job_id,status="failed",step="视频导入失败",error=str(exc));raise

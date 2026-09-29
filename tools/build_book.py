@@ -2,6 +2,7 @@
 """Turn OCR output plus an MP3 into the local reader's book.json format."""
 import argparse, json, re, subprocess
 from pathlib import Path
+from text_segmentation import split_sentences
 
 WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?")
 
@@ -29,7 +30,8 @@ def clean_page(page):
 
 def sentences_for_page(text):
     # Keep numbered game sections and choices readable while avoiding tiny fragments.
-    parts = re.split(r"(?<=[.!?])\s+(?=[◆A-Z0-9])|\s+(?=◆)", text)
+    parts=[]
+    for choice in re.split(r"\s+(?=◆)",text):parts.extend(split_sentences(choice.strip(" ◆"),max_words=60))
     output=[]
     for part in parts:
         part=part.strip(" ◆")
@@ -60,7 +62,8 @@ def main():
     rows=[]
     current_section=None
     for page in pages[args.page_start-1:page_end]:
-        for text in sentences_for_page(clean_page(page)):
+        source_texts=[line["text"] for line in page["lines"] if line.get("paragraph")] if any(line.get("paragraph") for line in page["lines"]) else [clean_page(page)]
+        for text in (piece for source_text in source_texts for piece in sentences_for_page(source_text)):
             if not WORD_RE.search(text): continue
             section_match=re.match(r"^(40|[1-3][0-9]|[1-9])\s+(?=[A-Z])",text)
             if section_match: current_section=int(section_match.group(1))

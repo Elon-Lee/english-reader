@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import os
 import re
 import sqlite3
 import subprocess
@@ -87,13 +88,13 @@ def align_sentence(model,waveform,sample_rate,sentence,labels,dictionary,padding
     return result,None
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument("--book-id",required=True);parser.add_argument("--output",type=Path);parser.add_argument("--sentence",type=int);parser.add_argument("--limit",type=int);parser.add_argument("--padding",type=float,default=1.0);parser.add_argument("--update-db",action="store_true")
-    args=parser.parse_args();book=load_book(args.book_id);audio=audio_path(book["audio"]);waveform,sample_rate=load_waveform(audio)
+    parser=argparse.ArgumentParser();parser.add_argument("--book-id",required=True);parser.add_argument("--job-id",type=int);parser.add_argument("--output",type=Path);parser.add_argument("--sentence",type=int);parser.add_argument("--limit",type=int);parser.add_argument("--padding",type=float,default=1.0);parser.add_argument("--update-db",action="store_true")
+    args=parser.parse_args();torch.set_num_threads(max(1,min(3,int(os.environ.get("SHIYUE_CTC_THREADS","3")))));torch.set_num_interop_threads(1);book=load_book(args.book_id);audio=audio_path(book["audio"]);waveform,sample_rate=load_waveform(audio)
     bundle=torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H;labels=bundle.get_labels();dictionary={char:index for index,char in enumerate(labels)};model=bundle.get_model().eval()
     selected=range(len(book["sentences"]))
     if args.sentence is not None:selected=[args.sentence]
     elif args.limit:selected=range(min(args.limit,len(book["sentences"])))
-    aligned=0;failed=[]
+    aligned=0;failed=[];total=len(list(selected))
     for number,index in enumerate(selected,1):
         sentence=book["sentences"][index]
         result,error=align_sentence(model,waveform,sample_rate,sentence,labels,dictionary,args.padding)
@@ -101,7 +102,9 @@ def main():
             sentence["words"]=result;sentence["start"]=result[0]["start"];sentence["end"]=result[-1]["end"];sentence["alignment"]="ctc";aligned+=1
         else:failed.append({"index":index,"id":sentence.get("id"),"reason":error})
         print(f"[{number}] {sentence.get('id')} {'aligned' if result else 'fallback: '+error}",flush=True)
-    total=len(list(selected));coverage=aligned/max(1,total)
+        if args.job_id and (number==1 or number%5==0 or number==total):
+            db=sqlite3.connect(DB);db.execute("UPDATE import_jobs SET progress=?,step=?,updated_at=datetime('now') WHERE id=?",(98 if number<total/2 else 99,f"wav2vec2 CTC {number}/{total}",args.job_id));db.commit();db.close()
+    coverage=aligned/max(1,total)
     summary={"method":"wav2vec2-ctc-forced-alignment","model":"WAV2VEC2_ASR_BASE_960H","alignedSentences":aligned,"failedSentences":len(failed),"coverage":round(coverage,4),"failures":failed}
     book["forcedAlignment"]=summary
     if coverage>=.35:book["alignment"]="wav2vec2-ctc-forced-alignment"
