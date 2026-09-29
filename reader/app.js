@@ -11,6 +11,11 @@ let displayedPage = null;
 let active = -1;
 let mode = "intensive";
 let pausedForWord = false;
+let hoverPausedTime = null;
+let hoverPausedSentence = -1;
+let clickedWordPausedMain = false;
+let clickedWordResumeTime = null;
+let clickedWordResumeSentence = -1;
 let currentSeries = "";
 let shelfView = "tile";
 let shortcuts = {previous:"a",repeat:"s",next:"d",play:"space"};
@@ -221,7 +226,16 @@ function bindEvents() {
     if (event.target.classList.contains("word") && mode === "intensive") {
       event.stopPropagation();
       const word = event.target;
-      $("#audio").pause(); pausedForWord=false;
+      const audio=$("#audio");
+      // A click happens after pointer-over has already paused the main track.
+      // Preserve that position so leaving the word can resume the book audio.
+      if (!audio.paused || pausedForWord) {
+        clickedWordPausedMain=true;
+        clickedWordResumeTime=hoverPausedTime ?? audio.currentTime;
+        clickedWordResumeSentence=hoverPausedSentence>=0 ? hoverPausedSentence : active;
+      }
+      clearTimeout(audioStopTimer); wordStopAt=null; audio.pause(); pausedForWord=false;
+      hoverPausedTime=null; hoverPausedSentence=-1;
       showWord(word.textContent, sentence, word);
       playWordTts(word.textContent);
       showWordQuickTip(word,sentence);
@@ -229,12 +243,8 @@ function bindEvents() {
     }
     else playSentence(+sentenceElement.dataset.i);
   });
-  $("#sentences").addEventListener("mouseover", event => {
-    if (mode === "intensive" && event.target.classList.contains("word") && !$("#audio").paused) { pausedForWord = true; $("#audio").pause(); }
-  });
-  $("#sentences").addEventListener("mouseout", event => {
-    if (pausedForWord && event.target.classList.contains("word")) { pausedForWord = false; $("#audio").play(); }
-  });
+  $("#sentences").addEventListener("pointerover", handleWordPointerOver);
+  $("#sentences").addEventListener("pointerout", handleWordPointerOut);
   $("#playBtn").onclick = () => { clearTimeout(audioStopTimer); if ($("#audio").paused) { wordStopAt=null; $("#audio").play(); } else $("#audio").pause(); };
   $("#prevBtn").onclick = () => playSentence(Math.max(0, active - 1));
   $("#nextBtn").onclick = () => playSentence(Math.min(book.sentences.length - 1, active + 1));
@@ -314,6 +324,34 @@ function showWordQuickTip(element,sentence){
   note.textContent=annotationText;note.classList.toggle("hidden",!annotationText);
   const tip=$("#wordQuickTip");tip.classList.remove("hidden"); tip.style.left=`${Math.min(innerWidth-tip.offsetWidth-12,Math.max(12,rect.left))}px`;tip.style.top=`${Math.max(12,rect.top-tip.offsetHeight-7)}px`;
   scheduleWordTipHide();
+}
+function wordTarget(node){return node?.nodeType===1?node.closest?.(".word"):null;}
+function handleWordPointerOver(event){
+  if(mode!=="intensive")return;
+  const word=wordTarget(event.target),from=wordTarget(event.relatedTarget);
+  if(!word||from===word)return;
+  if(!$("#audio").paused&&!pausedForWord){
+    pausedForWord=true;hoverPausedTime=$("#audio").currentTime;hoverPausedSentence=active;
+    clearTimeout(audioStopTimer);$("#audio").pause();
+  }
+}
+function handleWordPointerOut(event){
+  if(mode!=="intensive")return;
+  const word=wordTarget(event.target),to=wordTarget(event.relatedTarget);
+  const movingToTip=event.relatedTarget?.nodeType===1 && event.relatedTarget.closest?.("#wordQuickTip,#wordInlineEditor");
+  if(!word||to===word||to||movingToTip)return;
+  if(!pausedForWord&&!clickedWordPausedMain)return;
+  pausedForWord=false;
+  const resumeTime=clickedWordPausedMain ? clickedWordResumeTime : hoverPausedTime;
+  const resumeSentence=clickedWordPausedMain ? clickedWordResumeSentence : hoverPausedSentence;
+  clickedWordPausedMain=false; clickedWordResumeTime=null; clickedWordResumeSentence=-1;
+  hoverPausedTime=null; hoverPausedSentence=-1;
+  wordTtsAudio?.pause();
+  if(resumeTime===null||resumeTime===undefined)return;
+  if(resumeSentence>=0&&book?.sentences?.[resumeSentence]){
+    const stopAt=sentenceAutoPause?book.sentences[resumeSentence].end+.03:null;
+    seekAndPlay(resumeTime,stopAt);
+  }else seekAndPlay(resumeTime,null);
 }
 function scheduleWordTipHide(){clearTimeout(wordTipTimer);wordTipTimer=setTimeout(()=>$("#wordQuickTip").classList.add("hidden"),wordTipSeconds*1000);}
 function handleWordTipAction(event){const action=event.target.closest("[data-word-action]")?.dataset.wordAction;if(!action||!selectedWordContext)return;clearTimeout(wordTipTimer);if(action==="vocab"){$("#wordQuickTip").classList.add("hidden");addSelectedWordToVocab();}else openWordEditor(action);}
