@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20260929-21">
+  <link rel="stylesheet" href="styles.css?v=20260929-27">
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><img class="brand-mark" src="shiyue-mark.svg" alt="拾页图标"><div><b>拾页</b><small>LOCAL READER</small></div></div>
+    <div class="brand"><img class="brand-mark" src="shiyue-mark.svg" alt="拾页图标"><div><b>拾页</b><small>LOCAL READER</small></div><button id="sidebarToggle" class="sidebar-toggle" type="button" title="隐藏菜单栏" aria-label="隐藏菜单栏"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4" r="1.6"></circle><circle cx="10" cy="10" r="1.6"></circle><circle cx="10" cy="16" r="1.6"></circle></svg></button></div>
     <nav>
       <button class="nav active" data-screen="shelf">⌂ <span>我的书架</span></button>
       <button class="nav" data-screen="stats">◎ <span>学习记录</span></button>
@@ -17,14 +17,19 @@
       <button class="nav" data-screen="import">＋ <span>导入书籍</span></button>
       <button class="nav" data-screen="settings">⚙ <span>系统设置</span></button>
     </nav>
-    <div class="level-card"><span>当前书系</span><select id="seriesSelect" aria-label="切换书系"></select><small>点击这里切换书系</small></div>
+    <section id="seriesChannels" class="series-channels" aria-label="书系频道">
+      <div class="series-channels-head"><span>书系频道</span><small>最近活动</small></div>
+      <div id="seriesChannelList" class="series-channel-list"></div>
+      <button id="seriesMoreBtn" class="series-more hidden" type="button" aria-expanded="false">更多书系</button>
+    </section>
   </aside>
+  <button id="sidebarReveal" class="sidebar-reveal" type="button" title="显示菜单栏" aria-label="显示菜单栏"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4" r="1.6"></circle><circle cx="10" cy="10" r="1.6"></circle><circle cx="10" cy="16" r="1.6"></circle></svg></button>
 
   <main>
     <header class="topbar">
       <button class="back" id="backBtn">← 书架</button>
       <div class="book-heading"><small>0级 · STARTERS</small><strong>生存游戏 <i>Survive!</i></strong></div>
-      <div class="top-actions"><button id="eyeComfortBtn" class="eye-comfort-btn" aria-pressed="false">◐ 护眼</button><button id="viewBtn">原书页</button><button id="focusBtn">专注模式</button></div>
+      <div class="top-actions"><button id="eyeComfortBtn" class="eye-comfort-btn" aria-pressed="false">◐ 护眼</button><button id="focusBtn" aria-pressed="false">专注模式</button></div>
     </header>
 
     <section id="shelf" class="screen shelf">
@@ -100,7 +105,7 @@
     </section>
 
     <section id="reader" class="screen reader hidden">
-      <aside id="pagePanel" class="page-panel"><div class="page-head"><b id="visualTitle">原书页</b><div class="visual-switch hidden" id="visualSwitch"><button id="framesViewBtn" class="active">关键帧</button><button id="videoViewBtn">视频</button></div><button id="closePage">×</button></div><img id="pageImage" alt="原书扫描页"><video id="videoView" class="hidden" muted playsinline preload="metadata"></video><small id="pageLabel"></small></aside>
+      <aside id="pagePanel" class="page-panel"><div class="page-head"><b id="visualTitle">原书页</b><div class="visual-switch hidden" id="visualSwitch"><button id="framesViewBtn" class="active">关键帧</button><button id="videoViewBtn">视频</button></div></div><img id="pageImage" alt="原书扫描页"><video id="videoView" class="hidden" muted playsinline preload="metadata"></video><small id="pageLabel"></small></aside>
       <div class="story-panel">
         <div class="chapter">
           <span>INTERACTIVE STORY</span><h1>Survive!</h1>
@@ -125,15 +130,7 @@
     <span id="shortcutHint" class="shortcut-hint">A 上一句 · S 复读 · D 下一句 · 空格暂停</span>
     <audio id="audio" preload="metadata"></audio><audio id="recording"></audio>
   </footer>
-  <div id="wordQuickTip" class="word-quick-tip hidden" role="toolbar">
-    <span id="wordTipAnnotation" class="word-tip-annotation hidden"></span>
-    <button data-word-action="vocab">＋ 生词本</button><button data-word-action="correct">✎ 订正OCR</button><button data-word-action="note">▤ 备注</button>
-  </div>
   <div id="wordHoverMeaning" class="word-hover-meaning hidden" role="tooltip"></div>
-  <div id="wordInlineEditor" class="word-inline-editor hidden">
-    <div class="inline-editor-head"><b id="wordEditTitle">编辑</b><button id="closeWordEdit">×</button></div>
-    <input id="wordEditValue" autocomplete="off"><div class="inline-editor-actions"><button id="cancelWordEdit">取消</button><button id="saveWordEdit">保存</button></div>
-  </div>
   <dialog id="deleteBookDialog" class="delete-book-dialog">
     <form method="dialog">
       <div class="delete-dialog-head"><div><small>PERMANENT DELETE</small><h2>删除《<span id="deleteBookTitle"></span>》？</h2></div><button value="cancel" aria-label="关闭">×</button></div>
@@ -160,6 +157,6 @@
       <div class="cancel-import-dialog-actions"><button value="cancel">继续当前任务</button><button id="confirmCancelImports" type="button">中断并删除</button></div>
     </form>
   </dialog>
-  <script src="app.js?v=20260929-21"></script>
+  <script src="app.js?v=20260929-27"></script>
 </body>
 </html>

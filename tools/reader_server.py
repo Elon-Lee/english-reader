@@ -9,6 +9,7 @@ import re
 import signal
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -152,6 +153,7 @@ class Handler(SimpleHTTPRequestHandler):
     protocol_version="HTTP/1.1"
     def __init__(self,*args,**kwargs): super().__init__(*args,directory=str(READER),**kwargs)
     def end_headers(self):
+        self.send_header("Permissions-Policy","microphone=(self)")
         if urlsplit(self.path).path.lower().endswith((".mp3",".wav",".m4a",".ogg")):
             self.send_header("Accept-Ranges","bytes")
         super().end_headers()
@@ -615,13 +617,18 @@ if __name__ == "__main__":
     host=os.environ.get("READER_HOST","0.0.0.0")
     port=int(os.environ.get("READER_PORT","8765"))
     server=ThreadingHTTPServer((host,port),Handler)
+    certificate=os.environ.get("READER_TLS_CERT","").strip();private_key=os.environ.get("READER_TLS_KEY","").strip()
+    secure=bool(certificate and private_key)
+    if secure:
+        context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(certificate,private_key);server.socket=context.wrap_socket(server.socket,server_side=True)
     addresses=[]
     try:
         for info in socket.getaddrinfo(socket.gethostname(),None,socket.AF_INET):
             address=info[4][0]
             if not address.startswith("127.") and address not in addresses: addresses.append(address)
     except OSError: pass
-    print(f"拾页已启动：http://localhost:{port}",flush=True)
-    for address in addresses: print(f"局域网访问：http://{address}:{port}",flush=True)
+    scheme="https" if secure else "http"
+    print(f"拾页已启动：{scheme}://localhost:{port}",flush=True)
+    for address in addresses: print(f"局域网访问：{scheme}://{address}:{port}",flush=True)
     print(f"监听地址：{host}:{port}",flush=True)
     server.serve_forever()

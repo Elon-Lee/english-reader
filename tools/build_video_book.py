@@ -60,14 +60,19 @@ def whisper_book(data):
     return sentences
 
 def main():
-    parser=argparse.ArgumentParser(); parser.add_argument("--whisper",required=True,type=Path); parser.add_argument("--audio",required=True,type=Path)
+    parser=argparse.ArgumentParser(); parser.add_argument("--whisper",type=Path); parser.add_argument("--audio",required=True,type=Path)
     parser.add_argument("--subtitle",type=Path); parser.add_argument("--output",required=True,type=Path); parser.add_argument("--id",required=True); parser.add_argument("--title",required=True)
     parser.add_argument("--english-title",default=""); parser.add_argument("--level",default=""); parser.add_argument("--audio-url",required=True); parser.add_argument("--video-url",required=True); parser.add_argument("--page-base",required=True); parser.add_argument("--subtitle-type",default="whisper")
-    args=parser.parse_args(); whisper=json.loads(args.whisper.read_text())
-    sentences=subtitle_book(subtitle_entries(args.subtitle)) if args.subtitle and args.subtitle.exists() else whisper_book(whisper)
+    args=parser.parse_args();whisper=json.loads(args.whisper.read_text()) if args.whisper and args.whisper.exists() else None
+    subtitle=subtitle_entries(args.subtitle) if args.subtitle and args.subtitle.exists() else []
+    if subtitle:sentences=subtitle_book(subtitle)
+    elif whisper:sentences=whisper_book(whisper)
+    else:raise ValueError("没有可用字幕，也没有 Whisper 转写结果")
+    alignment="whisper-dtw-normalized" if whisper else "subtitle-timing"
     book={"id":args.id,"title":args.title,"englishTitle":args.english_title,"level":args.level,"sourceType":"video","video":args.video_url,"audio":args.audio_url,
-      "pageBase":args.page_base,"subtitleType":args.subtitle_type,"duration":duration(args.audio),"alignment":"whisper-dtw-normalized","sentences":sentences,
-      "whisper":{"engine":"whisper.cpp","model":"base.en","timestampMethod":"dtw","transcribedWords":sum(len(s["words"]) for s in sentences)}}
+      "pageBase":args.page_base,"subtitleType":args.subtitle_type,"duration":duration(args.audio),"alignment":alignment,"sentences":sentences}
+    if whisper:book["whisper"]={"engine":"whisper.cpp","model":"base.en","timestampMethod":"dtw","transcribedWords":sum(len(s["words"]) for s in sentences)}
+    else:book["subtitleAlignment"]={"method":"subtitle-cues","cues":len(subtitle),"sentences":len(sentences),"whisperSkipped":True}
     args.output.write_text(json.dumps(book,ensure_ascii=False,indent=2)); print(f"Built video book: {len(sentences)} sentences")
 
 if __name__=="__main__":main()

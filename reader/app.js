@@ -24,6 +24,8 @@ let mainAudioFadeToken = 0;
 let mainAudioRestoreVolume = 1;
 let mainAudioFadeTarget = null;
 let currentSeries = "";
+let seriesExpanded=false;
+const RECENT_SERIES_LIMIT=4;
 let shelfView = "tile";
 let shortcuts = {previous:"a",repeat:"s",next:"d",play:"space"};
 let shadowWaiting = false;
@@ -60,8 +62,7 @@ let wordHoverMeaningTimer=null;
 let wordHoverMeaningRequestId=0;
 let wordHoverMeaningElement=null;
 const wordHoverMeaningCache=new Map();
-const WORD_HOVER_MEANING_DELAY_MS=200;
-let wordEditMode="";
+const WORD_HOVER_MEANING_DELAY_MS=100;
 let heatmapRange="year";
 let learningDays=[];
 let reviewFilter="today";
@@ -195,7 +196,7 @@ async function loadBook(bookId) {
   $(".book-heading strong").title=[book.title,book.englishTitle].filter(Boolean).join(" · ");
   $(".chapter h1").textContent=book.englishTitle||book.title;
   visualMode="frames";configureBookVisual();active=-1; displayedPage=null; renderStory(); restoreProgress(); refreshDashboards(); showPage(book.sentences[0]?.page||1);
-  postActivity({bookId,open:true,sessions:1}).then(()=>fetch("/api/library",{cache:"no-store"})).then(r=>r.json()).then(data=>{libraryBooks=data.books||libraryBooks;renderLibrary();}).catch(()=>{});
+  postActivity({bookId,open:true,sessions:1}).then(()=>fetch("/api/library",{cache:"no-store"})).then(r=>r.json()).then(data=>{libraryBooks=data.books||libraryBooks;setupSeriesSelector();renderLibrary();}).catch(()=>{});
 }
 
 function renderLibrary() {
@@ -212,7 +213,21 @@ function populateVideoSeriesOptions(){
   const options='<option value="">选择历史标签</option>'+history.map(name=>`<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
   [$("#videoSeriesHistory"),$("#youtubeSeriesHistory")].forEach(select=>{if(!select)return;const previous=select.value;select.innerHTML=options;if(history.includes(previous))select.value=previous;});
 }
-function setupSeriesSelector(){const series=[...new Set(libraryBooks.map(item=>item.series))];if(!currentSeries||!series.includes(currentSeries))currentSeries=series[0]||"";$("#seriesSelect").innerHTML=series.map(name=>`<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");$("#seriesSelect").value=currentSeries;}
+function seriesActivity(item){const value=item.last_read_at||item.updated_at||"";const time=Date.parse(value);return Number.isFinite(time)?time:0;}
+function seriesAvatar(name){const latin=(name.match(/[A-Za-z]+/g)||[]).join("");if(latin)return latin.slice(0,2).toUpperCase();const compact=name.replace(/[^\u3400-\u9fff]/g,"");return compact.slice(0,1)||"书";}
+function seriesSummaries(){
+  const summaries=new Map();
+  libraryBooks.forEach(item=>{const name=(item.series||"未分类").trim()||"未分类",existing=summaries.get(name)||{name,count:0,activity:0};existing.count++;existing.activity=Math.max(existing.activity,seriesActivity(item));summaries.set(name,existing);});
+  return [...summaries.values()].sort((left,right)=>right.activity-left.activity||left.name.localeCompare(right.name,"zh-CN"));
+}
+function setupSeriesSelector(){
+  const series=seriesSummaries(),names=new Set(series.map(item=>item.name));if(currentSeries&&!names.has(currentSeries))currentSeries="";
+  let visible=seriesExpanded?series:series.slice(0,RECENT_SERIES_LIMIT);
+  if(!seriesExpanded&&currentSeries&&!visible.some(item=>item.name===currentSeries))visible=[series.find(item=>item.name===currentSeries),...visible.slice(0,RECENT_SERIES_LIMIT-1)].filter(Boolean);
+  const allCount=libraryBooks.length;
+  $("#seriesChannelList").innerHTML=`<button class="series-channel ${currentSeries?'':'active'}" data-series=""><i>全</i><span><b>全部书籍</b><small>${allCount} 本</small></span></button>`+visible.map(item=>`<button class="series-channel ${currentSeries===item.name?'active':''}" data-series="${escapeHtml(item.name)}" title="${escapeHtml(item.name)}"><i>${escapeHtml(seriesAvatar(item.name))}</i><span><b>${escapeHtml(item.name)}</b><small>${item.count} 本</small></span></button>`).join("");
+  const more=$("#seriesMoreBtn"),remaining=Math.max(0,series.length-visible.length);more.classList.toggle("hidden",series.length<=RECENT_SERIES_LIMIT);more.textContent=seriesExpanded?"收起书系":`更多书系${remaining?` · ${remaining}`:''}`;more.setAttribute("aria-expanded",String(seriesExpanded));
+}
 function bookProgress(id){const state=load(`${STORE.state}-${id}`,{});const item=libraryBooks.find(x=>x.id===id);return item?.duration?Math.round((state.time||0)/item.duration*100):0}
 
 function renderStory() {
@@ -298,7 +313,6 @@ function bindEvents() {
       hoverPausedTime=null; hoverPausedSentence=-1;
       showWord(word.textContent, sentence, word);
       playWordTts(word.textContent);
-      showWordQuickTip(word,sentence);
       postActivity({lookups:1});
     }
     else playSentence(+sentenceElement.dataset.i);
@@ -311,9 +325,9 @@ function bindEvents() {
   $("#seek").oninput = event => { resetWordHoverSession(); $("#audio").currentTime = event.target.value / 1000 * book.duration; syncPlaybackFrame(); };
   const rates = [.75, 1, 1.25, 1.5]; let rateIndex = 1;
   $("#speedBtn").onclick = () => { rateIndex = (rateIndex + 1) % rates.length; $("#audio").playbackRate = rates[rateIndex]; $("#speedBtn").textContent = rates[rateIndex] + "×"; };
-  $("#viewBtn").onclick = () => { $("#pagePanel").classList.toggle("hidden"); showPage(book.sentences[Math.max(0,active)]?.page||1); };
-  $("#closePage").onclick = () => $("#pagePanel").classList.add("hidden");
-  $("#focusBtn").onclick = () => document.body.classList.toggle("focus");
+  $("#sidebarToggle").onclick=()=>setSidebarCollapsed(true);
+  $("#sidebarReveal").onclick=()=>setSidebarCollapsed(false);
+  $("#focusBtn").onclick = toggleFocusMode;
   $("#eyeComfortBtn").onclick = toggleEyeComfort;
   $("#recordBtn").onclick = toggleRecording;
   $("#playRecordBtn").onclick = () => { if (recordingUrl) { $("#recording").src = recordingUrl; $("#recording").play(); } };
@@ -323,11 +337,10 @@ function bindEvents() {
   $("#audio").onseeked = syncPlaybackFrame;
   window.addEventListener("beforeunload", finishSession);
   $("#settingsForm").onsubmit = saveApiSettings;
-  $("#seriesSelect").onchange = event => {
-    currentSeries=event.target.value;
-    renderLibrary();
-    savePreference({currentSeries});
-    showScreen("shelf");
+  $("#seriesChannels").onclick=event=>{
+    const more=event.target.closest("#seriesMoreBtn");if(more){seriesExpanded=!seriesExpanded;setupSeriesSelector();return;}
+    const channel=event.target.closest("[data-series]");if(!channel)return;
+    currentSeries=channel.dataset.series;seriesExpanded=false;setupSeriesSelector();renderLibrary();savePreference({currentSeries});showScreen("shelf");
   };
   $("#tileViewBtn").onclick=()=>setShelfView("tile"); $("#listViewBtn").onclick=()=>setShelfView("list");
   $$(".shortcut-input").forEach(input=>input.onkeydown=captureShortcut);
@@ -350,14 +363,8 @@ function bindEvents() {
   $("#framesViewBtn").onclick=()=>setVisualMode("frames");$("#videoViewBtn").onclick=()=>setVisualMode("video");
   document.addEventListener("keydown",handleReaderShortcut);
   document.addEventListener("click",event=>{const button=event.target.closest("button");if(button)setTimeout(()=>button.blur(),0);});
-  $("#wordQuickTip").onclick=handleWordTipAction;
-  $("#wordQuickTip").onmouseenter=()=>{clearTimeout(wordTipTimer);cancelWordResume();};
-  $("#wordQuickTip").onmouseleave=event=>{scheduleWordTipHide();if(!wordTarget(event.relatedTarget)&&$("#wordInlineEditor").classList.contains("hidden"))scheduleWordResume();};
-  $("#wordInlineEditor").onmouseenter=cancelWordResume;
-  $("#wordInlineEditor").onmouseleave=event=>{if(!wordTarget(event.relatedTarget))scheduleWordResume();};
+  $("#wordPanel").onclick=handleWordPanelAction;
   document.addEventListener("click",handleContextToggle);
-  $("#saveWordEdit").onclick=saveWordEdit;
-  $("#closeWordEdit").onclick=closeWordEditor;$("#cancelWordEdit").onclick=closeWordEditor;
   $("#statsContent").onclick=event=>{const button=event.target.closest("[data-heatmap-range]");if(button)setHeatmapRange(button.dataset.heatmapRange);};
   $("#reviewContent").onclick=handleReviewClick;
   $("#deleteBookConfirmInput").oninput=validateDeleteBookConfirmation;
@@ -387,7 +394,16 @@ async function confirmDeleteBook(){
   finally{button.textContent="永久删除";}
 }
 
-function configureBookVisual(){const isVideo=book?.sourceType==="video"&&book.video,hasPages=book?.hasOriginalPages!==false&&!!book?.pageBase;$("#visualSwitch").classList.toggle("hidden",!isVideo);$("#visualTitle").textContent=isVideo?"视频画面":hasPages?"原书页":"无原书页面";$("#videoView").src=isVideo?book.video:"";$("#viewBtn").classList.toggle("hidden",!isVideo&&!hasPages);if(!isVideo&&!hasPages)$("#pagePanel").classList.add("hidden");setVisualMode("frames");}
+function bookHasVisual(){return !!((book?.sourceType==="video"&&book.video)||(book?.hasOriginalPages!==false&&book?.pageBase));}
+function syncReaderPanels(){const focused=document.body.classList.contains("focus");$("#pagePanel").classList.toggle("hidden",focused||!bookHasVisual());$("#wordPanel").classList.toggle("hidden",focused);}
+function setSidebarCollapsed(collapsed){document.body.classList.toggle("sidebar-collapsed",collapsed);$("#sidebarToggle").setAttribute("aria-expanded",String(!collapsed));$("#sidebarReveal").setAttribute("aria-expanded",String(!collapsed));}
+function setFocusMode(enabled){
+  document.body.classList.toggle("focus",enabled);setSidebarCollapsed(false);
+  const button=$("#focusBtn");button.textContent=enabled?"普通模式":"专注模式";button.classList.toggle("active",enabled);button.setAttribute("aria-pressed",String(enabled));
+  syncReaderPanels();
+}
+function toggleFocusMode(){setFocusMode(!document.body.classList.contains("focus"));}
+function configureBookVisual(){const isVideo=book?.sourceType==="video"&&book.video,hasPages=book?.hasOriginalPages!==false&&!!book?.pageBase;$("#visualSwitch").classList.toggle("hidden",!isVideo);$("#visualTitle").textContent=isVideo?"视频画面":hasPages?"原书页":"无原书页面";$("#videoView").src=isVideo?book.video:"";setVisualMode("frames");syncReaderPanels();}
 function setVisualMode(mode){visualMode=mode;const isVideo=book?.sourceType==="video"&&book.video;$("#framesViewBtn").classList.toggle("active",mode==="frames");$("#videoViewBtn").classList.toggle("active",mode==="video");$("#pageImage").classList.toggle("hidden",mode==="video");$("#videoView").classList.toggle("hidden",mode!=="video");if(isVideo&&mode==="video"){const video=$("#videoView"),audio=$("#audio");video.currentTime=audio.currentTime;if(!audio.paused)video.play().catch(()=>{});}else $("#videoView").pause();}
 function setImportType(type){$$('[data-import-type]').forEach(button=>button.classList.toggle('active',button.dataset.importType===type));$("#booksImportPane").classList.toggle("hidden",type!=="books");$("#videoImportPane").classList.toggle("hidden",type!=="video");$("#youtubeImportPane").classList.toggle("hidden",type!=="youtube");}
 function videoNameWithoutExtension(name){return name.replace(/\.[^.]+$/,'').replace(/[._-]+/g,' ').trim();}
@@ -404,15 +420,6 @@ async function startYoutubeImport(event){event.preventDefault();if(!youtubeInfo)
 function pollYoutubeImport(jobId){clearInterval(youtubePollTimer);$("#youtubeProgress").classList.remove("hidden");const check=async()=>{try{const response=await fetch(`/api/import/jobs/${jobId}`,{cache:'no-store'}),job=await response.json();if(!response.ok)throw new Error(job.error||'无法读取任务');setYoutubeProgress(job.progress||0,job.step||job.status,job.error||youtubeProgressMessage(job));if(job.status==='complete'||job.status==='failed'){clearInterval(youtubePollTimer);youtubePollTimer=null;forgetImportTracking("youtube");refreshPendingImportJobs();if(job.status==='complete'){setYoutubeProgress(100,'YouTube 导入完成','视频、字幕、音频、关键帧、词级时间轴和SQLite数据均已完成。');const data=await fetch('/api/library',{cache:'no-store'}).then(r=>r.json());libraryBooks=data.books||[];populateVideoSeriesOptions();setupSeriesSelector();renderLibrary();}else setYoutubeProgress(job.progress||0,'YouTube 导入失败',job.error||'任务失败');}}catch(error){clearInterval(youtubePollTimer);youtubePollTimer=null;setYoutubeProgress($("#youtubeBar").value,'进度查询失败',error.message);}};check();youtubePollTimer=setInterval(check,1000);}
 function youtubeProgressMessage(job){if((job.progress||0)<25)return '正在下载最高720p视频、英文字幕和缩略图。';return `YouTube下载已完成，正在复用视频处理流程：${job.progress||0}%`;}
 
-function showWordQuickTip(element,sentence){
-  clearTimeout(wordTipTimer); const rect=element.getBoundingClientRect();
-  selectedWordContext={element,sentence,wordIndex:+element.dataset.wordIndex,word:element.textContent,definition:getDefinition(element.textContent,sentence)};
-  const annotation=annotationIndex.get(wordRecordKey(sentence.id,selectedWordContext.wordIndex)),note=$("#wordTipAnnotation");
-  const annotationText=[annotation?.note,annotation?.corrected_word?`OCR：${annotation.original_word} → ${annotation.corrected_word}`:''].filter(Boolean).join(' · ');
-  note.textContent=annotationText;note.classList.toggle("hidden",!annotationText);
-  const tip=$("#wordQuickTip");tip.classList.remove("hidden"); tip.style.left=`${Math.min(innerWidth-tip.offsetWidth-12,Math.max(12,rect.left))}px`;tip.style.top=`${Math.max(12,rect.top-tip.offsetHeight-7)}px`;
-  scheduleWordTipHide();
-}
 function wordTarget(node){return node?.nodeType===1?node.closest?.(".word"):null;}
 function hideWordHoverMeaning(){
   clearTimeout(wordHoverMeaningTimer);wordHoverMeaningTimer=null;wordHoverMeaningElement=null;wordHoverMeaningRequestId++;
@@ -421,7 +428,7 @@ function hideWordHoverMeaning(){
 function positionWordHoverMeaning(element){
   const tip=$("#wordHoverMeaning"),rect=element.getBoundingClientRect();
   const left=Math.min(innerWidth-tip.offsetWidth-12,Math.max(12,rect.left+(rect.width-tip.offsetWidth)/2));
-  const below=rect.bottom+8,top=below+tip.offsetHeight<innerHeight-12?below:Math.max(12,rect.top-tip.offsetHeight-8);
+  const top=Math.max(12,rect.top-tip.offsetHeight-10);
   tip.style.left=`${left}px`;tip.style.top=`${top}px`;
 }
 function showWordHoverMeaning(element,entries){
@@ -528,16 +535,30 @@ function handleWordPointerOut(event){
   if(mode!=="intensive")return;
   const word=wordTarget(event.target),to=wordTarget(event.relatedTarget);
   if(word&&to!==word)hideWordHoverMeaning();
-  const movingToTip=event.relatedTarget?.nodeType===1 && event.relatedTarget.closest?.("#wordQuickTip,#wordInlineEditor");
-  if(!word||to===word||to||movingToTip)return;
+  if(!word||to===word||to)return;
   if(!pausedForWord&&!clickedWordPausedMain)return;
   scheduleWordResume();
 }
-function scheduleWordTipHide(){clearTimeout(wordTipTimer);wordTipTimer=setTimeout(()=>$("#wordQuickTip").classList.add("hidden"),wordTipSeconds*1000);}
-function handleWordTipAction(event){const action=event.target.closest("[data-word-action]")?.dataset.wordAction;if(!action||!selectedWordContext)return;clearTimeout(wordTipTimer);if(action==="vocab"){$("#wordQuickTip").classList.add("hidden");addSelectedWordToVocab();}else openWordEditor(action);}
-function openWordEditor(mode){cancelWordResume();wordEditMode=mode;const tip=$("#wordQuickTip"),editor=$("#wordInlineEditor"),rect=tip.getBoundingClientRect();$("#wordEditTitle").textContent=mode==="correct"?"订正 OCR":"添加备注";const input=$("#wordEditValue");input.placeholder=mode==="correct"?"输入正确单词":"输入简短备注";input.value=mode==="correct"?selectedWordContext.word:(selectedWordContext.note||"");tip.classList.add("hidden");editor.classList.remove("hidden");editor.style.left=`${Math.min(innerWidth-editor.offsetWidth-12,Math.max(12,rect.left))}px`;editor.style.top=`${Math.min(innerHeight-editor.offsetHeight-12,rect.bottom+6)}px`;setTimeout(()=>input.focus(),0);}
-function closeWordEditor(event){event?.preventDefault();$("#wordInlineEditor").classList.add("hidden");scheduleWordResume();}
-async function saveWordEdit(event){event.preventDefault();const value=$("#wordEditValue").value.trim();if(!value)return;const c=selectedWordContext;const payload={bookId:currentBookId,sentenceId:c.sentence.id,wordIndex:c.wordIndex};if(wordEditMode==="correct")payload.correctedWord=value;else payload.note=value;const response=await fetch("/api/word-annotation",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(response.ok){const result=await response.json();const key=wordRecordKey(c.sentence.id,c.wordIndex),existing=annotationIndex.get(key),record={book_id:currentBookId,sentence_id:c.sentence.id,word_index:c.wordIndex,original_word:result.originalWord,corrected_word:result.correctedWord,note:result.note};if(existing)Object.assign(existing,record);else wordAnnotations.push(record);annotationIndex.set(key,existing||record);if(wordEditMode==="note")selectedWordContext.note=value;closeWordEditor();if(wordEditMode==="correct"){await loadBook(currentBookId);const sentence=book.sentences.find(s=>s.id===c.sentence.id)||c.sentence;showWord(value,sentence,null);}else refreshWordMarks();}}
+function handleWordPanelAction(event){
+  const action=event.target.closest("[data-panel-word-action]")?.dataset.panelWordAction;
+  if(action){openWordEditor(action);return;}
+  const editAction=event.target.closest("[data-word-edit]")?.dataset.wordEdit;
+  if(editAction==="save")saveWordEdit(event);else if(editAction==="cancel")closeWordEditor(event);
+}
+function openWordEditor(mode){
+  if(!selectedWordContext||mode!=="note")return;const editor=$("#wordPanelEditor"),input=$("#wordPanelEditValue");
+  $("#wordPanelEditTitle").textContent="添加备注";
+  input.placeholder="输入简短备注";input.value=selectedWordContext.note||"";
+  editor.classList.remove("hidden");setTimeout(()=>input.focus(),0);
+}
+function closeWordEditor(event){event?.preventDefault();$("#wordPanelEditor")?.classList.add("hidden");}
+async function saveWordEdit(event){
+  event.preventDefault();const value=$("#wordPanelEditValue")?.value.trim();if(!value||!selectedWordContext)return;const c=selectedWordContext;
+  const payload={bookId:currentBookId,sentenceId:c.sentence.id,wordIndex:c.wordIndex,note:value};
+  const response=await fetch("/api/word-annotation",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(!response.ok)return;
+  const result=await response.json(),key=wordRecordKey(c.sentence.id,c.wordIndex),existing=annotationIndex.get(key),record={book_id:currentBookId,sentence_id:c.sentence.id,word_index:c.wordIndex,original_word:result.originalWord,corrected_word:result.correctedWord,note:result.note};
+  if(existing)Object.assign(existing,record);else wordAnnotations.push(record);annotationIndex.set(key,existing||record);c.note=value;closeWordEditor();refreshWordMarks();showWord(c.word,c.sentence,c.element);
+}
 async function addSelectedWordToVocab(){const c=selectedWordContext,d=c.definition;const payload={book_id:currentBookId,sentence_id:c.sentence.id,word_index:c.wordIndex,word:c.word,root:d.root,phonetic:d.phonetic,meaning:d.meaning,context:focusedWordContext(c.sentence.text,c.wordIndex),note:c.note||"",rating:"unknown",interval_days:1,due_at:new Date(Date.now()+86400000).toISOString()};const r=await fetch("/api/vocabulary",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(r.ok){vocabItems=(await r.json()).items||[];rebuildWordIndexes();refreshWordMarks();refreshDashboards();}}
 
 function setShelfView(view){shelfView=view;renderLibrary();savePreference({shelfView:view});}
@@ -571,7 +592,8 @@ function showScreen(id) {
   $(".book-heading").style.display = reading ? "block" : "none";
   $(".top-actions").style.display = reading ? "flex" : "none";
   $("#backBtn").style.visibility = reading ? "visible" : "hidden";
-  if (!reading) { resetWordHoverSession(); document.body.classList.remove("focus"); $("#audio").pause(); clearTimeout(shadowTimer); refreshDashboards(); }
+  if (!reading) { resetWordHoverSession(); setFocusMode(false); $("#audio").pause(); clearTimeout(shadowTimer); refreshDashboards(); }
+  else syncReaderPanels();
   if(id!=="vocab")stopManualDictation();
 }
 
@@ -590,8 +612,8 @@ function setMode(nextMode) {
   $$(".mode-switch button").forEach(button => button.classList.toggle("active", button.dataset.mode === mode));
   $("#reader").dataset.mode = mode;
   $("#shadowCoach").classList.toggle("hidden", mode !== "shadow");
-  $("#wordPanel").classList.toggle("hidden", mode !== "intensive");
-  $("#modeHint").textContent = mode === "intensive" ? "点击句子点读，点击单词查看语境释义。" : mode === "extensive" ? "隐藏查词干扰，连续听完整故事。" : "听一句，停下来模仿；可录音回放并检查文本匹配度。";
+  syncReaderPanels();
+  $("#modeHint").textContent = mode === "intensive" ? "点击句子点读，点击单词查看语境释义。" : mode === "extensive" ? "连续听完整故事，右侧保留最近查看的单词释义。" : "听一句，停下来模仿；右侧保留单词释义并可录音回放。";
   if (mode !== "shadow") { shadowWaiting = false; clearTimeout(shadowTimer); }
   logAction("modes", mode);
 }
@@ -712,6 +734,7 @@ async function showWord(raw, sentence, wordElement) {
   const selectedIndex=+(wordElement?.dataset.wordIndex??-1),key=wordRecordKey(sentence.id,selectedIndex);
   const annotation=annotationIndex.get(key);
   const saved = vocabWordIndex.get(key);
+  selectedWordContext={element:wordElement,sentence,wordIndex:selectedIndex,word:raw,definition,note:annotation?.note||""};
   const requestId=++wordRequestId;
   $("#wordPanel").innerHTML = `<div class="definition">
     <button class="speak" id="speakWord" title="播放接口发音">♪</button><span class="phonetic">${formatText(definition.phonetic)}</span><h2>${escapeHtml(raw)}</h2>
@@ -719,10 +742,13 @@ async function showWord(raw, sentence, wordElement) {
     ${contextBlockHtml(`IN THIS STORY · 第 ${sentence.page} 页`,highlightWord(sentence.text,raw),sentence.text)}
     <div id="remoteUsage" class="usage-note"><span class="loading-line">正在分析上下文用法…</span></div>
     <div id="remoteExamples" class="dict-examples"><span class="loading-line">正在加载例句…</span></div>
-    ${annotation?.note?`<div class="saved-word-note"><small>我的备注</small><p>${escapeHtml(annotation.note)}</p></div>`:""}
     <div class="rating"><small>${saved ? `当前：${ratingName(saved.rating)} · 下次 ${new Date(saved.due_at).toLocaleDateString("zh-CN")}` : "加入复习并评级"}</small>
       <div><button data-rating="known">认识</button><button data-rating="fuzzy">模糊</button><button data-rating="unknown">不认识</button></div>
-    </div></div>`;
+    </div>
+    <div class="word-panel-tools"><button type="button" data-panel-word-action="note">▤ 备注</button></div>
+    <div id="wordPanelEditor" class="word-panel-editor hidden"><b id="wordPanelEditTitle">编辑</b><input id="wordPanelEditValue" autocomplete="off"><div><button type="button" data-word-edit="cancel">取消</button><button type="button" data-word-edit="save">保存</button></div></div>
+    ${annotation?.note?`<div class="saved-word-note"><small>我的备注</small><p>${escapeHtml(annotation.note)}</p></div>`:""}
+    </div>`;
   $("#speakWord").onclick = () => playWordTts(raw);
   $$("#wordPanel [data-rating]").forEach(button => button.onclick = () => rateWord(raw, sentence, definition, button.dataset.rating, wordElement));
   const sentenceIndex=book.sentences.findIndex(item=>item.id===sentence.id);

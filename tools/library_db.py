@@ -140,6 +140,9 @@ def save_artifact(book_id,kind,data):
     db=connect(); db.execute("INSERT INTO book_artifacts(book_id,kind,data_json,created_at) VALUES(?,?,?,?) ON CONFLICT(book_id,kind) DO UPDATE SET data_json=excluded.data_json,created_at=excluded.created_at",
         (book_id,kind,json.dumps(data,ensure_ascii=False),now())); db.commit(); db.close()
 
+def delete_artifact(book_id,kind):
+    db=connect();db.execute("DELETE FROM book_artifacts WHERE book_id=? AND kind=?",(book_id,kind));db.commit();db.close()
+
 def save_dictionary(entries):
     stamp=now(); db=connect()
     db.executemany("INSERT INTO dictionary_entries(surface,entry_json,updated_at) VALUES(?,?,?) ON CONFLICT(surface) DO UPDATE SET entry_json=excluded.entry_json,updated_at=excluded.updated_at",

@@ -282,6 +282,19 @@ wav2vec2 CTC强制对齐
 SQLite
 ```
 
+字幕视频的导入策略：
+
+```text
+本地上传SRT/VTT         → 跳过Whisper → 字幕时间 → wav2vec2 CTC
+视频内嵌英文字幕        → 跳过Whisper → 字幕时间 → wav2vec2 CTC
+YouTube人工英文字幕     → 跳过Whisper → 字幕时间 → wav2vec2 CTC
+YouTube自动英文字幕     → Whisper校准 → wav2vec2 CTC
+没有可用英文字幕        → Whisper生成正文 → wav2vec2 CTC（有权威文本时）
+明确选择“只使用Whisper” → 忽略字幕并执行Whisper
+```
+
+字幕至少需要解析出3个有效英文字幕块，否则自动回退Whisper。跳过Whisper时会在任务步骤和质量数据中记录`whisperSkipped=true`，并清除旧的`whisper-dtw`归档。
+
 ### YouTube对齐链
 
 ```text
