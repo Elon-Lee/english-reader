@@ -58,6 +58,7 @@ let paintedSentenceIndex=-1;
 let youtubeInfo=null;
 let youtubePollTimer=null;
 let youtubeTitleManuallyEdited=false;
+let pendingDeleteBook=null;
 
 const STORE = {
   state: "shiyue-reader-state-v2",
@@ -174,7 +175,7 @@ function renderLibrary() {
   $("#shelfCount").textContent=`${visible.length} 本`; $("#shelfSeriesTitle").textContent=currentSeries||"全部书籍";
   $("#tileViewBtn").classList.toggle("active",shelfView==="tile"); $("#listViewBtn").classList.toggle("active",shelfView==="list");
   if(!visible.length){grid.innerHTML='<div class="empty-state"><h3>当前书系暂无已导入书籍</h3><p>请从“导入书籍”选择书籍。</p></div>';return;}
-  grid.innerHTML=visible.map(item=>`<article class="book-card" data-book-id="${escapeHtml(item.id)}" data-source-type="${escapeHtml(item.source_type||'book')}"><img src="${encodeURI(item.cover_url)}" alt="${escapeHtml(item.title)}封面"><div class="book-info"><span class="tag">LEVEL ${escapeHtml(item.level||"-")}</span><h3>${escapeHtml(item.title)}</h3><em>${escapeHtml(item.english_title||"")}</em><p>${escapeHtml(item.series)}</p><div class="progress"><i style="width:${bookProgress(item.id)}%"></i></div><small>${item.alignment.startsWith('whisper-')?'Whisper 词级点读':'本地点读'}</small></div><button class="round-play">▶</button></article>`).join("");
+  grid.innerHTML=visible.map(item=>`<article class="book-card" data-book-id="${escapeHtml(item.id)}" data-source-type="${escapeHtml(item.source_type||'book')}"><details class="book-actions"><summary title="书籍操作" aria-label="书籍操作"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4" r="1.6"></circle><circle cx="10" cy="10" r="1.6"></circle><circle cx="10" cy="16" r="1.6"></circle></svg></summary><div class="book-actions-menu"><button data-delete-book="${escapeHtml(item.id)}">删除书籍</button></div></details><img src="${encodeURI(item.cover_url)}" alt="${escapeHtml(item.title)}封面"><div class="book-info"><span class="tag">LEVEL ${escapeHtml(item.level||"-")}</span><h3>${escapeHtml(item.title)}</h3><em>${escapeHtml(item.english_title||"")}</em><p>${escapeHtml(item.series)}</p><div class="progress"><i style="width:${bookProgress(item.id)}%"></i></div><small>${item.alignment.startsWith('whisper-')?'Whisper 词级点读':'本地点读'}</small></div><button class="round-play">▶</button></article>`).join("");
 }
 function populateVideoSeriesOptions(){
   const history=[...new Set(libraryBooks.map(item=>(item.series||"").trim()).filter(Boolean).filter(name=>!name.includes("牛津")))].sort((left,right)=>left.localeCompare(right,"zh-CN"));
@@ -213,7 +214,12 @@ function applyWordMark(element,sentence,wordIndex){const annotation=wordAnnotati
 function refreshWordMarks(){book?.sentences.forEach((sentence,index)=>(wordElementsBySentence[index]||[]).forEach((element,wordIndex)=>applyWordMark(element,sentence,wordIndex)));}
 
 function bindEvents() {
-  $("#libraryGrid").onclick = async event => {const card=event.target.closest("[data-book-id]");if(!card)return;await loadBook(card.dataset.bookId);openReader();};
+  $("#libraryGrid").onclick = async event => {
+    const deleteButton=event.target.closest("[data-delete-book]");
+    if(deleteButton){event.preventDefault();event.stopPropagation();openDeleteBookDialog(deleteButton.dataset.deleteBook);return;}
+    if(event.target.closest(".book-actions"))return;
+    const card=event.target.closest("[data-book-id]");if(!card)return;await loadBook(card.dataset.bookId);openReader();
+  };
   $("#backBtn").onclick = () => showScreen("shelf");
   $$(".nav").forEach(button => button.onclick = () => showScreen(button.dataset.screen));
   $$(".mode-switch button").forEach(button => button.onclick = () => setMode(button.dataset.mode));
@@ -297,6 +303,29 @@ function bindEvents() {
   $("#closeWordEdit").onclick=closeWordEditor;$("#cancelWordEdit").onclick=closeWordEditor;
   $("#statsContent").onclick=event=>{const button=event.target.closest("[data-heatmap-range]");if(button)setHeatmapRange(button.dataset.heatmapRange);};
   $("#reviewContent").onclick=handleReviewClick;
+  $("#deleteBookConfirmInput").oninput=validateDeleteBookConfirmation;
+  $("#confirmDeleteBook").onclick=confirmDeleteBook;
+  $("#deleteBookDialog").addEventListener("close",resetDeleteBookDialog);
+  document.addEventListener("click",event=>{if(!event.target.closest(".book-actions"))$$(".book-actions[open]").forEach(menu=>menu.removeAttribute("open"));});
+}
+
+function openDeleteBookDialog(bookId){
+  pendingDeleteBook=libraryBooks.find(item=>item.id===bookId);if(!pendingDeleteBook)return;
+  $("#deleteBookTitle").textContent=pendingDeleteBook.title;$("#deleteBookConfirmInput").value="";$("#deleteBookConfirmInput").placeholder=pendingDeleteBook.title;
+  $("#deleteBookError").textContent="";$("#confirmDeleteBook").disabled=true;$("#deleteBookDialog").showModal();setTimeout(()=>$("#deleteBookConfirmInput").focus(),0);
+}
+function validateDeleteBookConfirmation(){$("#confirmDeleteBook").disabled=!pendingDeleteBook||$("#deleteBookConfirmInput").value.trim()!==pendingDeleteBook.title;$("#deleteBookError").textContent="";}
+function resetDeleteBookDialog(){pendingDeleteBook=null;$("#deleteBookConfirmInput").value="";$("#deleteBookError").textContent="";$("#confirmDeleteBook").disabled=true;}
+async function confirmDeleteBook(){
+  if(!pendingDeleteBook)return;const target={...pendingDeleteBook},button=$("#confirmDeleteBook");button.disabled=true;button.textContent="正在删除…";
+  try{
+    const response=await fetch(`/api/books/${encodeURIComponent(target.id)}/delete`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({confirmTitle:$("#deleteBookConfirmInput").value.trim()})});
+    const result=await response.json();if(!response.ok)throw new Error(result.error||"删除失败");
+    localStorage.removeItem(`${STORE.state}-${target.id}`);vocabItems=vocabItems.filter(item=>item.book_id!==target.id);libraryBooks=libraryBooks.filter(item=>item.id!==target.id);
+    if(currentBookId===target.id){$("#audio").pause();$("#audio").removeAttribute("src");$("#videoView").removeAttribute("src");book=null;currentBookId="";active=-1;wordAnnotations=[];}
+    $("#deleteBookDialog").close();setupSeriesSelector();populateVideoSeriesOptions();renderLibrary();await loadImportCatalog();showScreen("shelf");showReaderToast(`已永久删除《${target.title}》`);
+  }catch(error){$("#deleteBookError").textContent=error.message;button.disabled=false;}
+  finally{button.textContent="永久删除";}
 }
 
 function configureBookVisual(){const isVideo=book?.sourceType==="video"&&book.video;$("#visualSwitch").classList.toggle("hidden",!isVideo);$("#visualTitle").textContent=isVideo?"视频画面":"原书页";$("#videoView").src=isVideo?book.video:"";setVisualMode("frames");}

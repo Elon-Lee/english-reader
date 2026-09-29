@@ -21,7 +21,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from library_db import BOOKS_ROOT, add_daily, annotate_word, create_job, dictionary, get_book, get_job, get_settings as db_get_settings, learning_days, library, save_vocab, scan_catalog, set_settings, touch_book, update_vocab, vocabulary_list
+from library_db import BOOKS_ROOT, add_daily, annotate_word, create_job, delete_book, dictionary, get_book, get_job, get_settings as db_get_settings, learning_days, library, save_vocab, scan_catalog, set_settings, touch_book, update_vocab, vocabulary_list
 
 ROOT=Path(__file__).resolve().parents[1]
 READER=ROOT/"reader"
@@ -137,6 +137,7 @@ class Handler(SimpleHTTPRequestHandler):
                 remaining-=len(chunk)
         return True
     def do_POST(self):
+        if self.path.startswith("/api/books/") and self.path.endswith("/delete"): self.remove_book(); return
         if self.path == "/api/import/youtube/info": self.youtube_info(); return
         if self.path == "/api/import/youtube": self.start_youtube_import(); return
         if self.path == "/api/import/video/init": self.init_video_upload(); return
@@ -167,6 +168,14 @@ class Handler(SimpleHTTPRequestHandler):
                 self.reply({"text":text,"engine":"whisper.cpp","model":"base.en"})
         except Exception as exc:
             self.reply({"error":str(exc)},500)
+    def remove_book(self):
+        parts=self.path.split("/")
+        if len(parts)<5:self.reply({"error":"invalid book id"},400);return
+        book_id=unquote(parts[3])
+        try:item=self.json_body();confirmed=str(item.get("confirmTitle","")).strip();result=delete_book(book_id,confirmed)
+        except ValueError as exc:self.reply({"error":str(exc)},400);return
+        except Exception as exc:self.reply({"error":f"删除失败：{exc}"},500);return
+        self.reply({"status":"deleted","book":result})
     def start_import(self):
         length=int(self.headers.get("Content-Length","0"))
         try: incoming=json.loads(self.rfile.read(length))

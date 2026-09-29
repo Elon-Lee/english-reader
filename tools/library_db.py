@@ -2,8 +2,10 @@
 import json
 import re
 import sqlite3
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import unquote
 
 ROOT=Path(__file__).resolve().parents[1]
 BOOKS_ROOT=ROOT/"books"
@@ -202,6 +204,75 @@ def get_book(book_id):
     if not row: return None
     result=dict(row); result["book"]=json.loads(result.pop("data_json")); result["quality"]=json.loads(result.pop("quality_json") or "{}"); result["annotations"]=annotations
     return result
+
+def delete_book(book_id,confirmed_title):
+    """Delete one imported title and its private media tree with rollback protection."""
+    db=connect(); row=db.execute("SELECT * FROM books WHERE id=?",(book_id,)).fetchone()
+    if not row: db.close(); raise ValueError("book not found")
+    if str(confirmed_title).strip()!=row["title"]: db.close(); raise ValueError("书名确认不匹配")
+    source=(BOOKS_ROOT/row["source_path"]).resolve()
+    try: source.relative_to(BOOKS_ROOT.resolve())
+    except ValueError: db.close(); raise ValueError("资源路径越界，拒绝删除")
+    if source==BOOKS_ROOT.resolve() or len(source.relative_to(BOOKS_ROOT.resolve()).parts)<2:
+        db.close(); raise ValueError("资源目录范围过大，拒绝删除")
+    if not source.is_dir():
+        db.close(); raise ValueError("资源目录不存在；请先人工核对数据库路径")
+    book=json.loads(row["data_json"])
+    candidates={source}
+    urls=[row["cover_url"],row["page_base_url"],row["audio_url"],row["pdf_url"],row["video_url"],
+          book.get("pageBase",""),book.get("audio",""),book.get("pdf",""),book.get("video","")]
+    for url in urls:
+        if not isinstance(url,str) or not url.startswith("/books/"): continue
+        target=(BOOKS_ROOT/unquote(url[len("/books/"):])).resolve()
+        try: relative=target.relative_to(BOOKS_ROOT.resolve())
+        except ValueError: db.close(); raise ValueError("关联资源路径越界，拒绝删除")
+        if not relative.parts or len(relative.parts)<2: continue
+        if target==source or source in target.parents: continue
+        # Migrated books may keep generated pages in books/.reader/<book-id>/.
+        if relative.parts[0]==".reader" and len(relative.parts)>=2:
+            candidates.add((BOOKS_ROOT/relative.parts[0]/relative.parts[1]).resolve())
+        elif target.exists(): candidates.add(target)
+    # Remove descendants when their parent is already staged.
+    targets=[]
+    for candidate in sorted(candidates,key=lambda path:len(path.parts)):
+        if not any(parent==candidate or parent in candidate.parents for parent in targets): targets.append(candidate)
+    job_ids=[item[0] for item in db.execute("SELECT id FROM import_jobs WHERE book_id=? OR source_path=?",(book_id,row["source_path"])).fetchall()]
+    trash_root=LOCAL_ROOT/"delete-staging"; trash_root.mkdir(parents=True,exist_ok=True)
+    staging=trash_root/f"{book_id}-{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+    staging.mkdir(); moved=[]
+    for index,target in enumerate(targets):
+        if not target.exists() and not target.is_symlink(): continue
+        destination=staging/str(index); shutil.move(str(target),str(destination)); moved.append((destination,target))
+    try:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("DELETE FROM vocabulary WHERE book_id=?",(book_id,))
+        db.execute("DELETE FROM word_annotations WHERE book_id=?",(book_id,))
+        db.execute("DELETE FROM book_artifacts WHERE book_id=?",(book_id,))
+        db.execute("DELETE FROM import_jobs WHERE book_id=? OR source_path=?",(book_id,row["source_path"]))
+        db.execute("DELETE FROM books WHERE id=?",(book_id,))
+        db.commit()
+    except Exception:
+        db.rollback()
+        for staged,original in reversed(moved):
+            if staged.exists() and not original.exists(): original.parent.mkdir(parents=True,exist_ok=True); shutil.move(str(staged),str(original))
+        db.close(); raise
+    db.close()
+    shutil.rmtree(staging)
+    log_names=[]
+    for job_id in job_ids:
+        log_names += [f"import-{job_id}.log",f"whisper-{job_id}.log",f"video-import-{job_id}.log",f"video-whisper-{job_id}.log",
+                      f"youtube-{job_id}.log",f"youtube-import-{job_id}.log"]
+    log_names += [f"ctc-{book_id}.log",f"dtw-{book_id}.log"]
+    for name in log_names:
+        path=LOCAL_ROOT/name
+        try: path.unlink(missing_ok=True)
+        except OSError: pass
+    # Remove now-empty series directory, but never the books root.
+    try:
+        parent=source.parent
+        if parent!=BOOKS_ROOT.resolve() and not any(parent.iterdir()): parent.rmdir()
+    except OSError: pass
+    return {"id":row["id"],"title":row["title"],"sourcePath":row["source_path"],"removedTargets":len(moved)}
 
 def create_job(source_path):
     stamp=now(); db=connect(); cur=db.execute("INSERT INTO import_jobs(source_path,status,progress,step,created_at,updated_at) VALUES(?,?,?,?,?,?)",

@@ -4,11 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
-  <link rel="stylesheet" href="styles.css?v=20260929-4">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css?v=20260929-7">
 </head>
 <body>
   <aside class="sidebar">
-    <div class="brand"><span class="brand-mark">拾</span><div><b>拾页</b><small>LOCAL READER</small></div></div>
+    <div class="brand"><img class="brand-mark" src="shiyue-mark.svg" alt="拾页图标"><div><b>拾页</b><small>LOCAL READER</small></div></div>
     <nav>
       <button class="nav active" data-screen="shelf">⌂ <span>我的书架</span></button>
       <button class="nav" data-screen="stats">◎ <span>学习记录</span></button>
@@ -131,6 +132,15 @@
     <div class="inline-editor-head"><b id="wordEditTitle">编辑</b><button id="closeWordEdit">×</button></div>
     <input id="wordEditValue" autocomplete="off"><div class="inline-editor-actions"><button id="cancelWordEdit">取消</button><button id="saveWordEdit">保存</button></div>
   </div>
-  <script src="app.js?v=20260929-4"></script>
+  <dialog id="deleteBookDialog" class="delete-book-dialog">
+    <form method="dialog">
+      <div class="delete-dialog-head"><div><small>PERMANENT DELETE</small><h2>删除《<span id="deleteBookTitle"></span>》？</h2></div><button value="cancel" aria-label="关闭">×</button></div>
+      <div class="delete-warning"><b>此操作不可恢复</b><p>将永久删除原始PDF、MP3、MP4、字幕、生成页面、正文与时间轴、Whisper/CTC归档、生词、备注、OCR订正和相关导入记录。</p></div>
+      <label>输入完整书名确认删除<input id="deleteBookConfirmInput" autocomplete="off"></label>
+      <p id="deleteBookError" class="delete-error"></p>
+      <div class="delete-dialog-actions"><button value="cancel">取消</button><button id="confirmDeleteBook" type="button" disabled>永久删除</button></div>
+    </form>
+  </dialog>
+  <script src="app.js?v=20260929-7"></script>
 </body>
 </html>
