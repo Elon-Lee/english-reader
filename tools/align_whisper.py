@@ -117,7 +117,14 @@ def main():
     book=json.loads(args.book.read_text())
     transcript=json.loads(args.whisper.read_text())
     canonical=canonical_words(book); heard=whisper_words(transcript)
-    matcher=SequenceMatcher(None,[x["norm"] for x in canonical],[x["norm"] for x in heard],autojunk=False)
+    maximum_possible=min(len(canonical),len(heard))/max(1,len(canonical))
+    if maximum_possible < args.min_match:
+        raise SystemExit(f"Alignment rejected before matching: {len(canonical)} canonical words vs {len(heard)} transcribed words; maximum possible match {maximum_possible:.1%} is below {args.min_match:.0%}")
+    # Disabling autojunk on book-length token sequences makes common words create
+    # near-quadratic candidate sets. Long books use anchor-oriented matching;
+    # matching blocks still include common words once rarer anchors are found.
+    use_autojunk=max(len(canonical),len(heard))>=12000
+    matcher=SequenceMatcher(None,[x["norm"] for x in canonical],[x["norm"] for x in heard],autojunk=use_autojunk)
     mapping={}
     direct=0
     for block in matcher.get_matching_blocks():
@@ -154,6 +161,7 @@ def main():
     report={"engine":"whisper.cpp","model":args.model,"canonicalWords":len(canonical),
             "transcribedWords":len(heard),"directMatches":direct,"directMatchRate":round(ratio,4),
             "estimatedWords":len(canonical)-direct,"timestampMethod":"dtw","normalization":normalization,
+            "largeBookOptimization":use_autojunk,
             "firstSpeechWord":heard[0] if heard else None,"lastSpeechWord":heard[-1] if heard else None}
     if args.report: args.report.write_text(json.dumps(report,ensure_ascii=False,indent=2))
     quality_path=output.with_name("quality-report.json")

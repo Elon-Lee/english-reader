@@ -6,12 +6,14 @@ import hashlib
 import mimetypes
 import os
 import re
+import signal
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 from html.parser import HTMLParser
 from urllib.error import HTTPError, URLError
@@ -21,7 +23,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from library_db import BOOKS_ROOT, add_daily, annotate_word, create_job, delete_book, dictionary, get_book, get_job, get_settings as db_get_settings, learning_days, library, save_vocab, scan_catalog, set_settings, touch_book, update_vocab, vocabulary_list
+from library_db import BOOKS_ROOT, active_import_jobs, add_daily, annotate_word, create_job, delete_book, delete_import_jobs, dictionary, get_book, get_job, get_settings as db_get_settings, import_duplicates, imported_books, learning_days, library, mark_import_jobs_cancelling, pending_import_jobs, save_vocab, scan_catalog, set_settings, touch_book, update_job, update_vocab, vocabulary_list
 
 ROOT=Path(__file__).resolve().parents[1]
 READER=ROOT/"reader"
@@ -45,6 +47,59 @@ UPSTREAM_HEADERS={
     "User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/153.0 Safari/537.36",
 }
 IMPORT_LOCK=threading.Lock()
+ACTIVE_IMPORT_PROCESSES={}
+ACTIVE_PROCESS_LOCK=threading.Lock()
+
+def run_import_process(job_id,command,log_path):
+    job=get_job(job_id)
+    if not job or job["status"] not in {"queued","running"}:return
+    log_path.parent.mkdir(parents=True,exist_ok=True)
+    with log_path.open("w") as output:
+        process=subprocess.Popen([str(item) for item in command],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT,start_new_session=True)
+        with ACTIVE_PROCESS_LOCK:ACTIVE_IMPORT_PROCESSES[job_id]=process
+        update_job(job_id,pid=process.pid)
+        try:process.wait()
+        finally:
+            with ACTIVE_PROCESS_LOCK:ACTIVE_IMPORT_PROCESSES.pop(job_id,None)
+
+def process_tree_for_jobs(job_ids):
+    targets={int(job_id) for job_id in job_ids};roots=set()
+    with ACTIVE_PROCESS_LOCK:
+        roots.update(process.pid for job_id,process in ACTIVE_IMPORT_PROCESSES.items() if job_id in targets and process.poll() is None)
+    for job_id in targets:
+        job=get_job(job_id)
+        if job and job.get("pid"):roots.add(int(job["pid"]))
+    try:lines=subprocess.check_output(["ps","-ax","-o","pid=,ppid=,command="],text=True).splitlines()
+    except Exception:lines=[]
+    children={};commands={}
+    for line in lines:
+        match=re.match(r"\s*(\d+)\s+(\d+)\s+(.*)",line)
+        if not match:continue
+        pid,ppid,command=int(match.group(1)),int(match.group(2)),match.group(3);children.setdefault(ppid,[]).append(pid);commands[pid]=command
+        if any(re.search(rf"import_(?:video_|youtube_)?worker\.py\s+{job_id}(?:\s|$)",command) for job_id in targets):roots.add(pid)
+    result=set(roots);stack=list(roots)
+    while stack:
+        for child in children.get(stack.pop(),[]):
+            if child not in result:result.add(child);stack.append(child)
+    return result
+
+def terminate_processes(pids):
+    pids={pid for pid in pids if pid>1 and pid!=os.getpid()}
+    for pid in sorted(pids,reverse=True):
+        try:os.kill(pid,signal.SIGTERM)
+        except ProcessLookupError:pass
+    deadline=time.time()+3
+    while pids and time.time()<deadline:
+        pids={pid for pid in pids if _process_exists(pid)}
+        if pids:time.sleep(.1)
+    for pid in sorted(pids,reverse=True):
+        try:os.kill(pid,signal.SIGKILL)
+        except ProcessLookupError:pass
+
+def _process_exists(pid):
+    try:os.kill(pid,0);return True
+    except ProcessLookupError:return False
+    except PermissionError:return True
 
 class TextExtractor(HTMLParser):
     def __init__(self): super().__init__(); self.parts=[]
@@ -90,6 +145,7 @@ class Handler(SimpleHTTPRequestHandler):
         if route.path == "/api/local-dictionary": self.reply(dictionary()); return
         if route.path == "/api/import/catalog": self.reply({"series":scan_catalog()}); return
         if route.path == "/api/import/cover": self.import_cover(parse_qs(route.query)); return
+        if route.path == "/api/import/jobs": self.reply({"jobs":active_import_jobs(),"pendingJobs":pending_import_jobs()}); return
         if route.path.startswith("/api/import/jobs/"):
             try: job=get_job(int(route.path.rsplit("/",1)[1]))
             except ValueError: job=None
@@ -138,6 +194,7 @@ class Handler(SimpleHTTPRequestHandler):
         return True
     def do_POST(self):
         if self.path.startswith("/api/books/") and self.path.endswith("/delete"): self.remove_book(); return
+        if self.path == "/api/import/jobs/cancel-active": self.cancel_active_imports(); return
         if self.path == "/api/import/youtube/info": self.youtube_info(); return
         if self.path == "/api/import/youtube": self.start_youtube_import(); return
         if self.path == "/api/import/video/init": self.init_video_upload(); return
@@ -176,6 +233,29 @@ class Handler(SimpleHTTPRequestHandler):
         except ValueError as exc:self.reply({"error":str(exc)},400);return
         except Exception as exc:self.reply({"error":f"删除失败：{exc}"},500);return
         self.reply({"status":"deleted","book":result})
+    def cancel_active_imports(self):
+        try:item=self.json_body()
+        except Exception:self.reply({"error":"invalid json"},400);return
+        if not isinstance(item,dict) or item.get("confirm") is not True:self.reply({"error":"需要确认中断并删除任务"},400);return
+        jobs=pending_import_jobs();job_ids=[job["id"] for job in jobs]
+        if not job_ids:self.reply({"status":"empty","removed":0,"jobs":[]});return
+        mark_import_jobs_cancelling(job_ids)
+        pids=process_tree_for_jobs(job_ids);terminate_processes(pids)
+        cleaned=[]
+        for job in jobs:
+            source_path=job["source_path"];preserved=bool(imported_books([source_path]));removed=[]
+            try:
+                source=(BOOKS_ROOT/source_path).resolve();source.relative_to(BOOKS_ROOT.resolve())
+                if source.is_dir() and not preserved:
+                    target=source if job.get("kind") in {"video","youtube"} else source/".reader"
+                    if target.exists():shutil.rmtree(target);removed.append(str(target.relative_to(ROOT)))
+            except (ValueError,OSError):pass
+            for prefix in ("import","whisper","video-import","video-whisper","youtube","youtube-import"):
+                try:(ROOT/".local"/f"{prefix}-{job['id']}.log").unlink(missing_ok=True)
+                except OSError:pass
+            cleaned.append({"id":job["id"],"sourcePath":source_path,"preservedImportedBook":preserved,"removed":removed})
+        delete_import_jobs(job_ids)
+        self.reply({"status":"cancelled","removed":len(job_ids),"killedPids":sorted(pids),"jobs":cleaned})
     def start_import(self):
         length=int(self.headers.get("Content-Length","0"))
         try: incoming=json.loads(self.rfile.read(length))
@@ -185,7 +265,10 @@ class Handler(SimpleHTTPRequestHandler):
             source=(BOOKS_ROOT/relative).resolve(); source.relative_to(BOOKS_ROOT.resolve())
         except Exception: self.reply({"error":"invalid book path"},400); return
         if not source.is_dir(): self.reply({"error":"book not found"},404); return
-        job_id=create_job(relative)
+        duplicates=imported_books([relative])
+        if duplicates and not incoming.get("allowReimport"):
+            self.reply({"error":"该书已经导入","code":"duplicate_import","duplicates":duplicates},409);return
+        job_id=create_job(relative,"books")
         threading.Thread(target=self.run_import_queue,args=([(job_id,relative)],),daemon=True).start()
         self.reply({"jobId":job_id,"status":"queued"},202)
     def start_batch_import(self):
@@ -193,20 +276,27 @@ class Handler(SimpleHTTPRequestHandler):
         try: incoming=json.loads(self.rfile.read(length)); paths=incoming.get("paths",[])
         except Exception: self.reply({"error":"invalid json"},400); return
         if not isinstance(paths,list) or not paths or len(paths)>151: self.reply({"error":"请选择1至151本书"},400); return
-        queue=[]
+        duplicates=imported_books(paths)
+        if duplicates and not incoming.get("allowReimport"):
+            self.reply({"error":"所选书籍中包含已经导入的内容","code":"duplicate_import","duplicates":duplicates},409);return
+        queue=[];batch_id=uuid.uuid4().hex
         for value in paths:
             relative=str(value).strip()
             try: source=(BOOKS_ROOT/relative).resolve(); source.relative_to(BOOKS_ROOT.resolve())
             except Exception: self.reply({"error":f"invalid book path: {relative}"},400); return
             if not source.is_dir(): self.reply({"error":f"book not found: {relative}"},404); return
-            queue.append((create_job(relative),relative))
+            queue.append((create_job(relative,"books",batch_id),relative))
         threading.Thread(target=self.run_import_queue,args=(queue,),daemon=True).start()
         self.reply({"jobIds":[job_id for job_id,_ in queue],"status":"queued","mode":"sequential"},202)
     def init_video_upload(self):
         try:item=self.json_body()
         except Exception:self.reply({"error":"invalid json"},400);return
+        if not isinstance(item,dict):self.reply({"error":"invalid json"},400);return
         title=str(item.get("title","")).strip();series=str(item.get("series","")).strip() or "视频课程"
         if not title:self.reply({"error":"请输入视频标题"},400);return
+        duplicates=import_duplicates(title,series,"video")
+        if duplicates and not item.get("allowReimport"):
+            self.reply({"error":"该视频已经导入","code":"duplicate_import","duplicates":duplicates},409);return
         upload_id=uuid.uuid4().hex;folder=VIDEO_UPLOADS/upload_id;folder.mkdir(parents=True)
         metadata={"title":title,"englishTitle":str(item.get("englishTitle","")).strip(),"series":series,"level":str(item.get("level","")).strip(),
                   "subtitleStrategy":str(item.get("subtitleStrategy","auto")),"videoFilename":str(item.get("videoFilename","source.mp4")),"subtitleFilename":str(item.get("subtitleFilename",""))}
@@ -234,12 +324,15 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception:self.reply({"error":"invalid json"},400);return
         if not self.valid_youtube_url(url):self.reply({"error":"请输入有效的 YouTube 地址"},400);return
         if not title or not series:self.reply({"error":"标题和标签不能为空"},400);return
+        duplicates=import_duplicates(title,series,"youtube",str(item.get("videoId","")).strip())
+        if duplicates and not item.get("allowReimport"):
+            self.reply({"error":"该 YouTube 视频已经导入","code":"duplicate_import","duplicates":duplicates},409);return
         request_id=uuid.uuid4().hex; request_file=ROOT/".local"/f"youtube-request-{request_id}.json"; request_file.write_text(json.dumps(item,ensure_ascii=False,indent=2))
-        job_id=create_job(f"youtube:{item.get('videoId','') or request_id[:8]}")
+        job_id=create_job(f"youtube:{item.get('videoId','') or request_id[:8]}","youtube")
         def launch():
             with IMPORT_LOCK:
-                log=ROOT/".local"/f"youtube-import-{job_id}.log"
-                with log.open("w") as output:subprocess.run([sys.executable,str(ROOT/"tools/import_youtube_worker.py"),str(job_id),request_file],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
+                try:run_import_process(job_id,[sys.executable,ROOT/"tools/import_youtube_worker.py",job_id,request_file],ROOT/".local"/f"youtube-import-{job_id}.log")
+                finally:request_file.unlink(missing_ok=True)
         threading.Thread(target=launch,daemon=True).start();self.reply({"jobId":job_id,"status":"queued"},202)
     def upload_video_part(self):
         upload_id=self.path.split("/api/import/video/upload/",1)[1].split("?",1)[0]
@@ -277,18 +370,15 @@ class Handler(SimpleHTTPRequestHandler):
         subtitle=next(iter(folder.glob("subtitles.*")),None)
         if subtitle:shutil.move(str(subtitle),destination/("subtitles"+subtitle.suffix.lower()))
         (destination/".video-import.json").write_text(json.dumps(metadata,ensure_ascii=False,indent=2));shutil.rmtree(folder)
-        job_id=create_job(relative);threading.Thread(target=self.run_video_import_queue,args=([(job_id,relative)],),daemon=True).start();self.reply({"jobId":job_id,"status":"queued"},202)
+        job_id=create_job(relative,"video");threading.Thread(target=self.run_video_import_queue,args=([(job_id,relative)],),daemon=True).start();self.reply({"jobId":job_id,"status":"queued"},202)
     def run_import_queue(self,queue):
         with IMPORT_LOCK:
             for job_id,relative in queue:
-                log=ROOT/".local"/f"import-{job_id}.log"; log.parent.mkdir(parents=True,exist_ok=True)
-                with log.open("w") as output:
-                    subprocess.run([sys.executable,str(ROOT/"tools/import_worker.py"),str(job_id),relative],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
+                run_import_process(job_id,[sys.executable,ROOT/"tools/import_worker.py",job_id,relative],ROOT/".local"/f"import-{job_id}.log")
     def run_video_import_queue(self,queue):
         with IMPORT_LOCK:
             for job_id,relative in queue:
-                log=ROOT/".local"/f"video-import-{job_id}.log"
-                with log.open("w") as output:subprocess.run([sys.executable,str(ROOT/"tools/import_video_worker.py"),str(job_id),relative],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
+                run_import_process(job_id,[sys.executable,ROOT/"tools/import_video_worker.py",job_id,relative],ROOT/".local"/f"video-import-{job_id}.log")
     def serve_books_file(self,url_path):
         relative=unquote(url_path.split("/books/",1)[1]); path=(BOOKS_ROOT/relative).resolve()
         try: path.relative_to(BOOKS_ROOT.resolve())
@@ -476,6 +566,13 @@ class Handler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     os.chdir(READER)
+    existing=[job for job in active_import_jobs() if job["status"]=="running"]
+    if existing:
+        IMPORT_LOCK.acquire()
+        def release_import_lock():
+            while any(job["status"]=="running" for job in active_import_jobs()):time.sleep(2)
+            IMPORT_LOCK.release()
+        threading.Thread(target=release_import_lock,daemon=True).start()
     host=os.environ.get("READER_HOST","0.0.0.0")
     port=int(os.environ.get("READER_PORT","8765"))
     server=ThreadingHTTPServer((host,port),Handler)

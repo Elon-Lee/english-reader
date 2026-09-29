@@ -3,7 +3,7 @@ import json
 import re
 import sqlite3
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -66,6 +66,10 @@ def connect():
     if "source_type" not in columns: db.execute("ALTER TABLE books ADD COLUMN source_type TEXT NOT NULL DEFAULT 'book'")
     if "video_url" not in columns: db.execute("ALTER TABLE books ADD COLUMN video_url TEXT DEFAULT ''")
     if "subtitle_type" not in columns: db.execute("ALTER TABLE books ADD COLUMN subtitle_type TEXT DEFAULT ''")
+    job_columns={row[1] for row in db.execute("PRAGMA table_info(import_jobs)")}
+    if "kind" not in job_columns: db.execute("ALTER TABLE import_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'books'")
+    if "batch_id" not in job_columns: db.execute("ALTER TABLE import_jobs ADD COLUMN batch_id TEXT NOT NULL DEFAULT ''")
+    if "pid" not in job_columns: db.execute("ALTER TABLE import_jobs ADD COLUMN pid INTEGER")
     db.commit()
     return db
 
@@ -95,6 +99,25 @@ def scan_catalog():
                           "coverUrl":found["cover"] if found else "/api/import/cover?path="+__import__("urllib.parse").parse.quote(relative)})
         series.append({"name":series_dir.name,"books":books})
     return series
+
+def imported_books(source_paths):
+    paths=[str(path) for path in source_paths if str(path)]
+    if not paths:return []
+    marks=",".join("?" for _ in paths);db=connect()
+    rows=db.execute(f"SELECT id,title,source_path FROM books WHERE source_path IN ({marks})",paths).fetchall();db.close()
+    by_path={row["source_path"]:dict(row) for row in rows}
+    return [by_path[path] for path in paths if path in by_path]
+
+def import_duplicates(title,series="",source_type="",external_id=""):
+    normalized_title=" ".join(str(title).split()).casefold();normalized_series=str(series).strip().casefold()
+    db=connect();rows=db.execute("SELECT id,title,series,source_path,source_type,data_json FROM books").fetchall();db.close();matches=[]
+    for row in rows:
+        if source_type and row["source_type"]!=source_type:continue
+        data=json.loads(row["data_json"] or "{}")
+        same_external=bool(external_id) and str(data.get("externalId") or data.get("youtubeId") or "")==str(external_id)
+        same_title=" ".join(row["title"].split()).casefold()==normalized_title and (not normalized_series or row["series"].strip().casefold()==normalized_series)
+        if same_external or same_title:matches.append({"id":row["id"],"title":row["title"],"source_path":row["source_path"]})
+    return matches
 
 def upsert_book(book,quality,source_path,series,page_base_url,cover_url):
     stamp=now(); db=connect()
@@ -274,9 +297,11 @@ def delete_book(book_id,confirmed_title):
     except OSError: pass
     return {"id":row["id"],"title":row["title"],"sourcePath":row["source_path"],"removedTargets":len(moved)}
 
-def create_job(source_path):
-    stamp=now(); db=connect(); cur=db.execute("INSERT INTO import_jobs(source_path,status,progress,step,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-        (source_path,"queued",0,"等待开始",stamp,stamp)); db.commit(); job_id=cur.lastrowid; db.close(); return job_id
+def create_job(source_path,kind="books",batch_id=""):
+    stamp=now(); db=connect(); cur=db.execute(
+        "INSERT INTO import_jobs(source_path,status,progress,step,created_at,updated_at,kind,batch_id) VALUES(?,?,?,?,?,?,?,?)",
+        (source_path,"queued",0,"等待开始",stamp,stamp,kind,batch_id),
+    ); db.commit(); job_id=cur.lastrowid; db.close(); return job_id
 
 def update_job(job_id,**values):
     values["updated_at"]=now(); fields=",".join(f"{key}=?" for key in values); params=list(values.values())+[job_id]
@@ -284,3 +309,38 @@ def update_job(job_id,**values):
 
 def get_job(job_id):
     db=connect(); row=db.execute("SELECT * FROM import_jobs WHERE id=?",(job_id,)).fetchone(); db.close(); return dict(row) if row else None
+
+def pending_import_jobs():
+    cutoff=datetime.now(timezone.utc).astimezone()-timedelta(hours=24);db=connect()
+    rows=db.execute("SELECT * FROM import_jobs WHERE status IN ('queued','running','cancelling') ORDER BY id").fetchall();db.close()
+    return [dict(row) for row in rows if datetime.fromisoformat(row["updated_at"])>=cutoff]
+
+def mark_import_jobs_cancelling(job_ids):
+    ids=[int(job_id) for job_id in job_ids]
+    if not ids:return
+    marks=",".join("?" for _ in ids);db=connect()
+    db.execute(f"UPDATE import_jobs SET status='cancelling',step='正在中断并清理',updated_at=? WHERE id IN ({marks})",[now(),*ids]);db.commit();db.close()
+
+def delete_import_jobs(job_ids):
+    ids=[int(job_id) for job_id in job_ids]
+    if not ids:return
+    marks=",".join("?" for _ in ids);db=connect();db.execute(f"DELETE FROM import_jobs WHERE id IN ({marks})",ids);db.commit();db.close()
+
+def active_import_jobs():
+    db=connect()
+    cutoff=datetime.now(timezone.utc).astimezone()-timedelta(hours=24)
+    active_rows=db.execute("SELECT * FROM import_jobs WHERE status IN ('queued','running') ORDER BY id").fetchall()
+    active_rows=[row for row in active_rows if datetime.fromisoformat(row["updated_at"])>=cutoff]
+    active_ids={row["id"] for row in active_rows}
+    active_batches=sorted({row["batch_id"] for row in active_rows if row["batch_id"]})
+    if active_batches:
+        marks=",".join("?" for _ in active_batches)
+        batch_rows=db.execute(
+            f"SELECT * FROM import_jobs WHERE batch_id IN ({marks}) ORDER BY id",
+            active_batches,
+        ).fetchall()
+        rows=list(batch_rows)+[row for row in active_rows if not row["batch_id"]]
+    else:
+        rows=active_rows
+    db.close()
+    return [dict(row) for row in sorted({row["id"]:row for row in rows}.values(),key=lambda row:row["id"])]

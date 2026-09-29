@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20260929-7">
+  <link rel="stylesheet" href="styles.css?v=20260929-14">
 </head>
 <body>
   <aside class="sidebar">
@@ -39,6 +39,7 @@
     <section id="import" class="screen dashboard hidden">
       <div class="page-title"><small>CONTENT IMPORTER</small><h1>导入内容</h1><p>支持目录书籍和外部MP4视频。</p></div>
       <div class="import-type-tabs"><button data-import-type="books" class="active">目录书籍</button><button data-import-type="video">视频文件</button><button data-import-type="youtube">YouTube 地址</button></div>
+      <div id="activeImportActions" class="active-import-actions hidden"><div><b id="activeImportTitle">后台正在处理导入任务</b><small id="activeImportHint">可以关闭或刷新页面，任务会继续执行。</small></div><button id="cancelActiveImports" type="button">中断并删除任务</button></div>
       <div id="booksImportPane" class="panel import-panel">
         <label>系列<select id="importSeries"><option>正在扫描…</option></select></label>
         <div class="import-actions"><button id="selectAllBooks" type="button">全选未导入</button><button id="clearBooks" type="button">清空选择</button><button id="startBatchImport" type="button" disabled>按顺序导入所选书籍</button></div>
@@ -141,6 +142,23 @@
       <div class="delete-dialog-actions"><button value="cancel">取消</button><button id="confirmDeleteBook" type="button" disabled>永久删除</button></div>
     </form>
   </dialog>
-  <script src="app.js?v=20260929-7"></script>
+  <dialog id="reimportDialog" class="reimport-dialog">
+    <form method="dialog">
+      <div class="reimport-dialog-head"><div><small>REIMPORT CONFIRMATION</small><h2>确认重复导入？</h2></div><button value="cancel" aria-label="关闭">×</button></div>
+      <div class="reimport-warning"><b>以下内容已经导入</b><p>重复导入会再次执行音频处理、Whisper 识别和词级对齐，占用较多时间与计算资源。</p></div>
+      <div id="reimportList" class="reimport-list"></div>
+      <div class="reimport-dialog-actions"><button value="cancel">取消</button><button value="confirm">仍然重新导入</button></div>
+    </form>
+  </dialog>
+  <dialog id="cancelImportDialog" class="cancel-import-dialog">
+    <form method="dialog">
+      <div class="cancel-import-dialog-head"><div><small>STOP IMPORT TASKS</small><h2>中断并删除导入任务？</h2></div><button value="cancel" aria-label="关闭">×</button></div>
+      <div class="cancel-import-warning"><b>正在执行的识别会立即停止</b><p>将停止 Whisper、对齐和导入进程，删除运行中与排队中的任务记录，并清理未完成的生成文件。原始 PDF、MP3、MP4 和字幕不会删除，已完成导入的书籍也会保留。</p></div>
+      <div id="cancelImportList" class="cancel-import-list"></div>
+      <p id="cancelImportError" class="delete-error"></p>
+      <div class="cancel-import-dialog-actions"><button value="cancel">继续当前任务</button><button id="confirmCancelImports" type="button">中断并删除</button></div>
+    </form>
+  </dialog>
+  <script src="app.js?v=20260929-14"></script>
 </body>
 </html>
