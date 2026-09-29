@@ -614,6 +614,7 @@ function setMode(nextMode) {
   $("#shadowCoach").classList.toggle("hidden", mode !== "shadow");
   syncReaderPanels();
   $("#modeHint").textContent = mode === "intensive" ? "点击句子点读，点击单词查看语境释义。" : mode === "extensive" ? "连续听完整故事，右侧保留最近查看的单词释义。" : "听一句，停下来模仿；右侧保留单词释义并可录音回放。";
+  if(mode==="shadow")updateShadowMicrophoneHint();
   if (mode !== "shadow") { shadowWaiting = false; clearTimeout(shadowTimer); }
   logAction("modes", mode);
 }
@@ -909,10 +910,40 @@ async function reviewSavedWord(id,rating) {
   const r=await fetch(`/api/vocabulary/${id}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({rating,interval_days:Math.min(180,interval),due_at:new Date(Date.now()+Math.min(180,interval)*86400000).toISOString()})});if(r.ok){vocabItems=(await r.json()).items||[];rebuildWordIndexes();}renderReview();renderStats();
 }
 
+function microphoneSecureHint(){
+  const httpsUrl=`https://${location.hostname}:8766${location.pathname}`;
+  return `当前页面是 ${location.origin}，局域网 HTTP 不允许申请麦克风权限。请使用 ${httpsUrl}；如果就在服务器电脑上，也可以使用 http://localhost:8765。`;
+}
+function microphoneErrorMessage(error){
+  const name=error?.name||"";
+  if(name==="NotAllowedError"||name==="SecurityError")return "麦克风权限被拒绝。请点击地址栏左侧的站点图标，将“麦克风”改为“允许”，然后刷新页面重试。";
+  if(name==="NotFoundError"||name==="DevicesNotFoundError")return "没有检测到可用麦克风，请连接或启用麦克风后重试。";
+  if(name==="NotReadableError"||name==="TrackStartError")return "麦克风当前无法读取，可能正被其他应用占用。请关闭占用麦克风的应用后重试。";
+  if(name==="OverconstrainedError")return "当前麦克风不支持请求的录音参数，请更换输入设备后重试。";
+  if(name==="AbortError")return "麦克风启动被系统中断，请稍后重试。";
+  return `麦克风启动失败${name?`（${name}）`:""}。请检查浏览器和系统的麦克风权限。`;
+}
+async function microphonePermissionState(){
+  try{return (await navigator.permissions?.query({name:"microphone"})).state||"unknown";}catch{return "unknown";}
+}
+function updateShadowMicrophoneHint(){
+  if(mode!=="shadow"||mediaRecorder?.state==="recording")return;
+  if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia){$("#shadowStatus").textContent="当前地址无法申请麦克风";$("#shadowPrompt").textContent=microphoneSecureHint();}
+}
+
 async function toggleRecording() {
   if (mediaRecorder?.state === "recording") { mediaRecorder.stop(); recognition?.stop(); return; }
+  if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia){updateShadowMicrophoneHint();return;}
+  if(typeof MediaRecorder==="undefined"){$("#shadowStatus").textContent="浏览器不支持录音";$("#shadowPrompt").textContent="请使用最新版 Chrome、Edge、Safari 或 Firefox。";return;}
   try {
     clearTimeout(shadowTimer); shadowWaiting = true; $("#audio").pause(); recognizedText = "";
+    const permission=await microphonePermissionState();
+    if(permission==="denied"){
+      $("#shadowStatus").textContent="麦克风权限已被禁止";
+      $("#shadowPrompt").textContent="请点击地址栏左侧的站点图标，将“麦克风”改为“允许”，然后刷新页面。";
+      return;
+    }
+    $("#shadowStatus").textContent="正在申请麦克风权限…";$("#shadowPrompt").textContent="请在浏览器弹出的权限窗口中选择“允许”。";
     const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
     recordingChunks = []; mediaRecorder = new MediaRecorder(stream);
     mediaRecorder.ondataavailable = event => recordingChunks.push(event.data);
@@ -924,7 +955,7 @@ async function toggleRecording() {
       const stateKey=`${STORE.state}-${currentBookId}`; const state=load(stateKey,{}); state.shadowAttempts=(state.shadowAttempts||0)+1; save(stateKey,state);
     };
     startRecognition(); mediaRecorder.start(); $("#recordBtn").textContent = "■ 停止"; $("#shadowStatus").textContent = "正在录音…";
-  } catch { $("#shadowStatus").textContent = "无法使用麦克风"; $("#shadowPrompt").textContent = "请在浏览器设置中允许本地页面使用麦克风。"; }
+  } catch(error) { $("#shadowStatus").textContent = "无法使用麦克风"; $("#shadowPrompt").textContent = microphoneErrorMessage(error); }
 }
 
 function startRecognition() {
