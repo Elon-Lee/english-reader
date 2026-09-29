@@ -1,9 +1,10 @@
 #!/bin/sh
 set -eu
-cd "$(dirname "$0")"
+project_dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+cd "$project_dir"
 
-cert=".local/https/reader-cert.pem"
-key=".local/https/reader-key.pem"
+cert="$project_dir/.local/https/reader-cert.pem"
+key="$project_dir/.local/https/reader-key.pem"
 if [ ! -f "$cert" ] || [ ! -f "$key" ]; then
   echo "未找到可信HTTPS证书，请先运行：./tools/setup_https.sh" >&2
   exit 1

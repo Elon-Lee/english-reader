@@ -432,7 +432,7 @@ class Handler(SimpleHTTPRequestHandler):
                 remaining-=len(chunk)
     def get_settings(self):
         config=private_config(); token=config.get("diocoToken","")
-        shortcuts=db_get_settings({"shortcutPrevious":"a","shortcutRepeat":"s","shortcutNext":"d","shortcutPlay":"space","shelfView":"tile","currentSeries":"","wordTipSeconds":2,"reviewPageSize":10,"manualRepeatCount":3,"manualPauseSeconds":2,"highlightLeadMs":0,"eyeComfort":False,"heatmapRange":"year","sentenceAutoPause":False})
+        shortcuts=db_get_settings({"shortcutPrevious":"a","shortcutRepeat":"s","shortcutNext":"d","shortcutPlay":"space","shelfView":"tile","currentSeries":"","readerLayout":"side","wordTipSeconds":2,"reviewPageSize":10,"manualRepeatCount":3,"manualPauseSeconds":2,"highlightLeadMs":0,"eyeComfort":False,"heatmapRange":"year","sentenceAutoPause":False})
         self.reply({"userEmail":config.get("userEmail",""),"tokenConfigured":bool(token),
                     "tokenMask":("••••••••"+token[-4:]) if token else "",**shortcuts})
     def update_settings(self):
@@ -473,6 +473,7 @@ class Handler(SimpleHTTPRequestHandler):
         allowed={}
         if incoming.get("shelfView") in {"tile","list"}: allowed["shelfView"]=incoming["shelfView"]
         if "currentSeries" in incoming: allowed["currentSeries"]=str(incoming["currentSeries"])
+        if incoming.get("readerLayout") in {"side","stack"}: allowed["readerLayout"]=incoming["readerLayout"]
         if "eyeComfort" in incoming: allowed["eyeComfort"]=bool(incoming["eyeComfort"])
         if "sentenceAutoPause" in incoming: allowed["sentenceAutoPause"]=bool(incoming["sentenceAutoPause"])
         if incoming.get("heatmapRange") in {"year","quarter","month","week"}: allowed["heatmapRange"]=incoming["heatmapRange"]
@@ -606,6 +607,9 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
 
 if __name__ == "__main__":
+    certificate=os.environ.get("READER_TLS_CERT","").strip();private_key=os.environ.get("READER_TLS_KEY","").strip()
+    if certificate:certificate=str(Path(certificate).expanduser().resolve())
+    if private_key:private_key=str(Path(private_key).expanduser().resolve())
     os.chdir(READER)
     existing=[job for job in active_import_jobs() if job["status"]=="running"]
     if existing:
@@ -617,7 +621,6 @@ if __name__ == "__main__":
     host=os.environ.get("READER_HOST","0.0.0.0")
     port=int(os.environ.get("READER_PORT","8765"))
     server=ThreadingHTTPServer((host,port),Handler)
-    certificate=os.environ.get("READER_TLS_CERT","").strip();private_key=os.environ.get("READER_TLS_KEY","").strip()
     secure=bool(certificate and private_key)
     if secure:
         context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(certificate,private_key);server.socket=context.wrap_socket(server.socket,server_side=True)
