@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Versioned code deployment and finished-resource synchronization."""
 import gzip,hashlib,ipaddress,json,os,re,shlex,shutil,sqlite3,subprocess,tarfile,tempfile,threading,time
-from datetime import datetime
+from datetime import datetime,timedelta
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -351,7 +351,7 @@ def sync_content(job,remote,target,progress=None):
     job.update(progress["generate"],"生成离线增量资源包");sync_result=remote.sync_tree_package(stage,f"{root}/shared/books",backup,manifest,f"{root}/manifests/current-content.json",progress)
     job.update(progress["database"],"上传内容数据库包");remote.scp(bundle,remote_bundle);remote.scp(manifest,f"/tmp/{manifest.name}")
     job.update(progress["merge"],"备份并合并远程内容数据库");health=health_check_command(target)
-    script=f"set -e; cp {shlex.quote(root)}/shared/.local/library.sqlite3 {shlex.quote(root)}/backups/databases/{revision}.sqlite3 2>/dev/null || true; docker exec shiyue-reader python3 /app/tools/deployment/remote_apply.py /app/.local/{bundle.name} /app/.local/library.sqlite3; cp /tmp/{manifest.name} {shlex.quote(root)}/manifests/current-content.json; cp /tmp/{manifest.name} {shlex.quote(root)}/manifests/history/{revision}.json; docker restart shiyue-reader >/dev/null; sleep 3; {health}; rm -f {shlex.quote(remote_bundle)} /tmp/{manifest.name}"
+    script=f"set -e; cp {shlex.quote(root)}/shared/.local/library.sqlite3 {shlex.quote(root)}/backups/databases/{revision}.sqlite3 2>/dev/null || true; docker exec shiyue-reader python3 /app/tools/deployment/remote_apply.py /app/.local/{bundle.name} /app/.local/library.sqlite3; cp /tmp/{manifest.name} {shlex.quote(root)}/manifests/current-content.json; cp /tmp/{manifest.name} {shlex.quote(root)}/manifests/history/{revision}.json; cp {shlex.quote(remote_bundle)} {shlex.quote(root)}/manifests/history/{revision}.json.gz; docker restart shiyue-reader >/dev/null; sleep 3; {health}; rm -f {shlex.quote(remote_bundle)} /tmp/{manifest.name}"
     output=remote.ssh(script);return {"contentRevision":revision,"health":output,"media":sync_result}
 
 def run_task(kind,worker):
@@ -402,12 +402,94 @@ def start_sync():
     def worker(job,remote,target):
         result=sync_content(job,remote,target);job.complete(result,"点读资源同步完成")
     return run_task("resource_sync",worker)
+def content_rollback_run_command(target,release,operation,restore=False):
+    root=target["remote_root"];arguments=["python3","/app/tools/deployment/content_rollback.py","--operation",operation,"--books","/app/books","--manifests","/state/manifests","--backups","/state/backups","--database","/app/.local/library.sqlite3"]
+    if restore:arguments.append("--restore")
+    else:arguments += ["--target",release]
+    options=["docker run --rm --network none",f"-v {shlex.quote(root)}/current/tools:/app/tools:ro",f"-v {shlex.quote(root)}/shared/books:/app/books",f"-v {shlex.quote(root)}/shared/.local:/app/.local",f"-v {shlex.quote(root)}/manifests:/state/manifests",f"-v {shlex.quote(root)}/backups:/state/backups",shlex.quote(RUNTIME_IMAGE),*(shlex.quote(value) for value in arguments)]
+    return (" \\"+"\n  ").join(options)
+    return " \\\n+  ".join(options)
+
+def start_content_rollback(release):
+    def worker(job,remote,target):
+        if not re.fullmatch(r"content-\d{8}-\d{6}-[A-Za-z0-9]+",release or ""):raise ValueError("无效的内容版本")
+        root=target["remote_root"];operation=new_release_id("content-rollback");job.update(12,f"检查内容快照 {release}",release_id=release)
+        remote.ssh(f"set -e; test -f {shlex.quote(root)}/manifests/history/{shlex.quote(release)}.json; test -f {shlex.quote(root)}/manifests/history/{shlex.quote(release)}.json.gz; docker image inspect {shlex.quote(RUNTIME_IMAGE)} >/dev/null")
+        run=content_rollback_run_command(target,release,operation);restore=content_rollback_run_command(target,release,operation,True);health=health_check_command(target)
+        job.update(35,"创建恢复点并回滚内容")
+        script=f"""set -e
+docker stop shiyue-reader >/dev/null
+if ! {run}; then docker start shiyue-reader >/dev/null || true; exit 1; fi
+docker start shiyue-reader >/dev/null
+sleep 3
+if ! {health}; then
+  echo '内容回滚后健康检查失败，正在恢复操作前内容' >&2
+  docker stop shiyue-reader >/dev/null || true
+  {restore}
+  docker start shiyue-reader >/dev/null
+  sleep 3
+  {health} || true
+  exit 1
+fi
+"""
+        output=remote.ssh(script);job.complete({"contentRevision":release,"operation":operation,"health":output},"内容回滚完成")
+    return run_task("content_rollback",worker)
+
+def start_cleanup(retention_days=30):
+    days=max(1,min(3650,int(retention_days or 30)));cutoff=datetime.now()-timedelta(days=days);stamp=cutoff.strftime("%Y%m%d-%H%M%S")
+    def worker(job,remote,target):
+        root=target["remote_root"];job.update(20,f"扫描{days}天前的代码和内容版本")
+        script=f"""set -euo pipefail
+root={shlex.quote(root)}
+code_cutoff=code-{stamp}
+content_cutoff=content-{stamp}
+current_code=$(basename "$(readlink -f "$root/current" 2>/dev/null || true)")
+current_content=$(sed -n 's/.*"revision"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' "$root/manifests/current-content.json" | head -1)
+code_removed=0
+content_removed=0
+for path in "$root"/releases/code-*; do
+  [ -d "$path" ] || continue
+  name=$(basename "$path")
+  if [[ "$name" < "$code_cutoff" && "$name" != "$current_code" ]]; then rm -rf -- "$path"; code_removed=$((code_removed+1)); fi
+done
+for manifest in "$root"/manifests/history/content-*.json; do
+  [ -f "$manifest" ] || continue
+  name=$(basename "$manifest" .json)
+  if [[ "$name" < "$content_cutoff" && "$name" != "$current_content" ]]; then
+    rm -f -- "$root/manifests/history/$name.json" "$root/manifests/history/$name.json.gz" "$root/backups/databases/$name.sqlite3"
+    rm -rf -- "$root/backups/resources/$name"
+    content_removed=$((content_removed+1))
+  fi
+done
+mkdir -p "$root/backups/content-rollbacks"
+find "$root/backups/content-rollbacks" -mindepth 1 -maxdepth 1 -type d -mtime +{days} -exec rm -rf -- {{}} + 2>/dev/null || true
+docker images shiyue-reader --format '{{{{.Tag}}}}' 2>/dev/null | while read tag; do
+  case "$tag" in code-*) if [[ "$tag" < "$code_cutoff" && "$tag" != "$current_code" ]]; then docker image rm "shiyue-reader:$tag" >/dev/null 2>&1 || true; fi;; esac
+done
+echo "代码版本已清理:$code_removed"
+echo "内容版本已清理:$content_removed"
+echo "保留天数:{days}"
+echo "当前代码:$current_code"
+echo "当前内容:$current_content"
+"""
+        output=remote.ssh(script);job.update(85,"清理本机过期发布包")
+        threshold=cutoff.timestamp();removed_local=0
+        for pattern in ("code-*.tar.gz","content-*.json.gz","content-*.manifest.json","content-*.resources.tar","content-*.changed.txt","content-*.removed.txt"):
+            for path in STATE.glob(pattern):
+                if path.is_file() and path.stat().st_mtime<threshold:path.unlink();removed_local+=1
+        staging=STATE/"staging"
+        if staging.exists():
+            for path in staging.iterdir():
+                if path.is_dir() and path.stat().st_mtime<threshold:shutil.rmtree(path,ignore_errors=True);removed_local+=1
+        job.complete({"retentionDays":days,"remote":output,"localArtifactsRemoved":removed_local},"过期版本清理完成")
+    return run_task("version_cleanup",worker)
+
 def start_rollback(release):
     def worker(job,remote,target):
         if not re.fullmatch(r"code-[A-Za-z0-9-]+",release or ""):raise ValueError("无效的回滚版本")
         root=target["remote_root"];job.update(20,f"检查代码版本 {release}");run=docker_run_command(target);health_command=health_check_command(target)
         script=f"set -e; test -d {shlex.quote(root)}/releases/{shlex.quote(release)}; previous_release=$(readlink -f {shlex.quote(root)}/current 2>/dev/null || true); docker rm -f shiyue-reader >/dev/null 2>&1 || true; ln -sfn {shlex.quote(root)}/releases/{shlex.quote(release)} {shlex.quote(root)}/current; {run}; sleep 3; {health_command} || {{ docker logs --tail 150 shiyue-reader || true; docker rm -f shiyue-reader; if [ -n \"$previous_release\" ]; then ln -sfn \"$previous_release\" {shlex.quote(root)}/current; {run}; fi; exit 1; }}"
-        health=remote.ssh(script);job.complete({"releaseId":release,"health":health},"版本回滚完成")
+        health=remote.ssh(script);db=connect();db.execute("UPDATE deployment_releases SET status=CASE WHEN release_id=? THEN 'active' ELSE 'available' END WHERE target_id=1",(release,));db.commit();db.close();job.complete({"releaseId":release,"health":health},"代码回滚完成")
     return run_task("code_rollback",worker)
 
 def job_info(job_id,offset=0):
@@ -422,7 +504,7 @@ def recent_jobs(limit=20):
 def dashboard_status():
     db=connect();books=db.execute("SELECT COUNT(*) FROM books WHERE status='ready'").fetchone()[0]
     code=db.execute("SELECT result_json FROM deployment_jobs WHERE kind IN ('code_deploy','program_upgrade') AND status='complete' ORDER BY id DESC LIMIT 1").fetchone()
-    content=db.execute("SELECT result_json FROM deployment_jobs WHERE kind IN ('resource_sync','code_deploy') AND status='complete' ORDER BY id DESC LIMIT 1").fetchone();db.close()
+    content=db.execute("SELECT result_json FROM deployment_jobs WHERE kind IN ('resource_sync','code_deploy','content_rollback') AND status='complete' ORDER BY id DESC LIMIT 1").fetchone();db.close()
     def value(row,key):
         if not row:return ""
         try:return json.loads(row[0]).get(key,"")
@@ -435,4 +517,12 @@ def remote_releases():
     try:
         root=shlex.quote(target["remote_root"]);remote=Remote(target,job);output=remote.ssh(f"current=$(basename \"$(readlink -f {root}/current 2>/dev/null || true)\"); find {root}/releases -mindepth 1 -maxdepth 1 -type d -name 'code-*' -printf '%f\\n' 2>/dev/null | sort -r | while read b; do [ \"$b\" = \"$current\" ] && echo \"$b|current\" || echo \"$b|available\"; done");job.complete()
         return [{"releaseId":line.split("|",1)[0],"status":line.split("|",1)[1]} for line in output.splitlines() if line.startswith("code-") and "|" in line]
+    except Exception as exc:job.fail(exc);return []
+def remote_content_releases():
+    target=get_target()
+    if not target:return []
+    job=Job("content_release_list")
+    try:
+        root=shlex.quote(target["remote_root"]);remote=Remote(target,job);output=remote.ssh(f"current=$(sed -n 's/.*\"revision\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' {root}/manifests/current-content.json 2>/dev/null | head -1); for bundle in {root}/manifests/history/content-*.json.gz; do [ -f \"$bundle\" ] || continue; b=$(basename \"$bundle\" .json.gz); if [ \"$b\" = \"$current\" ]; then echo \"$b|current\"; elif [[ \"$b\" < \"$current\" ]]; then echo \"$b|available\"; fi; done | sort -r");job.complete()
+        return [{"releaseId":line.split("|",1)[0],"status":line.split("|",1)[1]} for line in output.splitlines() if line.startswith("content-") and "|" in line]
     except Exception as exc:job.fail(exc);return []

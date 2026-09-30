@@ -166,6 +166,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not self.deployment_allowed():return
             if route.path == "/api/deployment/config": self.reply({"target":deployment_manager.public_target(deployment_manager.get_target()),"jobs":deployment_manager.recent_jobs(),"status":deployment_manager.dashboard_status()});return
             if route.path == "/api/deployment/releases": self.reply({"releases":deployment_manager.remote_releases()});return
+            if route.path == "/api/deployment/content-releases": self.reply({"releases":deployment_manager.remote_content_releases()});return
             if route.path.startswith("/api/deployment/jobs/"):
                 try:job_id=int(route.path.rsplit("/",1)[1]);offset=int((parse_qs(route.query).get("offset") or [0])[0])
                 except ValueError:self.reply({"error":"invalid job"},400);return
@@ -236,6 +237,11 @@ class Handler(SimpleHTTPRequestHandler):
                 if self.path == "/api/deployment/deploy":self.reply({"jobId":deployment_manager.start_deploy()},202);return
                 if self.path == "/api/deployment/upgrade":self.reply({"jobId":deployment_manager.start_upgrade()},202);return
                 if self.path == "/api/deployment/sync":self.reply({"jobId":deployment_manager.start_sync()},202);return
+                if self.path == "/api/deployment/content-rollback":
+                    release=str(item.get("releaseId","")).strip()
+                    if not release.startswith("content-"):self.reply({"error":"invalid content release"},400);return
+                    self.reply({"jobId":deployment_manager.start_content_rollback(release)},202);return
+                if self.path == "/api/deployment/cleanup":self.reply({"jobId":deployment_manager.start_cleanup(item.get("retentionDays",30))},202);return
                 if self.path == "/api/deployment/rollback":
                     release=str(item.get("releaseId","")).strip()
                     if not release.startswith("code-"):self.reply({"error":"invalid release"},400);return
