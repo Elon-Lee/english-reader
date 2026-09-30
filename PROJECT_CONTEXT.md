@@ -657,8 +657,8 @@ SSH端口（默认22）
 
 ```text
 测试连接
-一键部署
-一键同步资源
+一键完整部署
+增量同步资源
 版本回滚
 ```
 
@@ -677,7 +677,28 @@ SSH端口（默认22）
 /srv/shiyue/current -> releases/<active>
 ```
 
-远程运行采用Docker，服务容器名为`shiyue-reader`。代码、whisper.cpp源码和录音模型都由本机准备后上传；远程不从GitHub或Hugging Face下载。部署完成后执行`/api/health`检查，健康检查失败时恢复旧容器。
+远程运行采用Docker，服务容器名为`shiyue-reader`。Docker允许在远程通过官方安装脚本或系统包管理器安装；Docker之外的拾页运行镜像、代码、whisper.cpp可执行环境、录音模型、HTTPS证书和点读资源都由本机准备后上传。远程不从GitHub、Hugging Face或Python软件源下载项目依赖，也不执行拾页镜像构建。
+
+“一键完整部署”按以下顺序执行：
+
+```text
+检测Linux CPU架构
+检查或远程安装Docker
+上传本机缓存的完整运行镜像
+上传并激活版本化代码
+上传Whisper模型和本机生成的HTTPS证书
+启动容器并健康检查
+自动执行一次成品资源增量同步
+再次健康检查
+```
+
+首次升级会把当前已验证的运行镜像缓存到本机：
+
+```text
+.local/deployment/runtime/shiyue-reader-runtime-amd64-20260930-1.tar.gz
+```
+
+当前缓存支持常见的x86_64/amd64 Linux。更换新的同架构Linux服务器后，只需配置SSH地址、root账号和密码，点击“一键完整部署”即可完成程序、模型、证书和当前全部点读资源部署。健康检查失败会恢复上一个代码版本。
 
 资源同步只根据SQLite中`ready`书籍的实际URL生成成品清单：
 
@@ -687,7 +708,7 @@ SSH端口（默认22）
 本地MP4/YouTube source.mp4
 ```
 
-不上传原始PDF、章节MP3、DOC/DOCX、TXT、CHM、Whisper分章文件、CTC环境或macOS编译产物。当前18本成品约1.236GiB、1199个文件。
+不上传原始PDF、章节MP3、DOC/DOCX、TXT、CHM、Whisper分章文件、CTC环境或macOS编译产物。2026年9月30日验收时共19本成品、1241个媒体文件、约1.275GiB。
 
 资源同步由本机比较当前与远程成品清单，只把新增或修改的文件打成离线增量包并通过SCP上传，同时同步删除记录。远程被替换或删除的文件先进入`backups/resources/<content-revision>/`。这种方式不会受SSH登录横幅影响，也不要求远程下载任何同步工具或代码。内容数据库包只合并`books`、`book_artifacts`和`dictionary_entries`，保留远程学习记录、生词、备注和设置。
 
@@ -699,7 +720,7 @@ SHIYUE_RUNTIME_MODE=reader
 
 该模式隐藏导入入口并拒绝导入API。
 
-如果启用远程录音，Docker镜像包含Linux版FFmpeg和由本机源码构建的whisper.cpp；`ggml-base.en.bin`由本机校验后上传。部署会生成远程HTTPS CA和服务器证书，并将根证书下载到：
+如果启用远程录音，离线运行镜像已包含Linux版FFmpeg和whisper.cpp；`ggml-base.en.bin`由本机校验后上传。HTTPS CA和服务器证书也在本机生成后上传，并将根证书保存在：
 
 ```text
 .local/deployment/certificates/<host>-rootCA.pem

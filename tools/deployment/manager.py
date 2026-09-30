@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Versioned code deployment and finished-resource synchronization."""
-import gzip,hashlib,ipaddress,json,os,shlex,shutil,sqlite3,subprocess,tarfile,tempfile,threading,time
+import gzip,hashlib,ipaddress,json,os,re,shlex,shutil,sqlite3,subprocess,tarfile,tempfile,threading,time
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
@@ -11,6 +11,8 @@ STATE=ROOT/".local/deployment"
 LOGS=STATE/"logs";KNOWN_HOSTS=STATE/"known_hosts"
 KEYS=STATE/"keys"
 EXPECT=ROOT/"tools/deployment/ssh_expect.exp"
+RUNTIME=STATE/"runtime";TLS=STATE/"tls"
+RUNTIME_IMAGE="shiyue-reader-runtime:20260930-1"
 TASK_LOCK=threading.Lock();MEMORY_PASSWORDS={}
 
 def now():return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -84,8 +86,9 @@ class Remote:
         options=self.ssh_options();options[0:2]=["-P",str(self.t["port"])]
         Path(local).parent.mkdir(parents=True,exist_ok=True)
         return self.execute(["scp",*options,f"{self.t['username']}@{self.t['host']}:{remote}",str(local)])
-    def sync_tree_package(self,source,destination,backup_dir,manifest,remote_manifest):
+    def sync_tree_package(self,source,destination,backup_dir,manifest,remote_manifest,progress=None):
         """Upload an offline incremental tar package without using rsync protocol."""
+        progress=progress or {"package":40,"upload":48,"apply":74}
         current_copy=STATE/f"remote-{self.t['id']}-content.json"
         remote_copy=f"/tmp/shiyue-current-content-{self.t['id']}.json"
         self.ssh(
@@ -112,15 +115,15 @@ class Remote:
         remote_changed=f"/tmp/{changed_list.name}"
         remote_removed=f"/tmp/{removed_list.name}"
         if changed:
-            self.job.update(40,f"本机打包增量资源（{transfer_size/1024/1024:.1f} MiB）")
+            self.job.update(progress["package"],f"本机打包增量资源（{transfer_size/1024/1024:.1f} MiB）")
             with tarfile.open(package,"w",dereference=True) as archive:
                 for relative in changed:
                     archive.add(Path(source)/relative,arcname=relative,recursive=False)
             self.job.write(f"离线资源包：{package.name} · {package.stat().st_size/1024/1024:.1f} MiB")
-            self.job.update(48,"上传离线增量资源包")
+            self.job.update(progress["upload"],"上传离线增量资源包")
             self.scp(package,remote_package)
         self.scp(changed_list,remote_changed);self.scp(removed_list,remote_removed)
-        self.job.update(74,"远程备份并应用增量资源")
+        self.job.update(progress["apply"],"远程备份并应用增量资源")
         apply_script=f"""set -euo pipefail
 mkdir -p {shlex.quote(destination)} {shlex.quote(backup_dir)}
 backup_file() {{
@@ -152,53 +155,103 @@ rm -f {shlex.quote(remote_copy)} {shlex.quote(remote_package)} {shlex.quote(remo
         self.execute([*self.base_ssh(False),"bash","-lc",script],redact=True);os.chmod(self.key,0o600);self.job.write("专用SSH密钥安装完成，后续操作优先使用密钥认证")
 
 def new_release_id(prefix):return f"{prefix}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{hashlib.sha256(str(time.time_ns()).encode()).hexdigest()[:8]}"
+def normalized_arch(value):
+    value=str(value).strip().lower()
+    if value in ("x86_64","amd64"):return "x86_64","amd64"
+    if value in ("aarch64","arm64"):return "aarch64","arm64"
+    raise ValueError(f"暂不支持远程CPU架构：{value or '未知'}")
+def remote_arch(remote):
+    output=remote.ssh("uname -m").strip().splitlines()
+    for line in reversed(output):
+        if line.strip() in ("x86_64","amd64","aarch64","arm64"):return normalized_arch(line)
+    raise ValueError("无法识别远程CPU架构")
+def runtime_archive(oci_arch):return RUNTIME/f"shiyue-reader-runtime-{oci_arch}-20260930-1.tar.gz"
+def safe_host(value):return re.sub(r"[^A-Za-z0-9_.-]+","_",str(value))[:80] or "remote"
 def code_files():
     files=[ROOT/"reader",ROOT/"deployment",ROOT/"start-reader.sh",ROOT/"start-reader-https.sh"]
     files += list((ROOT/"tools").glob("*.py"))+[ROOT/"tools/deployment"]
     return files
 def build_code_package(job,release):
     target=STATE/f"{release}.tar.gz";STATE.mkdir(parents=True,exist_ok=True)
-    whisper_root=ROOT/"tools/vendor/whisper.cpp"
-    excluded_prefixes=(".git/","build/","models/","media/","samples/",".github/",".devops/",".pi/")
     def archive_filter(info):
-        name=info.name
-        if "__pycache__" in name:return None
-        marker="tools/vendor/whisper.cpp/"
-        if marker in name:
-            relative=name.split(marker,1)[1]
-            if any(relative==prefix.rstrip("/") or relative.startswith(prefix) for prefix in excluded_prefixes):return None
+        if "__pycache__" in info.name:return None
         return info
     with tarfile.open(target,"w:gz") as archive:
         for path in code_files():
             if path.exists():archive.add(path,arcname=path.relative_to(ROOT),filter=archive_filter)
-        if whisper_root.exists():archive.add(whisper_root,arcname="tools/vendor/whisper.cpp",filter=archive_filter)
     digest=hashlib.sha256(target.read_bytes()).hexdigest();job.write(f"代码包：{target.name} · {target.stat().st_size/1024/1024:.1f} MiB · sha256={digest}");return target,digest
 
-def docker_run_command(target,image):
-    root=shlex.quote(target["remote_root"]);port=int(target["service_port"]);recording=bool(target["install_recording"])
-    options=["docker run -d --name shiyue-reader --restart unless-stopped",f"-p {port}:{port}","-e READER_HOST=0.0.0.0",f"-e READER_PORT={port}","-e SHIYUE_RUNTIME_MODE=reader",
-      f"-v {root}/shared/books:/app/books",f"-v {root}/shared/.local:/app/.local",f"-v {root}/shared/cache:/app/.cache",f"-v {root}/shared/config/dioco.local.json:/app/.dioco.local.json"]
-    if recording:options += [f"-v {root}/shared/https:/certs:ro",f"-v {root}/shared/whisper/ggml-base.en.bin:/opt/shiyue/models/ggml-base.en.bin:ro","-e READER_TLS_CERT=/certs/server-cert.pem","-e READER_TLS_KEY=/certs/server-key.pem"]
-    options.append(shlex.quote(image));return " \\\n  ".join(options)
-
-def docker_run_previous_command(target):
-    return docker_run_command(target,"__SHIYUE_PREVIOUS_IMAGE__").replace("__SHIYUE_PREVIOUS_IMAGE__",'"$previous_image"')
-
-def bootstrap_script(target,release,package_name):
-    root=shlex.quote(target["remote_root"]);port=int(target["service_port"]);recording=bool(target["install_recording"]);image=f"shiyue-reader:{release}"
-    scheme="https" if recording else "http";curl_flags="-k" if recording else "";tls=""
-    if recording:
-        host=target["host"]
-        try:ipaddress.ip_address(host);san=f"IP:{host}"
-        except ValueError:san=f"DNS:{host}"
-        tls=f"""
-mkdir -p {root}/shared/https
-if [ ! -f {root}/shared/https/rootCA.pem ]; then
-  openssl genrsa -out {root}/shared/https/rootCA-key.pem 3072
-  openssl req -x509 -new -nodes -key {root}/shared/https/rootCA-key.pem -sha256 -days 3650 -subj '/CN=Shiyue Remote Root CA' -out {root}/shared/https/rootCA.pem
+def ensure_remote_docker(job,remote):
+    probe=remote.ssh("if command -v docker >/dev/null 2>&1; then (docker info >/dev/null 2>&1 || (command -v systemctl >/dev/null 2>&1 && systemctl start docker >/dev/null 2>&1) || service docker start >/dev/null 2>&1 || true); docker info >/dev/null 2>&1 && echo SHIYUE_DOCKER_READY; fi")
+    if "SHIYUE_DOCKER_READY" in probe:
+        job.write("远程Docker已安装且运行正常");return
+    job.update(9,"远程安装Docker")
+    script="""set -e
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL https://get.docker.com | sh
+elif command -v wget >/dev/null 2>&1; then
+  wget -qO- https://get.docker.com | sh
+elif command -v apt-get >/dev/null 2>&1; then
+  apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io
+elif command -v dnf >/dev/null 2>&1; then
+  dnf install -y docker
+elif command -v yum >/dev/null 2>&1; then
+  yum install -y docker
+else
+  echo '无法自动安装Docker：远程缺少curl、wget和支持的包管理器' >&2
+  exit 2
 fi
-cat > /tmp/shiyue-cert.cnf <<'CERTCFG'
-[req]
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl enable --now docker
+else
+  service docker start
+fi
+docker info >/dev/null
+docker --version
+"""
+    remote.ssh(script);job.write("远程Docker安装完成")
+
+def ensure_remote_runtime(job,remote,oci_arch):
+    output=remote.ssh(f"docker image inspect {shlex.quote(RUNTIME_IMAGE)} >/dev/null 2>&1 && echo SHIYUE_RUNTIME_READY || true")
+    remote_ready="SHIYUE_RUNTIME_READY" in output;archive=runtime_archive(oci_arch);archive.parent.mkdir(parents=True,exist_ok=True)
+    if remote_ready and archive.exists():
+        job.write(f"远程运行镜像和本机离线缓存均已存在：{RUNTIME_IMAGE}");return archive
+    created_on_target=False
+    if not archive.exists():
+        job.update(13,"从现有远程镜像制作本机离线运行包")
+        remote_temp=f"/tmp/{archive.name}"
+        script=f"""set -e
+source_image=$(docker inspect -f '{{{{.Config.Image}}}}' shiyue-reader 2>/dev/null || true)
+if [ -z "$source_image" ]; then
+  source_image=$(docker images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' | grep '^shiyue-reader:' | head -1 || true)
+fi
+[ -n "$source_image" ] || {{ echo '远程没有可导出的拾页运行镜像' >&2; exit 3; }}
+docker tag "$source_image" {shlex.quote(RUNTIME_IMAGE)}
+docker save {shlex.quote(RUNTIME_IMAGE)} | gzip -1 > {shlex.quote(remote_temp)}
+"""
+        remote.ssh(script);remote.scp_from(remote_temp,archive);remote.ssh(f"rm -f {shlex.quote(remote_temp)}");created_on_target=True
+    if archive.stat().st_size<20*1024*1024:raise ValueError("本机离线运行镜像异常，文件过小")
+    with gzip.open(archive,"rb") as source:
+        if not source.read(512):raise ValueError("本机离线运行镜像无法读取")
+    job.write(f"本机离线运行镜像：{archive.name} · {archive.stat().st_size/1024/1024:.1f} MiB")
+    if remote_ready or created_on_target:
+        job.write("运行镜像已在当前服务器生成，同时缓存到本机，跳过重复上传")
+    else:
+        job.update(18,"上传完整Docker运行镜像")
+        remote_temp=f"/tmp/{archive.name}";remote.scp(archive,remote_temp)
+        remote.ssh(f"set -e; gzip -dc {shlex.quote(remote_temp)} | docker load; docker image inspect {shlex.quote(RUNTIME_IMAGE)} >/dev/null; rm -f {shlex.quote(remote_temp)}")
+    return archive
+
+def build_tls_bundle(target):
+    directory=TLS/safe_host(target["host"]);directory.mkdir(parents=True,exist_ok=True)
+    root_key=directory/"rootCA-key.pem";root_cert=directory/"rootCA.pem";server_key=directory/"server-key.pem";server_cert=directory/"server-cert.pem"
+    if all(path.exists() and path.stat().st_size for path in (root_key,root_cert,server_key,server_cert)):return directory
+    openssl=shutil.which("openssl")
+    if not openssl:raise ValueError("本机缺少openssl，无法生成远程HTTPS证书")
+    host=target["host"]
+    try:ipaddress.ip_address(host);san=f"IP:{host}"
+    except ValueError:san=f"DNS:{host}"
+    config=directory/"server.cnf";config.write_text(f"""[req]
 distinguished_name=req_dn
 req_extensions=req_ext
 prompt=no
@@ -207,40 +260,59 @@ CN={host}
 [req_ext]
 subjectAltName={san}
 extendedKeyUsage=serverAuth
-CERTCFG
-openssl genrsa -out {root}/shared/https/server-key.pem 2048
-openssl req -new -key {root}/shared/https/server-key.pem -out /tmp/shiyue-server.csr -config /tmp/shiyue-cert.cnf
-openssl x509 -req -in /tmp/shiyue-server.csr -CA {root}/shared/https/rootCA.pem -CAkey {root}/shared/https/rootCA-key.pem -CAcreateserial -out {root}/shared/https/server-cert.pem -days 825 -sha256 -extensions req_ext -extfile /tmp/shiyue-cert.cnf
-chmod 600 {root}/shared/https/*key.pem
-"""
-    run=docker_run_command(target,image)
+""",encoding="utf-8")
+    commands=[
+      [openssl,"genrsa","-out",root_key,"3072"],
+      [openssl,"req","-x509","-new","-nodes","-key",root_key,"-sha256","-days","3650","-subj","/CN=Shiyue Remote Root CA","-out",root_cert],
+      [openssl,"genrsa","-out",server_key,"2048"],
+      [openssl,"req","-new","-key",server_key,"-out",directory/"server.csr","-config",config],
+      [openssl,"x509","-req","-in",directory/"server.csr","-CA",root_cert,"-CAkey",root_key,"-CAcreateserial","-out",server_cert,"-days","825","-sha256","-extensions","req_ext","-extfile",config],
+    ]
+    for command in commands:subprocess.run([str(value) for value in command],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+    os.chmod(root_key,0o600);os.chmod(server_key,0o600);return directory
+
+def ensure_remote_tls(job,remote,target):
+    root=target["remote_root"];certificate=STATE/"certificates"/f"{target['host']}-rootCA.pem"
+    output=remote.ssh(f"test -s {shlex.quote(root)}/shared/https/rootCA.pem -a -s {shlex.quote(root)}/shared/https/server-cert.pem -a -s {shlex.quote(root)}/shared/https/server-key.pem && echo SHIYUE_TLS_READY || true")
+    if "SHIYUE_TLS_READY" not in output:
+        job.update(42,"本机生成并上传HTTPS证书")
+        directory=build_tls_bundle(target);remote.ssh(f"mkdir -p {shlex.quote(root)}/shared/https")
+        for name in ("rootCA.pem","rootCA-key.pem","server-cert.pem","server-key.pem"):remote.scp(directory/name,f"{root}/shared/https/{name}")
+        remote.ssh(f"chmod 600 {shlex.quote(root)}/shared/https/*key.pem")
+    certificate.parent.mkdir(parents=True,exist_ok=True);remote.scp_from(f"{root}/shared/https/rootCA.pem",certificate);return certificate
+
+def docker_run_command(target,image=RUNTIME_IMAGE):
+    root=shlex.quote(target["remote_root"]);port=int(target["service_port"]);recording=bool(target["install_recording"])
+    options=["docker run -d --name shiyue-reader --restart unless-stopped","--network host","-e READER_HOST=0.0.0.0",f"-e READER_PORT={port}","-e SHIYUE_RUNTIME_MODE=reader",
+      f"-v {root}/current/reader:/app/reader:ro",f"-v {root}/current/tools:/app/tools:ro",f"-v {root}/shared/books:/app/books",f"-v {root}/shared/.local:/app/.local",f"-v {root}/shared/cache:/app/.cache",f"-v {root}/shared/config/dioco.local.json:/app/.dioco.local.json"]
+    if recording:options += [f"-v {root}/shared/https:/certs:ro",f"-v {root}/shared/whisper/ggml-base.en.bin:/opt/shiyue/models/ggml-base.en.bin:ro","-e READER_TLS_CERT=/certs/server-cert.pem","-e READER_TLS_KEY=/certs/server-key.pem"]
+    options.append(shlex.quote(image));return " \\\n  ".join(options)
+
+def health_check_command(target):
+    scheme="https" if target["install_recording"] else "http";port=int(target["service_port"])
+    code=f"import json,ssl,urllib.request; u='{scheme}://127.0.0.1:{port}/api/health'; c=ssl._create_unverified_context() if u.startswith('https') else None; print(urllib.request.urlopen(u,context=c,timeout=20).read().decode())"
+    return f"docker exec shiyue-reader python3 -c {shlex.quote(code)}"
+
+def bootstrap_script(target,release,package_name):
+    root=shlex.quote(target["remote_root"]);run=docker_run_command(target);health=health_check_command(target)
     return f"""set -euo pipefail
-if ! command -v docker >/dev/null; then
-  if command -v apt-get >/dev/null; then curl -fsSL https://get.docker.com | sh; elif command -v yum >/dev/null; then yum install -y yum-utils && yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo && yum install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin; fi
-fi
-systemctl enable --now docker
-if ! command -v curl >/dev/null || ! command -v openssl >/dev/null; then
-  if command -v apt-get >/dev/null; then apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y curl openssl; elif command -v dnf >/dev/null; then dnf install -y curl openssl; elif command -v yum >/dev/null; then yum install -y curl openssl; fi
-fi
 systemctl disable --now shiyue-reader >/dev/null 2>&1 || true
 mkdir -p {root}/releases/{release} {root}/shared/books {root}/shared/.local {root}/shared/cache {root}/shared/config {root}/backups/databases {root}/backups/resources {root}/manifests/history {root}/logs
 [ -f {root}/shared/config/dioco.local.json ] || echo '{{}}' > {root}/shared/config/dioco.local.json
 tar -xzf /tmp/{package_name} -C {root}/releases/{release}
-{tls}
-echo '构建Docker镜像 {image}'
-docker build -t {shlex.quote(image)} -f {root}/releases/{release}/deployment/docker/Dockerfile {root}/releases/{release}
-previous_image=$(docker inspect -f '{{{{.Config.Image}}}}' shiyue-reader 2>/dev/null || true)
+previous_release=$(readlink -f {root}/current 2>/dev/null || true)
 docker rm -f shiyue-reader >/dev/null 2>&1 || true
 ln -sfn {root}/releases/{release} {root}/current
 {run}
 sleep 3
-if ! curl {curl_flags} -fsS {scheme}://127.0.0.1:{port}/api/health >/tmp/shiyue-health.json; then
+if ! {health} >/tmp/shiyue-health.json; then
   echo '新容器健康检查失败'
   docker logs --tail 200 shiyue-reader || true
   docker rm -f shiyue-reader >/dev/null 2>&1 || true
-  if [ -n "$previous_image" ]; then
-    echo "恢复旧镜像 $previous_image"
-    {docker_run_previous_command(target)}
+  if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then
+    echo "恢复旧代码版本 $previous_release"
+    ln -sfn "$previous_release" {root}/current
+    {run}
   fi
   exit 1
 fi
@@ -271,6 +343,17 @@ def export_content(job,revision):
     manifest=STATE/f"{revision}.manifest.json";manifest.write_text(json.dumps({"revision":revision,"books":len(books),"files":files},ensure_ascii=False,indent=2))
     job.write(f"成品清单：{len(books)}本 · {len(files)}个文件 · {sum(x['size'] for x in files)/1024/1024:.1f} MiB");return stage,bundle,manifest
 
+def sync_content(job,remote,target,progress=None):
+    progress=progress or {"scan":5,"prepare":25,"generate":35,"package":40,"upload":48,"apply":74,"database":80,"merge":88}
+    revision=new_release_id("content");job.update(progress["scan"],"扫描本地已导入点读资源");stage,bundle,manifest=export_content(job,revision)
+    root=target["remote_root"];backup=f"{root}/backups/resources/{revision}";remote_bundle=f"{root}/shared/.local/{bundle.name}"
+    job.update(progress["prepare"],"准备远程资源目录");remote.ssh(f"set -e; docker inspect shiyue-reader >/dev/null; mkdir -p {shlex.quote(root)}/shared/books {shlex.quote(backup)} {shlex.quote(root)}/manifests/history {shlex.quote(root)}/shared/.local {shlex.quote(root)}/backups/databases")
+    job.update(progress["generate"],"生成离线增量资源包");sync_result=remote.sync_tree_package(stage,f"{root}/shared/books",backup,manifest,f"{root}/manifests/current-content.json",progress)
+    job.update(progress["database"],"上传内容数据库包");remote.scp(bundle,remote_bundle);remote.scp(manifest,f"/tmp/{manifest.name}")
+    job.update(progress["merge"],"备份并合并远程内容数据库");health=health_check_command(target)
+    script=f"set -e; cp {shlex.quote(root)}/shared/.local/library.sqlite3 {shlex.quote(root)}/backups/databases/{revision}.sqlite3 2>/dev/null || true; docker exec shiyue-reader python3 /app/tools/deployment/remote_apply.py /app/.local/{bundle.name} /app/.local/library.sqlite3; cp /tmp/{manifest.name} {shlex.quote(root)}/manifests/current-content.json; cp /tmp/{manifest.name} {shlex.quote(root)}/manifests/history/{revision}.json; docker restart shiyue-reader >/dev/null; sleep 3; {health}; rm -f {shlex.quote(remote_bundle)} /tmp/{manifest.name}"
+    output=remote.ssh(script);return {"contentRevision":revision,"health":output,"media":sync_result}
+
 def run_task(kind,worker):
     job=Job(kind)
     def target():
@@ -287,34 +370,31 @@ def start_test():
     return run_task("connection_test",lambda job,remote,target:(job.update(30,"连接SSH"),remote.ssh("uname -a && id && df -h /"),job.complete({"connected":True},"连接正常")))
 def start_deploy():
     def worker(job,remote,target):
-        release=new_release_id("code");job.update(10,"生成代码发布包",release_id=release);package,digest=build_code_package(job,release);job.update(25,"上传代码包");remote.scp(package,f"/tmp/{package.name}")
+        release=new_release_id("code");job.update(4,"检查远程Linux架构",release_id=release);download_arch,oci_arch=remote_arch(remote);job.write(f"远程架构：{download_arch}")
+        ensure_remote_docker(job,remote);runtime=ensure_remote_runtime(job,remote,oci_arch)
+        job.update(26,"生成代码发布包");package,digest=build_code_package(job,release);job.update(31,"上传代码版本");remote.scp(package,f"/tmp/{package.name}")
+        certificate=""
         if target["install_recording"]:
             model=ROOT/"tools/vendor/whisper.cpp/models/ggml-base.en.bin"
             if not model.exists():raise ValueError("本地缺少 ggml-base.en.bin，无法安装远程录音模型")
             remote_model=f"{target['remote_root']}/shared/whisper/ggml-base.en.bin";local_hash=hashlib.sha256(model.read_bytes()).hexdigest();remote.ssh(f"mkdir -p {shlex.quote(target['remote_root'])}/shared/whisper")
-            output=remote.ssh(f"test -f {shlex.quote(remote_model)} && sha256sum {shlex.quote(remote_model)} | cut -d' ' -f1 || true").strip().splitlines();remote_hash=output[-1] if output else ""
-            if remote_hash!=local_hash:job.update(35,"上传服务器端录音模型（约141MiB）");remote.scp(model,remote_model)
+            output=remote.ssh(f"command -v sha256sum >/dev/null 2>&1 && test -f {shlex.quote(remote_model)} && sha256sum {shlex.quote(remote_model)} | cut -d' ' -f1 || true").strip().splitlines();remote_hash=output[-1] if output else ""
+            if remote_hash!=local_hash:job.update(37,"上传服务器端录音模型（约141MiB）");remote.scp(model,remote_model)
             else:job.write("远程录音模型已存在且校验一致，跳过上传")
-        job.update(50,"构建Docker镜像并激活版本");health=remote.ssh(bootstrap_script(target,release,package.name));certificate=""
-        if target["install_recording"]:
-            certificate=STATE/"certificates"/f"{target['host']}-rootCA.pem";job.update(93,"下载远程HTTPS根证书");remote.scp_from(f"{target['remote_root']}/shared/https/rootCA.pem",certificate);job.write(f"其他设备使用录音前请安装根证书：{certificate}")
-        job.update(95,"远程健康检查");db=connect();db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,1,"active",digest,json.dumps({"raw":health}),now()));db.commit();db.close();job.complete({"releaseId":release,"health":health,"rootCertificate":str(certificate) if certificate else ""},"代码部署完成")
+            certificate=ensure_remote_tls(job,remote,target);job.write(f"其他设备使用录音前请安装根证书：{certificate}")
+        job.update(50,"激活代码版本并启动运行容器");health=remote.ssh(bootstrap_script(target,release,package.name))
+        content=sync_content(job,remote,target,{"scan":58,"prepare":62,"generate":65,"package":68,"upload":72,"apply":80,"database":86,"merge":91})
+        job.update(97,"最终健康检查");final_health=remote.ssh(health_check_command(target));db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=1 AND status='active'");db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,1,"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close();job.complete({"releaseId":release,"health":final_health,"initialHealth":health,"contentRevision":content["contentRevision"],"media":content["media"],"runtimeArchive":str(runtime),"rootCertificate":str(certificate) if certificate else ""},"一键完整部署完成")
     return run_task("code_deploy",worker)
 def start_sync():
     def worker(job,remote,target):
-        revision=new_release_id("content");job.update(5,"扫描本地已导入点读资源",release_id=revision);stage,bundle,manifest=export_content(job,revision);root=target["remote_root"];backup=f"{root}/backups/resources/{revision}";remote_bundle=f"{root}/shared/.local/{bundle.name}"
-        job.update(25,"准备远程资源目录");remote.ssh(f"set -e; docker inspect shiyue-reader >/dev/null; mkdir -p {shlex.quote(root)}/shared/books {shlex.quote(backup)} {shlex.quote(root)}/manifests/history {shlex.quote(root)}/shared/.local")
-        job.update(35,"生成离线增量资源包");sync_result=remote.sync_tree_package(stage,f"{root}/shared/books",backup,manifest,f"{root}/manifests/current-content.json")
-        job.update(80,"上传内容数据库包");remote.scp(bundle,remote_bundle);remote.scp(manifest,f"/tmp/{manifest.name}")
-        job.update(88,"备份并合并远程内容数据库");scheme="https" if target["install_recording"] else "http";flags="-k" if target["install_recording"] else ""
-        script=f"set -e; cp {shlex.quote(root)}/shared/.local/library.sqlite3 {shlex.quote(root)}/backups/databases/{revision}.sqlite3 2>/dev/null || true; docker exec shiyue-reader python3 /app/tools/deployment/remote_apply.py /app/.local/{bundle.name} /app/.local/library.sqlite3; cp /tmp/{manifest.name} {shlex.quote(root)}/manifests/current-content.json; cp /tmp/{manifest.name} {shlex.quote(root)}/manifests/history/{revision}.json; docker restart shiyue-reader >/dev/null; sleep 3; curl {flags} -fsS {scheme}://127.0.0.1:{target['service_port']}/api/health; rm -f {shlex.quote(remote_bundle)} /tmp/{manifest.name}"
-        health=remote.ssh(script);job.complete({"contentRevision":revision,"health":health,"media":sync_result},"点读资源同步完成")
+        result=sync_content(job,remote,target);job.complete(result,"点读资源同步完成")
     return run_task("resource_sync",worker)
 def start_rollback(release):
     def worker(job,remote,target):
-        root=target["remote_root"];image=f"shiyue-reader:{release}";scheme="https" if target["install_recording"] else "http";flags="-k" if target["install_recording"] else "";job.update(20,f"检查Docker镜像 {release}")
-        run=docker_run_command(target,image);restore=docker_run_previous_command(target)
-        script=f"set -e; docker image inspect {shlex.quote(image)} >/dev/null; previous_image=$(docker inspect -f '{{{{.Config.Image}}}}' shiyue-reader 2>/dev/null || true); docker rm -f shiyue-reader >/dev/null 2>&1 || true; ln -sfn {shlex.quote(root)}/releases/{shlex.quote(release)} {shlex.quote(root)}/current; {run}; sleep 3; curl {flags} -fsS {scheme}://127.0.0.1:{target['service_port']}/api/health || {{ docker logs --tail 150 shiyue-reader || true; docker rm -f shiyue-reader; [ -n \"$previous_image\" ] && {restore}; exit 1; }}"
+        if not re.fullmatch(r"code-[A-Za-z0-9-]+",release or ""):raise ValueError("无效的回滚版本")
+        root=target["remote_root"];job.update(20,f"检查代码版本 {release}");run=docker_run_command(target);health_command=health_check_command(target)
+        script=f"set -e; test -d {shlex.quote(root)}/releases/{shlex.quote(release)}; previous_release=$(readlink -f {shlex.quote(root)}/current 2>/dev/null || true); docker rm -f shiyue-reader >/dev/null 2>&1 || true; ln -sfn {shlex.quote(root)}/releases/{shlex.quote(release)} {shlex.quote(root)}/current; {run}; sleep 3; {health_command} || {{ docker logs --tail 150 shiyue-reader || true; docker rm -f shiyue-reader; if [ -n \"$previous_release\" ]; then ln -sfn \"$previous_release\" {shlex.quote(root)}/current; {run}; fi; exit 1; }}"
         health=remote.ssh(script);job.complete({"releaseId":release,"health":health},"版本回滚完成")
     return run_task("code_rollback",worker)
 
@@ -341,6 +421,6 @@ def remote_releases():
     if not target:return []
     job=Job("release_list")
     try:
-        remote=Remote(target,job);output=remote.ssh("current=$(docker inspect -f '{{.Config.Image}}' shiyue-reader 2>/dev/null | sed 's#^shiyue-reader:##' || true); docker images --format '{{.Tag}}' shiyue-reader | grep '^code-' | while read b; do [ \"$b\" = \"$current\" ] && echo \"$b|current\" || echo \"$b|available\"; done");job.complete()
+        root=shlex.quote(target["remote_root"]);remote=Remote(target,job);output=remote.ssh(f"current=$(basename \"$(readlink -f {root}/current 2>/dev/null || true)\"); find {root}/releases -mindepth 1 -maxdepth 1 -type d -name 'code-*' -printf '%f\\n' 2>/dev/null | sort -r | while read b; do [ \"$b\" = \"$current\" ] && echo \"$b|current\" || echo \"$b|available\"; done");job.complete()
         return [{"releaseId":line.split("|",1)[0],"status":line.split("|",1)[1]} for line in output.splitlines() if line.startswith("code-") and "|" in line]
     except Exception as exc:job.fail(exc);return []
