@@ -143,7 +143,8 @@ def finish_aligned_import(job_id,relative,source,generated,book_id,plan,pdf,text
     aligner_python=ROOT/".local/forced-aligner/venv/bin/python"
     if aligner_python.exists():
         set_job(job_id,98,"wav2vec2 CTC 强制对齐")
-        subprocess.run([aligner_python,ROOT/"tools/ctc_forced_align.py","--book-id",book_id,"--job-id",job_id,"--update-db"],cwd=ROOT,stdout=(ROOT/".local"/f"ctc-{book_id}.log").open("w"),stderr=subprocess.STDOUT)
+        with (ROOT/".local"/f"ctc-{book_id}.log").open("w") as output:
+            run([aligner_python,ROOT/"tools/ctc_forced_align.py","--book-id",book_id,"--job-id",str(job_id),"--update-db"],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
     for artifact in [generated/"ocr.json",generated/"text-ocr.json",book_json,generated/"quality-report.json",whisper_json,alignment_file,audio_out.with_suffix(".concat.txt")]:
         if artifact.exists():artifact.unlink()
     update_job(job_id,status="complete",progress=100,step="导入完成",error="",pid=None)

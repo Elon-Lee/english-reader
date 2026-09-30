@@ -87,7 +87,8 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
     aligner_python=ROOT/".local/forced-aligner/venv/bin/python"
     if aligner_python.exists():
         progress(98,"wav2vec2 CTC 强制对齐")
-        subprocess.run([aligner_python,ROOT/"tools/ctc_forced_align.py","--book-id",book_id,"--job-id",job_id,"--update-db"],cwd=ROOT,stdout=(ROOT/".local"/f"ctc-{book_id}.log").open("w"),stderr=subprocess.STDOUT)
+        with (ROOT/".local"/f"ctc-{book_id}.log").open("w") as output:
+            run([aligner_python,ROOT/"tools/ctc_forced_align.py","--book-id",book_id,"--job-id",str(job_id),"--update-db"],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
     for item in [book_file,whisper_json,generated/"alignment.json",generated/"embedded.srt"]:
         if item.exists():item.unlink()
     update_job(job_id,status="complete",progress=100,step="视频导入完成")

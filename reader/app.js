@@ -338,6 +338,7 @@ function bindEvents() {
   $("#audio").onplay = () => { $("#playBtn").textContent = "Ⅱ"; if(sentenceAutoPause&&active>=0&&mode!=="shadow")wordStopAt=book.sentences[active].end+.03;if(mode==="shadow"){if(shadowSentenceIndex<0)shadowSentenceIndex=active>=0?active:sentenceIndexAt($("#audio").currentTime);if(!shadowWaiting&&shadowSentenceIndex>=0)scheduleShadowSentenceStop(shadowSentenceIndex);}if(visualMode==="video")$("#videoView").play().catch(()=>{});trackListening(); startPlaybackSync(); };
   $("#audio").onpause = () => { $("#playBtn").textContent = "▶"; $("#videoView").pause();stopPlaybackSync(); syncPlaybackFrame(); };
   $("#audio").onseeked = syncPlaybackFrame;
+  window.addEventListener("resize",scheduleTopbarContentAlignment);
   window.addEventListener("beforeunload", finishSession);
   $("#settingsForm").onsubmit = saveApiSettings;
   $("#seriesChannels").onclick=event=>{
@@ -400,23 +401,30 @@ async function confirmDeleteBook(){
 function bookHasVideo(){return !!book?.video;}
 function bookHasVisual(){return !!(bookHasVideo()||(book?.hasOriginalPages!==false&&book?.pageBase));}
 function syncReaderPanels(){const focused=document.body.classList.contains("focus");$("#pagePanel").classList.toggle("hidden",focused||!bookHasVisual());$("#wordPanel").classList.toggle("hidden",focused);}
+function readerIsVisible(){return !$("#reader").classList.contains("hidden");}
+function syncReaderActionVisibility(){const reading=readerIsVisible();$("#focusBtn").classList.toggle("hidden",!reading);$("#eyeComfortBtn").classList.toggle("hidden",!reading);$("#readerLayoutBtn").classList.toggle("hidden",!reading||!bookHasVisual());}
+function syncTopbarContentAlignment(){
+  const inner=$(".topbar-inner");if(!inner)return;inner.style.width="";inner.style.marginLeft="";inner.style.marginRight="";
+}
+function scheduleTopbarContentAlignment(){requestAnimationFrame(()=>requestAnimationFrame(syncTopbarContentAlignment));}
 function readerLayoutIcon(layout){
   return layout==="stack"?'<svg viewBox="0 0 24 24" aria-hidden="true"><rect class="layout-visual" x="2" y="3" width="16" height="7" rx="2"></rect><rect class="layout-story" x="2" y="12" width="16" height="9" rx="2"></rect><rect class="layout-dict" x="20" y="3" width="2" height="18" rx="1"></rect></svg>':'<svg viewBox="0 0 24 24" aria-hidden="true"><rect class="layout-visual" x="2" y="3" width="7" height="18" rx="2"></rect><rect class="layout-story" x="11" y="3" width="7" height="18" rx="2"></rect><rect class="layout-dict" x="20" y="3" width="2" height="18" rx="1"></rect></svg>';
 }
 function applyReaderLayout(){
   const reader=$("#reader"),button=$("#readerLayoutBtn"),hasVisual=bookHasVisual();reader.dataset.visualLayout=readerLayout;
-  button.classList.toggle("hidden",!hasVisual);button.classList.toggle("active",readerLayout==="stack");button.setAttribute("aria-pressed",String(readerLayout==="stack"));button.innerHTML=readerLayoutIcon(readerLayout);
+  button.classList.toggle("hidden",!readerIsVisible()||!hasVisual);button.classList.toggle("active",readerLayout==="stack");button.setAttribute("aria-pressed",String(readerLayout==="stack"));button.innerHTML=readerLayoutIcon(readerLayout);
   const next=readerLayout==="side"?"上下":"左右";button.title=`切换为${next}布局`;button.setAttribute("aria-label",`当前${readerLayout==="side"?"左右":"上下"}布局，切换为${next}布局`);
 }
-function toggleReaderLayout(){readerLayout=readerLayout==="side"?"stack":"side";applyReaderLayout();savePreference({readerLayout});showReaderToast(readerLayout==="side"?"布局：视频左侧，文章右侧":"布局：视频上方，文章下方");}
-function setSidebarCollapsed(collapsed){document.body.classList.toggle("sidebar-collapsed",collapsed);$("#sidebarToggle").setAttribute("aria-expanded",String(!collapsed));$("#sidebarReveal").setAttribute("aria-expanded",String(!collapsed));}
+function recommendedReaderLayout(){return bookHasVideo()?"stack":"side";}
+function toggleReaderLayout(){readerLayout=readerLayout==="side"?"stack":"side";applyReaderLayout();scheduleTopbarContentAlignment();showReaderToast(readerLayout==="side"?"布局：画面左侧，文章右侧":"布局：画面上方，文章下方");}
+function setSidebarCollapsed(collapsed){document.body.classList.toggle("sidebar-collapsed",collapsed);$("#sidebarToggle").setAttribute("aria-expanded",String(!collapsed));$("#sidebarReveal").setAttribute("aria-expanded",String(!collapsed));scheduleTopbarContentAlignment();}
 function setFocusMode(enabled){
   document.body.classList.toggle("focus",enabled);setSidebarCollapsed(false);
   const button=$("#focusBtn");button.textContent=enabled?"普通模式":"专注模式";button.classList.toggle("active",enabled);button.setAttribute("aria-pressed",String(enabled));
-  syncReaderPanels();
+  syncReaderPanels();syncReaderActionVisibility();scheduleTopbarContentAlignment();
 }
 function toggleFocusMode(){setFocusMode(!document.body.classList.contains("focus"));}
-function configureBookVisual(){const isVideo=bookHasVideo(),hasPages=book?.hasOriginalPages!==false&&!!book?.pageBase;$("#visualSwitch").classList.toggle("hidden",!isVideo);$("#visualTitle").textContent=isVideo?"视频画面":hasPages?"原书页":"无原书页面";$("#videoView").src=isVideo?book.video:"";setVisualMode("frames");applyReaderLayout();syncReaderPanels();}
+function configureBookVisual(){const isVideo=bookHasVideo(),hasPages=book?.hasOriginalPages!==false&&!!book?.pageBase;readerLayout=recommendedReaderLayout();$("#visualSwitch").classList.toggle("hidden",!isVideo);$("#visualTitle").textContent=isVideo?"视频画面":hasPages?"原书页":"无原书页面";$("#videoView").src=isVideo?book.video:"";setVisualMode(isVideo?"video":"frames");applyReaderLayout();syncReaderPanels();scheduleTopbarContentAlignment();}
 function setVisualMode(mode){visualMode=mode;const isVideo=bookHasVideo();$("#framesViewBtn").classList.toggle("active",mode==="frames");$("#videoViewBtn").classList.toggle("active",mode==="video");$("#pageImage").classList.toggle("hidden",mode==="video");$("#videoView").classList.toggle("hidden",mode!=="video");if(isVideo&&mode==="video"){const video=$("#videoView"),audio=$("#audio");video.currentTime=audio.currentTime;if(!audio.paused)video.play().catch(()=>{});}else $("#videoView").pause();}
 function setImportType(type){$$('[data-import-type]').forEach(button=>button.classList.toggle('active',button.dataset.importType===type));$("#booksImportPane").classList.toggle("hidden",type!=="books");$("#videoImportPane").classList.toggle("hidden",type!=="video");$("#youtubeImportPane").classList.toggle("hidden",type!=="youtube");}
 function videoNameWithoutExtension(name){return name.replace(/\.[^.]+$/,'').replace(/[._-]+/g,' ').trim();}
@@ -576,8 +584,8 @@ async function addSelectedWordToVocab(){const c=selectedWordContext,d=c.definiti
 
 function setShelfView(view){shelfView=view;renderLibrary();savePreference({shelfView:view});}
 function savePreference(value){fetch("/api/preferences",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(value)}).catch(()=>{});}
-function toggleEyeComfort(){eyeComfort=!eyeComfort;applyEyeComfort();savePreference({eyeComfort});}
-function applyEyeComfort(){document.body.classList.toggle("eye-comfort",eyeComfort);const button=$("#eyeComfortBtn");button.classList.toggle("active",eyeComfort);button.setAttribute("aria-pressed",String(eyeComfort));button.textContent=eyeComfort?"● 护眼":"◐ 护眼";}
+function toggleEyeComfort(){if(!readerIsVisible())return;eyeComfort=!eyeComfort;applyEyeComfort();savePreference({eyeComfort});}
+function applyEyeComfort(){const enabled=eyeComfort&&readerIsVisible();document.body.classList.toggle("eye-comfort",enabled);const button=$("#eyeComfortBtn");button.classList.toggle("active",enabled);button.setAttribute("aria-pressed",String(enabled));button.textContent=enabled?"● 护眼":"◐ 护眼";}
 function keyName(event){return event.key===" "?"space":event.key.toLowerCase();}
 function keyLabel(key){return key==="space"?"空格":key.length===1?key.toUpperCase():key;}
 function captureShortcut(event){event.preventDefault();event.stopPropagation();const key=keyName(event);if(["shift","control","alt","meta"].includes(key))return;event.target.value=keyLabel(key);event.target.dataset.key=key;event.target.blur();}
@@ -603,10 +611,11 @@ function showScreen(id) {
   const reading = id === "reader";
   $("#player").classList.toggle("hidden", !reading);
   $(".book-heading").style.display = reading ? "block" : "none";
-  $(".top-actions").style.display = reading ? "flex" : "none";
+  $(".top-actions").style.display = "flex";
   $("#backBtn").style.visibility = reading ? "visible" : "hidden";
-  if (!reading) { resetWordHoverSession(); setFocusMode(false); $("#audio").pause(); clearTimeout(shadowTimer); refreshDashboards(); }
-  else syncReaderPanels();
+  if (!reading) { resetWordHoverSession();setFocusMode(false);if(eyeComfort){eyeComfort=false;savePreference({eyeComfort:false});}applyEyeComfort();$("#audio").pause();clearTimeout(shadowTimer);refreshDashboards(); }
+  else {syncReaderPanels();applyEyeComfort();}
+  syncReaderActionVisibility();scheduleTopbarContentAlignment();
   if(id!=="vocab")stopManualDictation();
 }
 
@@ -1049,8 +1058,8 @@ async function loadApiSettings() {
     $("#diocoEmail").value=data.userEmail||"";
     $("#tokenStatus").textContent=data.tokenConfigured?`令牌已配置：${data.tokenMask}`:"尚未配置令牌";
     shortcuts={previous:data.shortcutPrevious||"a",repeat:data.shortcutRepeat||"s",next:data.shortcutNext||"d",play:data.shortcutPlay||"space"};
-    shelfView=data.shelfView||"tile"; currentSeries=data.currentSeries||"";readerLayout=data.readerLayout==="stack"?"stack":"side";applyReaderLayout();
-    wordTipSeconds=+(data.wordTipSeconds||2);reviewPageSize=+(data.reviewPageSize||10);manualRepeatCount=+(data.manualRepeatCount||3);manualPauseSeconds=+(data.manualPauseSeconds||2);highlightLeadMs=Number.isFinite(+data.highlightLeadMs)?+data.highlightLeadMs:0;sentenceAutoPause=!!data.sentenceAutoPause;eyeComfort=!!data.eyeComfort;heatmapRange=data.heatmapRange||"year";$("#wordTipSeconds").value=wordTipSeconds;$("#reviewPageSize").value=reviewPageSize;$("#manualRepeatCount").value=manualRepeatCount;$("#manualPauseSeconds").value=manualPauseSeconds;$("#highlightLeadMs").value=highlightLeadMs;applyEyeComfort();
+    shelfView=data.shelfView||"tile"; currentSeries=data.currentSeries||"";
+    wordTipSeconds=+(data.wordTipSeconds||2);reviewPageSize=+(data.reviewPageSize||10);manualRepeatCount=+(data.manualRepeatCount||3);manualPauseSeconds=+(data.manualPauseSeconds||2);highlightLeadMs=Number.isFinite(+data.highlightLeadMs)?+data.highlightLeadMs:0;sentenceAutoPause=!!data.sentenceAutoPause;eyeComfort=readerIsVisible()&&!!data.eyeComfort;heatmapRange=data.heatmapRange||"year";if(data.eyeComfort&&!readerIsVisible())savePreference({eyeComfort:false});$("#wordTipSeconds").value=wordTipSeconds;$("#reviewPageSize").value=reviewPageSize;$("#manualRepeatCount").value=manualRepeatCount;$("#manualPauseSeconds").value=manualPauseSeconds;$("#highlightLeadMs").value=highlightLeadMs;applyEyeComfort();
     for(const [name,key] of Object.entries(shortcuts)){const input=$(`#shortcut${name[0].toUpperCase()+name.slice(1)}`);if(input){input.value=keyLabel(key);input.dataset.key=key;}}
     updateShortcutHint();
   } catch { $("#tokenStatus").textContent="无法读取本地设置"; }
