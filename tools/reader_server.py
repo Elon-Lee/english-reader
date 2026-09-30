@@ -234,6 +234,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if self.path == "/api/deployment/config":self.reply({"target":deployment_manager.save_target(item,str(item.get("password","")).strip())});return
                 if self.path == "/api/deployment/test":self.reply({"jobId":deployment_manager.start_test()},202);return
                 if self.path == "/api/deployment/deploy":self.reply({"jobId":deployment_manager.start_deploy()},202);return
+                if self.path == "/api/deployment/upgrade":self.reply({"jobId":deployment_manager.start_upgrade()},202);return
                 if self.path == "/api/deployment/sync":self.reply({"jobId":deployment_manager.start_sync()},202);return
                 if self.path == "/api/deployment/rollback":
                     release=str(item.get("releaseId","")).strip()

@@ -386,6 +386,18 @@ def start_deploy():
         content=sync_content(job,remote,target,{"scan":58,"prepare":62,"generate":65,"package":68,"upload":72,"apply":80,"database":86,"merge":91})
         job.update(97,"最终健康检查");final_health=remote.ssh(health_check_command(target));db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=1 AND status='active'");db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,1,"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close();job.complete({"releaseId":release,"health":final_health,"initialHealth":health,"contentRevision":content["contentRevision"],"media":content["media"],"runtimeArchive":str(runtime),"rootCertificate":str(certificate) if certificate else ""},"一键完整部署完成")
     return run_task("code_deploy",worker)
+def start_upgrade():
+    def worker(job,remote,target):
+        release=new_release_id("code");job.update(8,"检查远程运行环境",release_id=release)
+        output=remote.ssh(f"set -e; docker info >/dev/null; docker image inspect {shlex.quote(RUNTIME_IMAGE)} >/dev/null; test -d {shlex.quote(target['remote_root'])}/shared/.local; echo SHIYUE_UPGRADE_READY")
+        if "SHIYUE_UPGRADE_READY" not in output:raise ValueError("远程尚未完成初始化，请先执行一键完整部署")
+        job.update(25,"生成程序版本包");package,digest=build_code_package(job,release)
+        job.update(42,"上传修改后的程序代码");remote.scp(package,f"/tmp/{package.name}")
+        job.update(65,"切换程序版本");health=remote.ssh(bootstrap_script(target,release,package.name))
+        job.update(92,"验证升级结果");final_health=remote.ssh(health_check_command(target))
+        db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=1 AND status='active'");db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,1,"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close()
+        job.complete({"releaseId":release,"health":final_health,"initialHealth":health,"codeBytes":package.stat().st_size},"程序升级完成")
+    return run_task("program_upgrade",worker)
 def start_sync():
     def worker(job,remote,target):
         result=sync_content(job,remote,target);job.complete(result,"点读资源同步完成")
@@ -409,8 +421,8 @@ def recent_jobs(limit=20):
     db=connect();rows=[dict(row) for row in db.execute("SELECT id,kind,status,progress,step,error,release_id,created_at,updated_at FROM deployment_jobs ORDER BY id DESC LIMIT ?",(limit,))];db.close();return rows
 def dashboard_status():
     db=connect();books=db.execute("SELECT COUNT(*) FROM books WHERE status='ready'").fetchone()[0]
-    code=db.execute("SELECT result_json FROM deployment_jobs WHERE kind='code_deploy' AND status='complete' ORDER BY id DESC LIMIT 1").fetchone()
-    content=db.execute("SELECT result_json FROM deployment_jobs WHERE kind='resource_sync' AND status='complete' ORDER BY id DESC LIMIT 1").fetchone();db.close()
+    code=db.execute("SELECT result_json FROM deployment_jobs WHERE kind IN ('code_deploy','program_upgrade') AND status='complete' ORDER BY id DESC LIMIT 1").fetchone()
+    content=db.execute("SELECT result_json FROM deployment_jobs WHERE kind IN ('resource_sync','code_deploy') AND status='complete' ORDER BY id DESC LIMIT 1").fetchone();db.close()
     def value(row,key):
         if not row:return ""
         try:return json.loads(row[0]).get(key,"")

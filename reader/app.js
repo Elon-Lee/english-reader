@@ -352,6 +352,7 @@ function bindEvents() {
   $("#deploymentForm").onsubmit=saveDeploymentConfig;
   $("#testDeployment").onclick=()=>startDeploymentAction("test");
   $("#deployCodeBtn").onclick=()=>startDeploymentAction("deploy");
+  $("#upgradeCodeBtn").onclick=()=>startDeploymentAction("upgrade");
   $("#syncResourcesBtn").onclick=()=>startDeploymentAction("sync");
   $("#rollbackRelease").onchange=event=>{$("#rollbackCodeBtn").disabled=!event.target.value;};
   $("#rollbackCodeBtn").onclick=()=>startDeploymentAction("rollback",{releaseId:$("#rollbackRelease").value});
@@ -432,7 +433,7 @@ function applyReaderLayout(){
 }
 function recommendedReaderLayout(){return bookHasVideo()?"stack":"side";}
 function toggleReaderLayout(){readerLayout=readerLayout==="side"?"stack":"side";applyReaderLayout();scheduleTopbarContentAlignment();showReaderToast(readerLayout==="side"?"布局：画面左侧，文章右侧":"布局：画面上方，文章下方");}
-function setSidebarCollapsed(collapsed){document.body.classList.toggle("sidebar-collapsed",collapsed);$("#sidebarToggle").setAttribute("aria-expanded",String(!collapsed));$("#sidebarReveal").setAttribute("aria-expanded",String(!collapsed));scheduleTopbarContentAlignment();}
+function setSidebarCollapsed(collapsed){document.body.classList.toggle("sidebar-collapsed",collapsed);$("#sidebarToggle").setAttribute("aria-expanded",String(!collapsed));$("#sidebarReveal").setAttribute("aria-expanded",String(!collapsed));$(".topbar").setAttribute("aria-hidden",String(!readerIsVisible()&&!collapsed));scheduleTopbarContentAlignment();}
 function setFocusMode(enabled){
   document.body.classList.toggle("focus",enabled);setSidebarCollapsed(false);
   const button=$("#focusBtn");button.textContent=enabled?"普通模式":"专注模式";button.classList.toggle("active",enabled);button.setAttribute("aria-pressed",String(enabled));
@@ -624,16 +625,24 @@ function setSettingsTab(name,persist=true){
   const available=$(`[data-settings-tab="${name}"]:not(.hidden)`);if(!available)name="general";
   $$("#settingsTabs [data-settings-tab]").forEach(tab=>{const active=tab.dataset.settingsTab===name;tab.classList.toggle("active",active);tab.setAttribute("aria-selected",String(active));tab.tabIndex=active?0:-1;});
   $$("#settings [data-settings-panel]").forEach(panel=>{const active=panel.dataset.settingsPanel===name;panel.classList.toggle("hidden",!active);panel.setAttribute("aria-hidden",String(!active));});
+  syncSettingsTabVisibility();
   if(persist)save(STORE.settingsTab,name);
+}
+function syncSettingsTabVisibility(){
+  const tabs=$$("#settingsTabs [data-settings-tab]:not(.hidden)");
+  $("#settingsTabs").classList.toggle("hidden",tabs.length<=1);
+  $("#settings").classList.toggle("single-settings-tab",tabs.length<=1);
 }
 
 function showScreen(id) {
   $$(".screen").forEach(screen => screen.classList.toggle("hidden", screen.id !== id));
   $$(".nav").forEach(nav => nav.classList.toggle("active", nav.dataset.screen === id));
   const reading = id === "reader";
+  $(".topbar").classList.toggle("non-reader",!reading);
+  $(".topbar").setAttribute("aria-hidden",String(!reading&&!document.body.classList.contains("sidebar-collapsed")));
   $("#player").classList.toggle("hidden", !reading);
   $(".book-heading").style.display = reading ? "block" : "none";
-  $(".top-actions").style.display = "flex";
+  $(".top-actions").style.display = reading ? "flex" : "none";
   $("#backBtn").style.visibility = reading ? "visible" : "hidden";
   if (!reading) { resetWordHoverSession();setFocusMode(false);if(eyeComfort){eyeComfort=false;savePreference({eyeComfort:false});}applyEyeComfort();$("#audio").pause();clearTimeout(shadowTimer);refreshDashboards(); }
   else {syncReaderPanels();applyEyeComfort();}
@@ -1100,7 +1109,7 @@ async function saveApiSettings(event) {
 function deploymentPayload(){return {name:"远程服务器",host:$("#deployHost").value.trim(),port:+$("#deployPort").value||22,username:$("#deployUser").value.trim()||"root",password:$("#deployPassword").value,remoteRoot:$("#deployRoot").value.trim()||"/srv/shiyue",servicePort:+$("#deployServicePort").value||8765,installRecording:$("#deployRecording").checked};}
 async function loadDeploymentConfig(){
   try{
-    const response=await fetch("/api/deployment/config",{cache:"no-store"});if(response.status===403){$("#settingsDeploymentTab")?.classList.add("hidden");$("#settingsDeploymentPanel")?.classList.add("hidden");setSettingsTab("general");return;}const data=await response.json();if(!response.ok)throw new Error(data.error||"无法读取部署配置");
+    const response=await fetch("/api/deployment/config",{cache:"no-store"});if(response.status===403){$("#settingsDeploymentTab")?.classList.add("hidden");$("#settingsDeploymentPanel")?.classList.add("hidden");setSettingsTab("general");return;}$("#settingsDeploymentTab")?.classList.remove("hidden");const data=await response.json();if(!response.ok)throw new Error(data.error||"无法读取部署配置");syncSettingsTabVisibility();
     const target=data.target;if(target){$("#deployHost").value=target.host||"";$("#deployPort").value=target.port||22;$("#deployUser").value=target.username||"root";$("#deployRoot").value=target.remote_root||"/srv/shiyue";$("#deployServicePort").value=target.service_port||8765;$("#deployRecording").checked=!!target.install_recording;$("#deployPassword").placeholder=target.passwordConfigured?"已保存到钥匙串；留空保持不变":"输入root密码";$("#deploymentConnection").textContent=target.passwordConfigured?"已配置":"缺少密码";$("#deploymentConnection").classList.toggle("ready",!!target.passwordConfigured);}
     const status=data.status||{};$("#remoteCodeVersion").textContent=status.codeVersion||"-";$("#remoteContentVersion").textContent=status.contentVersion||"-";$("#runtimeResourceSummary").textContent=`${status.localBooks||0} 本 · ${status.localRuntime||"待扫描"}`;
     renderDeploymentHistory(data.jobs||[]);const running=(data.jobs||[]).find(job=>["queued","running"].includes(job.status));if(running)pollDeploymentJob(running.id,true);loadDeploymentReleases();
@@ -1116,14 +1125,14 @@ async function startDeploymentAction(action,payload={}){
     $("#deploymentLog").textContent="";deploymentLogOffset=0;pollDeploymentJob(data.jobId,false);
   }catch(error){$("#deploymentLog").textContent+=`\n启动失败：${error.message}\n`;}
 }
-function deploymentKindName(kind){return ({connection_test:"连接测试",code_deploy:"代码部署",resource_sync:"资源同步",code_rollback:"版本回滚",release_list:"版本读取"})[kind]||kind;}
+function deploymentKindName(kind){return ({connection_test:"连接测试",code_deploy:"完整部署",program_upgrade:"程序升级",resource_sync:"数据同步",code_rollback:"版本回滚",release_list:"版本读取"})[kind]||kind;}
 function renderDeploymentHistory(jobs){$("#deploymentHistory").innerHTML=(jobs||[]).slice(0,10).map(job=>`<div class="${escapeHtml(job.status)}"><b>${escapeHtml(deploymentKindName(job.kind))}</b><span>${escapeHtml(job.step||job.status)}</span><small>${escapeHtml(job.updated_at||"")}</small></div>`).join("");}
 function pollDeploymentJob(jobId,resume=false){
   clearInterval(deploymentPollTimer);activeDeploymentJob=jobId;if(!resume)deploymentLogOffset=0;$("#deploymentProgress").classList.remove("hidden");
   const check=async()=>{try{const response=await fetch(`/api/deployment/jobs/${jobId}?offset=${deploymentLogOffset}`,{cache:"no-store"}),job=await response.json();if(!response.ok)throw new Error(job.error||"无法读取任务");deploymentLogOffset=job.logOffset||deploymentLogOffset;if(job.logChunk){const log=$("#deploymentLog");if(log.textContent==="尚未运行部署任务。")log.textContent="";log.textContent+=job.logChunk;log.scrollTop=log.scrollHeight;}$("#deploymentBar").value=job.progress||0;$("#deploymentPercent").textContent=`${job.progress||0}%`;$("#deploymentStep").textContent=job.step||job.status;setDeploymentButtonsBusy(["queued","running"].includes(job.status));if(["complete","failed"].includes(job.status)){clearInterval(deploymentPollTimer);deploymentPollTimer=null;activeDeploymentJob=null;setDeploymentButtonsBusy(false);loadDeploymentConfig();}}catch(error){clearInterval(deploymentPollTimer);deploymentPollTimer=null;setDeploymentButtonsBusy(false);$("#deploymentLog").textContent+=`\n日志读取失败：${error.message}\n`;}};
   check();deploymentPollTimer=setInterval(check,1000);
 }
-function setDeploymentButtonsBusy(busy){["#testDeployment","#deployCodeBtn","#syncResourcesBtn","#rollbackCodeBtn"].forEach(selector=>$(selector).disabled=busy||(selector==="#rollbackCodeBtn"&&!$("#rollbackRelease").value));}
+function setDeploymentButtonsBusy(busy){["#testDeployment","#deployCodeBtn","#upgradeCodeBtn","#syncResourcesBtn","#rollbackCodeBtn"].forEach(selector=>$(selector).disabled=busy||(selector==="#rollbackCodeBtn"&&!$("#rollbackRelease").value));}
 async function loadDeploymentReleases(){
   try{const response=await fetch("/api/deployment/releases",{cache:"no-store"}),data=await response.json();if(!response.ok)return;const releases=data.releases||[];$("#rollbackRelease").innerHTML='<option value="">选择历史版本</option>'+releases.filter(item=>item.status!=="current").map(item=>`<option value="${escapeHtml(item.releaseId)}">${escapeHtml(item.releaseId)}</option>`).join("");const current=releases.find(item=>item.status==="current");$("#remoteCodeVersion").textContent=current?.releaseId||"-";$("#rollbackCodeBtn").disabled=!$("#rollbackRelease").value;}catch{}
 }

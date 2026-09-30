@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20260930-17">
+  <link rel="stylesheet" href="styles.css?v=20260930-21">
 </head>
 <body>
   <aside class="sidebar">
@@ -25,7 +25,7 @@
   </aside>
 
   <main>
-    <header class="topbar">
+    <header class="topbar non-reader" aria-hidden="true">
       <div class="topbar-inner">
         <div class="topbar-left"><button id="sidebarReveal" class="sidebar-reveal" type="button" title="显示菜单栏" aria-label="显示菜单栏"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4" r="1.6"></circle><circle cx="10" cy="10" r="1.6"></circle><circle cx="10" cy="16" r="1.6"></circle></svg></button><button class="back" id="backBtn">← 书架</button></div>
         <div class="book-heading"><small>0级 · STARTERS</small><strong>生存游戏 <i>Survive!</i></strong></div>
@@ -41,7 +41,7 @@
     </section>
 
     <section id="stats" class="screen dashboard hidden"><div class="page-title"><small>LEARNING LOG</small><h1>学习记录</h1><p>你的数据只保存在这台设备。</p></div><div id="statsContent"></div></section>
-    <section id="vocab" class="screen dashboard vocab-screen hidden"><div class="review-workspace"><div id="reviewContent"></div><aside id="reviewWordPanel" class="review-word-panel"><div class="word-empty"><span>Aa</span><h3>点击生词</h3><p>在这里查看完整释义、当前句用法、例句和备注。</p></div></aside></div></section>
+    <section id="vocab" class="screen dashboard vocab-screen hidden"><div class="page-title vocab-page-title"><small>VOCABULARY REVIEW</small><h1>生词复习</h1><p>通过主动回忆和听写，把阅读中遇到的生词真正记住。</p></div><div class="review-workspace"><div id="reviewContent"></div><aside id="reviewWordPanel" class="review-word-panel"><div class="word-empty"><span>Aa</span><h3>点击生词</h3><p>在这里查看完整释义、当前句用法、例句和备注。</p></div></aside></div></section>
     <section id="import" class="screen dashboard hidden">
       <div class="page-title"><small>CONTENT IMPORTER</small><h1>导入内容</h1><p>扫描 books 全部目录，支持PDF、DOC、TXT、CHM、纯音频、视频和YouTube。</p></div>
       <div class="import-type-tabs"><button data-import-type="books" class="active">目录书籍</button><button data-import-type="video">视频文件</button><button data-import-type="youtube">YouTube 地址</button></div>
@@ -125,7 +125,7 @@
           <div class="deployment-config-actions"><button type="submit">保存配置</button><button id="testDeployment" type="button">测试连接</button></div>
         </form>
         <div class="deployment-summary"><span>程序版本 <b id="remoteCodeVersion">-</b></span><span>内容版本 <b id="remoteContentVersion">-</b></span><span>点读资源 <b id="runtimeResourceSummary">待扫描</b></span></div>
-        <div class="deployment-primary-actions"><button id="deployCodeBtn" type="button">一键完整部署</button><button id="syncResourcesBtn" type="button">增量同步资源</button><select id="rollbackRelease"><option value="">选择历史版本</option></select><button id="rollbackCodeBtn" type="button" disabled>版本回滚</button></div>
+        <div class="deployment-primary-actions"><button id="deployCodeBtn" type="button">一键完整部署</button><button id="upgradeCodeBtn" type="button">升级程序</button><button id="syncResourcesBtn" type="button">同步数据</button><select id="rollbackRelease"><option value="">选择历史版本</option></select><button id="rollbackCodeBtn" type="button" disabled>版本回滚</button></div>
         <div id="deploymentProgress" class="deployment-progress hidden"><div><b id="deploymentStep">等待开始</b><span id="deploymentPercent">0%</span></div><progress id="deploymentBar" max="100" value="0"></progress></div>
         <div class="deployment-monitor-grid">
           <div class="deployment-monitor-card"><div class="deployment-log-head"><b>实时日志</b><button id="clearDeploymentLog" type="button">清空显示</button></div><pre id="deploymentLog" class="deployment-log">尚未运行部署任务。</pre></div>
@@ -189,6 +189,6 @@
       <div class="cancel-import-dialog-actions"><button value="cancel">继续当前任务</button><button id="confirmCancelImports" type="button">中断并删除</button></div>
     </form>
   </dialog>
-  <script src="app.js?v=20260930-17"></script>
+  <script src="app.js?v=20260930-21"></script>
 </body>
 </html>
