@@ -1,0 +1,20 @@
+[Unit]
+Description=Shiyue English Reader
+After=network.target
+
+[Service]
+Type=simple
+User=shiyue
+Group=shiyue
+WorkingDirectory=/srv/shiyue/current
+Environment=READER_HOST=0.0.0.0
+Environment=READER_PORT=8765
+Environment=SHIYUE_RUNTIME_MODE=reader
+Environment=SHIYUE_WHISPER_CLI=/srv/shiyue/shared/whisper/whisper-cli
+Environment=SHIYUE_WHISPER_MODEL=/srv/shiyue/shared/whisper/ggml-base.en.bin
+ExecStart=/usr/bin/python3 /srv/shiyue/current/tools/reader_server.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

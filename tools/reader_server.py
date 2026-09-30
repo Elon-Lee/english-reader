@@ -24,12 +24,13 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from library_db import BOOKS_ROOT, active_import_jobs, add_daily, annotate_word, create_job, delete_book, delete_import_jobs, dictionary, get_book, get_job, get_settings as db_get_settings, import_duplicates, imported_books, learning_days, library, mark_import_jobs_cancelling, pending_import_jobs, save_vocab, scan_catalog, set_settings, touch_book, update_job, update_vocab, vocabulary_list
+from library_db import BOOKS_ROOT, active_import_jobs, add_daily, annotate_word, create_job, delete_book, delete_import_jobs, dictionary, get_book, get_job, get_settings as db_get_settings, import_duplicates, imported_books, learning_days, library, mark_import_jobs_cancelling, now, pending_import_jobs, save_vocab, scan_catalog, set_settings, touch_book, update_job, update_vocab, vocabulary_list
+from deployment import manager as deployment_manager
 
 ROOT=Path(__file__).resolve().parents[1]
 READER=ROOT/"reader"
-CLI=ROOT/"tools/vendor/whisper.cpp/build/bin/whisper-cli"
-MODEL=ROOT/"tools/vendor/whisper.cpp/models/ggml-base.en.bin"
+CLI=Path(os.environ.get("SHIYUE_WHISPER_CLI",str(ROOT/"tools/vendor/whisper.cpp/build/bin/whisper-cli"))).expanduser()
+MODEL=Path(os.environ.get("SHIYUE_WHISPER_MODEL",str(ROOT/"tools/vendor/whisper.cpp/models/ggml-base.en.bin"))).expanduser()
 YTDLP=ROOT/".local/bin/yt-dlp"
 NODE=Path(shutil.which("node") or "/usr/local/bin/node")
 PRIVATE_CONFIG=ROOT/".dioco.local.json"
@@ -50,6 +51,7 @@ UPSTREAM_HEADERS={
     "User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/153.0 Safari/537.36",
 }
 IMPORT_LOCK=threading.Lock()
+RUNTIME_MODE=os.environ.get("SHIYUE_RUNTIME_MODE","full")
 ACTIVE_IMPORT_PROCESSES={}
 ACTIVE_PROCESS_LOCK=threading.Lock()
 
@@ -159,6 +161,16 @@ class Handler(SimpleHTTPRequestHandler):
         super().end_headers()
     def do_GET(self):
         route=urlsplit(self.path)
+        if route.path == "/api/health": self.reply({"status":"ok","runtimeMode":RUNTIME_MODE,"books":len(library()),"time":now()}); return
+        if route.path.startswith("/api/deployment/"):
+            if not self.deployment_allowed():return
+            if route.path == "/api/deployment/config": self.reply({"target":deployment_manager.public_target(deployment_manager.get_target()),"jobs":deployment_manager.recent_jobs(),"status":deployment_manager.dashboard_status()});return
+            if route.path == "/api/deployment/releases": self.reply({"releases":deployment_manager.remote_releases()});return
+            if route.path.startswith("/api/deployment/jobs/"):
+                try:job_id=int(route.path.rsplit("/",1)[1]);offset=int((parse_qs(route.query).get("offset") or [0])[0])
+                except ValueError:self.reply({"error":"invalid job"},400);return
+                result=deployment_manager.job_info(job_id,offset);self.reply(result or {"error":"job not found"},200 if result else 404);return
+            self.send_error(404);return
         if route.path == "/api/library": self.reply({"books":library()}); return
         if route.path == "/api/vocabulary": self.reply({"items":vocabulary_list()}); return
         if route.path == "/api/learning/days": self.reply({"days":learning_days(365)}); return
@@ -214,6 +226,23 @@ class Handler(SimpleHTTPRequestHandler):
                 remaining-=len(chunk)
         return True
     def do_POST(self):
+        if self.path.startswith("/api/deployment/"):
+            if not self.deployment_allowed():return
+            try:item=self.json_body()
+            except Exception:self.reply({"error":"invalid json"},400);return
+            try:
+                if self.path == "/api/deployment/config":self.reply({"target":deployment_manager.save_target(item,str(item.get("password","")).strip())});return
+                if self.path == "/api/deployment/test":self.reply({"jobId":deployment_manager.start_test()},202);return
+                if self.path == "/api/deployment/deploy":self.reply({"jobId":deployment_manager.start_deploy()},202);return
+                if self.path == "/api/deployment/sync":self.reply({"jobId":deployment_manager.start_sync()},202);return
+                if self.path == "/api/deployment/rollback":
+                    release=str(item.get("releaseId","")).strip()
+                    if not release.startswith("code-"):self.reply({"error":"invalid release"},400);return
+                    self.reply({"jobId":deployment_manager.start_rollback(release)},202);return
+            except Exception as exc:self.reply({"error":str(exc)},400);return
+            self.send_error(404);return
+        if RUNTIME_MODE=="reader" and self.path.startswith("/api/import"):
+            self.reply({"error":"远程阅读节点不允许执行导入"},403);return
         if self.path.startswith("/api/books/") and self.path.endswith("/delete"): self.remove_book(); return
         if self.path == "/api/import/jobs/cancel-active": self.cancel_active_imports(); return
         if self.path == "/api/import/youtube/info": self.youtube_info(); return
@@ -434,7 +463,7 @@ class Handler(SimpleHTTPRequestHandler):
         config=private_config(); token=config.get("diocoToken","")
         shortcuts=db_get_settings({"shortcutPrevious":"a","shortcutRepeat":"s","shortcutNext":"d","shortcutPlay":"space","shelfView":"tile","currentSeries":"","readerLayout":"side","wordTipSeconds":2,"reviewPageSize":10,"manualRepeatCount":3,"manualPauseSeconds":2,"highlightLeadMs":0,"eyeComfort":False,"heatmapRange":"year","sentenceAutoPause":False})
         self.reply({"userEmail":config.get("userEmail",""),"tokenConfigured":bool(token),
-                    "tokenMask":("••••••••"+token[-4:]) if token else "",**shortcuts})
+                    "tokenMask":("••••••••"+token[-4:]) if token else "","runtimeMode":RUNTIME_MODE,**shortcuts})
     def update_settings(self):
         length=int(self.headers.get("Content-Length","0"))
         if length<=0 or length>10000: self.reply({"error":"invalid payload"},400); return
@@ -605,6 +634,11 @@ class Handler(SimpleHTTPRequestHandler):
         body=json.dumps(data,ensure_ascii=False).encode()
         self.send_response(status); self.send_header("Content-Type","application/json; charset=utf-8")
         self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
+    def deployment_allowed(self):
+        address=self.client_address[0]
+        if address not in {"127.0.0.1","::1"}:self.reply({"error":"部署操作仅允许从服务器本机访问"},403);return False
+        if RUNTIME_MODE=="reader":self.reply({"error":"远程阅读节点已禁用部署管理"},403);return False
+        return True
 
 if __name__ == "__main__":
     certificate=os.environ.get("READER_TLS_CERT","").strip();private_key=os.environ.get("READER_TLS_KEY","").strip()

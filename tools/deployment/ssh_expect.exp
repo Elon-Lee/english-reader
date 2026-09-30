@@ -1,0 +1,12 @@
+#!/usr/bin/expect -f
+set timeout -1
+set password $env(SHIYUE_SSH_PASSWORD)
+set command [lrange $argv 0 end]
+spawn -noecho {*}$command
+expect {
+  -re {(?i)are you sure you want to continue connecting.*} { send -- "yes\r"; exp_continue }
+  -re {(?i)(password|passphrase).*:} { send -- "$password\r"; exp_continue }
+  eof
+}
+catch wait result
+exit [lindex $result 3]

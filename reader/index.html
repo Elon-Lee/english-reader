@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20260930-14">
+  <link rel="stylesheet" href="styles.css?v=20260930-17">
 </head>
 <body>
   <aside class="sidebar">
@@ -82,27 +82,58 @@
       <div id="importProgress" class="panel import-progress hidden"><div><b id="importStep">等待开始</b><span id="importPercent">0%</span></div><progress id="importBar" max="100" value="0"></progress><p id="importMessage"></p><div id="batchJobs" class="batch-jobs"></div></div>
     </section>
     <section id="settings" class="screen dashboard hidden">
-      <div class="page-title"><small>LOCAL SYSTEM SETTINGS</small><h1>系统设置</h1><p>接口凭据、快捷键与书架偏好只保存在本机。</p></div>
-      <form id="settingsForm" class="panel settings-form">
-        <label>账号邮箱<input id="diocoEmail" type="email" autocomplete="username" placeholder="name@example.com" required></label>
-        <label>Dioco 令牌<input id="diocoToken" type="password" autocomplete="off" placeholder="留空表示保留现有令牌"></label>
-        <fieldset class="shortcut-settings"><legend>阅读快捷键</legend>
-          <label>上一句<input id="shortcutPrevious" class="shortcut-input" maxlength="8" readonly></label>
-          <label>复读当前句<input id="shortcutRepeat" class="shortcut-input" maxlength="8" readonly></label>
-          <label>下一句<input id="shortcutNext" class="shortcut-input" maxlength="8" readonly></label>
-          <label>播放 / 暂停<input id="shortcutPlay" class="shortcut-input" maxlength="8" readonly></label>
-        </fieldset>
-        <fieldset class="display-settings"><legend>阅读体验</legend>
-          <label>单词工具栏停留时间<input id="wordTipSeconds" type="number" min="0.5" max="10" step="0.5" value="2"><span>秒</span></label>
-          <label>生词每页数量<input id="reviewPageSize" type="number" min="5" max="50" step="5" value="10"><span>条</span></label>
-          <label>听写朗读次数<input id="manualRepeatCount" type="number" min="1" max="10" step="1" value="3"><span>遍</span></label>
-          <label>听写词间停顿<input id="manualPauseSeconds" type="number" min="0.5" max="10" step="0.5" value="2"><span>秒</span></label>
-          <label>单词高亮提前量<input id="highlightLeadMs" type="number" min="-300" max="600" step="20" value="0"><span>毫秒</span><small class="field-help">音素强制对齐默认无需补偿；设备延迟时再调整。</small></label>
-        </fieldset>
-        <p class="shortcut-help">点击输入框后按下新按键。四个快捷键不能重复。</p>
-        <div class="settings-status"><span id="tokenStatus">正在读取配置…</span><button type="submit">保存设置</button></div>
-        <p class="privacy-note">浏览器只把令牌提交给本机 <code>127.0.0.1:8765</code>；本地后端仅在请求上下文解释时转发给 Dioco，并保存到仅当前用户可读的配置文件。</p>
-      </form>
+      <div class="page-title settings-page-title"><small>LOCAL SYSTEM SETTINGS</small><h1>系统设置</h1><p>阅读偏好与服务器运维分区管理，配置只保存在你的设备中。</p></div>
+      <div id="settingsTabs" class="settings-tabs" role="tablist" aria-label="系统设置分类">
+        <button id="settingsGeneralTab" class="active" type="button" role="tab" aria-selected="true" aria-controls="settingsGeneralPanel" data-settings-tab="general"><span class="settings-tab-icon">Aa</span><span><b>通用设置</b><small>账户、快捷键与阅读体验</small></span></button>
+        <button id="settingsDeploymentTab" type="button" role="tab" aria-selected="false" aria-controls="settingsDeploymentPanel" data-settings-tab="deployment"><span class="settings-tab-icon">⇧</span><span><b>打包部署</b><small>远程发布、资源同步与回滚</small></span></button>
+      </div>
+      <section id="settingsGeneralPanel" class="settings-tab-panel" role="tabpanel" aria-labelledby="settingsGeneralTab" data-settings-panel="general">
+        <form id="settingsForm" class="panel settings-form settings-general-form">
+          <div class="settings-section-head"><div><small>ACCOUNT & DICTIONARY</small><h2>账户与词典服务</h2></div><span id="tokenStatus">正在读取配置…</span></div>
+          <div class="settings-account-grid">
+            <label>账号邮箱<input id="diocoEmail" type="email" autocomplete="username" placeholder="name@example.com" required></label>
+            <label>Dioco 令牌<input id="diocoToken" type="password" autocomplete="off" placeholder="留空表示保留现有令牌"></label>
+          </div>
+          <fieldset class="shortcut-settings"><legend>阅读快捷键</legend>
+            <label>上一句<input id="shortcutPrevious" class="shortcut-input" maxlength="8" readonly></label>
+            <label>复读当前句<input id="shortcutRepeat" class="shortcut-input" maxlength="8" readonly></label>
+            <label>下一句<input id="shortcutNext" class="shortcut-input" maxlength="8" readonly></label>
+            <label>播放 / 暂停<input id="shortcutPlay" class="shortcut-input" maxlength="8" readonly></label>
+            <p class="shortcut-help">点击输入框后按下新按键，四个快捷键不能重复。</p>
+          </fieldset>
+          <fieldset class="display-settings"><legend>阅读体验</legend>
+            <label>单词工具栏停留时间<input id="wordTipSeconds" type="number" min="0.5" max="10" step="0.5" value="2"><span>秒</span></label>
+            <label>生词每页数量<input id="reviewPageSize" type="number" min="5" max="50" step="5" value="10"><span>条</span></label>
+            <label>听写朗读次数<input id="manualRepeatCount" type="number" min="1" max="10" step="1" value="3"><span>遍</span></label>
+            <label>听写词间停顿<input id="manualPauseSeconds" type="number" min="0.5" max="10" step="0.5" value="2"><span>秒</span></label>
+            <label class="highlight-setting">单词高亮提前量<input id="highlightLeadMs" type="number" min="-300" max="600" step="20" value="0"><span>毫秒</span><small class="field-help">音素强制对齐默认无需补偿，设备存在延迟时再调整。</small></label>
+          </fieldset>
+          <div class="settings-save-row"><p class="privacy-note">令牌只提交给本机服务，并保存在仅当前用户可读的配置文件中。</p><button type="submit">保存通用设置</button></div>
+        </form>
+      </section>
+      <section id="settingsDeploymentPanel" class="settings-tab-panel hidden" role="tabpanel" aria-labelledby="settingsDeploymentTab" data-settings-panel="deployment">
+       <section class="panel deployment-panel">
+        <div class="deployment-head"><div><small>REMOTE READER NODE</small><h2>远程部署与点读资源同步</h2><p>远程Linux只运行首页、阅读、点读和录音识别；原始书籍和本地制作环境不会上传。</p></div><span id="deploymentConnection" class="deployment-status">未配置</span></div>
+        <form id="deploymentForm" class="deployment-form">
+          <label>SSH地址<input id="deployHost" placeholder="服务器IP或域名" required></label>
+          <label>SSH端口<input id="deployPort" type="number" min="1" max="65535" value="22" required></label>
+          <label>账号<input id="deployUser" value="root" required></label>
+          <label>密码<input id="deployPassword" type="password" autocomplete="new-password" placeholder="留空表示使用钥匙串密码"></label>
+          <label>远程目录<input id="deployRoot" value="/srv/shiyue" required></label>
+          <label>服务端口<input id="deployServicePort" type="number" min="1" max="65535" value="8765" required></label>
+          <label class="deployment-check"><input id="deployRecording" type="checkbox" checked> 安装服务器端录音Whisper</label>
+          <div class="deployment-config-actions"><button type="submit">保存配置</button><button id="testDeployment" type="button">测试连接</button></div>
+        </form>
+        <div class="deployment-summary"><span>程序版本 <b id="remoteCodeVersion">-</b></span><span>内容版本 <b id="remoteContentVersion">-</b></span><span>点读资源 <b id="runtimeResourceSummary">待扫描</b></span></div>
+        <div class="deployment-primary-actions"><button id="deployCodeBtn" type="button">一键部署</button><button id="syncResourcesBtn" type="button">一键同步资源</button><select id="rollbackRelease"><option value="">选择历史版本</option></select><button id="rollbackCodeBtn" type="button" disabled>版本回滚</button></div>
+        <div id="deploymentProgress" class="deployment-progress hidden"><div><b id="deploymentStep">等待开始</b><span id="deploymentPercent">0%</span></div><progress id="deploymentBar" max="100" value="0"></progress></div>
+        <div class="deployment-monitor-grid">
+          <div class="deployment-monitor-card"><div class="deployment-log-head"><b>实时日志</b><button id="clearDeploymentLog" type="button">清空显示</button></div><pre id="deploymentLog" class="deployment-log">尚未运行部署任务。</pre></div>
+          <div class="deployment-monitor-card deployment-history-card"><div class="deployment-log-head"><b>最近任务</b><small>最近 10 条</small></div><div id="deploymentHistory" class="deployment-history"></div></div>
+        </div>
+        <p class="privacy-note">部署接口只允许本机访问。root密码不会写入SQLite或日志；保存后优先存入macOS钥匙串。</p>
+       </section>
+      </section>
     </section>
 
     <section id="reader" class="screen reader hidden">
@@ -158,6 +189,6 @@
       <div class="cancel-import-dialog-actions"><button value="cancel">继续当前任务</button><button id="confirmCancelImports" type="button">中断并删除</button></div>
     </form>
   </dialog>
-  <script src="app.js?v=20260930-14"></script>
+  <script src="app.js?v=20260930-17"></script>
 </body>
 </html>

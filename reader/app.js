@@ -85,11 +85,15 @@ let youtubePollTimer=null;
 let youtubeTitleManuallyEdited=false;
 let pendingDeleteBook=null;
 let pendingImportJobs=[];
+let deploymentPollTimer=null;
+let deploymentLogOffset=0;
+let activeDeploymentJob=null;
 
 const STORE = {
   state: "shiyue-reader-state-v2",
   vocab: "shiyue-vocab-v2",
   imports: "shiyue-active-imports-v1",
+  settingsTab: "shiyue-settings-tab-v1",
 };
 
 const dictionary = {
@@ -182,6 +186,7 @@ async function init() {
   populateVideoSeriesOptions();
   bindEvents();
   await loadApiSettings();
+  await loadDeploymentConfig();
   setupSeriesSelector(); renderLibrary();
   await loadImportCatalog();
   await restoreImportTracking();
@@ -340,7 +345,17 @@ function bindEvents() {
   $("#audio").onseeked = syncPlaybackFrame;
   window.addEventListener("resize",scheduleTopbarContentAlignment);
   window.addEventListener("beforeunload", finishSession);
+  $("#settingsTabs").onclick=event=>{const tab=event.target.closest("[data-settings-tab]");if(tab)setSettingsTab(tab.dataset.settingsTab);};
+  $("#settingsTabs").onkeydown=event=>{if(!["ArrowLeft","ArrowRight","Home","End"].includes(event.key))return;event.preventDefault();const tabs=$$("#settingsTabs [data-settings-tab]:not(.hidden)"),current=Math.max(0,tabs.indexOf(document.activeElement));let next=event.key==="Home"?0:event.key==="End"?tabs.length-1:event.key==="ArrowRight"?(current+1)%tabs.length:(current-1+tabs.length)%tabs.length;tabs[next]?.focus();setSettingsTab(tabs[next].dataset.settingsTab);};
+  setSettingsTab(load(STORE.settingsTab,"general"),false);
   $("#settingsForm").onsubmit = saveApiSettings;
+  $("#deploymentForm").onsubmit=saveDeploymentConfig;
+  $("#testDeployment").onclick=()=>startDeploymentAction("test");
+  $("#deployCodeBtn").onclick=()=>startDeploymentAction("deploy");
+  $("#syncResourcesBtn").onclick=()=>startDeploymentAction("sync");
+  $("#rollbackRelease").onchange=event=>{$("#rollbackCodeBtn").disabled=!event.target.value;};
+  $("#rollbackCodeBtn").onclick=()=>startDeploymentAction("rollback",{releaseId:$("#rollbackRelease").value});
+  $("#clearDeploymentLog").onclick=()=>{$("#deploymentLog").textContent="";};
   $("#seriesChannels").onclick=event=>{
     const more=event.target.closest("#seriesMoreBtn");if(more){seriesExpanded=!seriesExpanded;setupSeriesSelector();return;}
     const channel=event.target.closest("[data-series]");if(!channel)return;
@@ -604,6 +619,13 @@ function handleReaderShortcut(event) {
 }
 function toggleSentenceAutoPause(){sentenceAutoPause=!sentenceAutoPause;if(sentenceAutoPause&&active>=0)wordStopAt=book.sentences[active].end+.03;else wordStopAt=null;updateShortcutHint();savePreference({sentenceAutoPause});showReaderToast(sentenceAutoPause?"句末自动暂停：已开启":"句末自动暂停：已关闭");}
 function showReaderToast(message){let toast=$("#readerToast");if(!toast){toast=document.createElement("div");toast.id="readerToast";toast.className="reader-toast";document.body.append(toast);}toast.textContent=message;toast.classList.add("show");clearTimeout(toast._timer);toast._timer=setTimeout(()=>toast.classList.remove("show"),1400);}
+
+function setSettingsTab(name,persist=true){
+  const available=$(`[data-settings-tab="${name}"]:not(.hidden)`);if(!available)name="general";
+  $$("#settingsTabs [data-settings-tab]").forEach(tab=>{const active=tab.dataset.settingsTab===name;tab.classList.toggle("active",active);tab.setAttribute("aria-selected",String(active));tab.tabIndex=active?0:-1;});
+  $$("#settings [data-settings-panel]").forEach(panel=>{const active=panel.dataset.settingsPanel===name;panel.classList.toggle("hidden",!active);panel.setAttribute("aria-hidden",String(!active));});
+  if(persist)save(STORE.settingsTab,name);
+}
 
 function showScreen(id) {
   $$(".screen").forEach(screen => screen.classList.toggle("hidden", screen.id !== id));
@@ -1055,6 +1077,7 @@ function restoreProgress() { if(!book)return; const state=load(`${STORE.state}-$
 async function loadApiSettings() {
   try {
     const response=await fetch("/api/settings",{cache:"no-store"}); const data=await response.json();
+    if(data.runtimeMode==="reader"){$('[data-screen="import"]')?.classList.add("hidden");$("#import")?.classList.add("hidden");}
     $("#diocoEmail").value=data.userEmail||"";
     $("#tokenStatus").textContent=data.tokenConfigured?`令牌已配置：${data.tokenMask}`:"尚未配置令牌";
     shortcuts={previous:data.shortcutPrevious||"a",repeat:data.shortcutRepeat||"s",next:data.shortcutNext||"d",play:data.shortcutPlay||"space"};
@@ -1073,6 +1096,36 @@ async function saveApiSettings(event) {
     shortcuts=proposed;wordTipSeconds=+$("#wordTipSeconds").value;reviewPageSize=+$("#reviewPageSize").value;manualRepeatCount=+$("#manualRepeatCount").value;manualPauseSeconds=+$("#manualPauseSeconds").value;highlightLeadMs=+$("#highlightLeadMs").value;reviewPage=1;stopManualDictation();applyEyeComfort();updateShortcutHint();syncPlaybackFrame();$("#diocoToken").value=""; $("#tokenStatus").textContent=`已保存：${data.tokenMask}`;
   } catch(error) { $("#tokenStatus").textContent=error.message; }
   finally { button.disabled=false; }
+}
+function deploymentPayload(){return {name:"远程服务器",host:$("#deployHost").value.trim(),port:+$("#deployPort").value||22,username:$("#deployUser").value.trim()||"root",password:$("#deployPassword").value,remoteRoot:$("#deployRoot").value.trim()||"/srv/shiyue",servicePort:+$("#deployServicePort").value||8765,installRecording:$("#deployRecording").checked};}
+async function loadDeploymentConfig(){
+  try{
+    const response=await fetch("/api/deployment/config",{cache:"no-store"});if(response.status===403){$("#settingsDeploymentTab")?.classList.add("hidden");$("#settingsDeploymentPanel")?.classList.add("hidden");setSettingsTab("general");return;}const data=await response.json();if(!response.ok)throw new Error(data.error||"无法读取部署配置");
+    const target=data.target;if(target){$("#deployHost").value=target.host||"";$("#deployPort").value=target.port||22;$("#deployUser").value=target.username||"root";$("#deployRoot").value=target.remote_root||"/srv/shiyue";$("#deployServicePort").value=target.service_port||8765;$("#deployRecording").checked=!!target.install_recording;$("#deployPassword").placeholder=target.passwordConfigured?"已保存到钥匙串；留空保持不变":"输入root密码";$("#deploymentConnection").textContent=target.passwordConfigured?"已配置":"缺少密码";$("#deploymentConnection").classList.toggle("ready",!!target.passwordConfigured);}
+    const status=data.status||{};$("#remoteCodeVersion").textContent=status.codeVersion||"-";$("#remoteContentVersion").textContent=status.contentVersion||"-";$("#runtimeResourceSummary").textContent=`${status.localBooks||0} 本 · ${status.localRuntime||"待扫描"}`;
+    renderDeploymentHistory(data.jobs||[]);const running=(data.jobs||[]).find(job=>["queued","running"].includes(job.status));if(running)pollDeploymentJob(running.id,true);loadDeploymentReleases();
+  }catch(error){$("#deploymentConnection").textContent=error.message;}
+}
+async function saveDeploymentConfig(event,quiet=false){
+  event?.preventDefault();const payload=deploymentPayload();
+  try{const response=await fetch("/api/deployment/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}),data=await response.json();if(!response.ok)throw new Error(data.error||"保存失败");$("#deployPassword").value="";$("#deployPassword").placeholder="已保存到钥匙串；留空保持不变";$("#deploymentConnection").textContent="已配置";$("#deploymentConnection").classList.add("ready");if(!quiet)showReaderToast("远程服务器配置已保存");return data.target;}catch(error){$("#deploymentConnection").textContent=error.message;$("#deploymentConnection").classList.remove("ready");throw error;}
+}
+async function startDeploymentAction(action,payload={}){
+  try{
+    await saveDeploymentConfig(null,true);const response=await fetch(`/api/deployment/${action}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}),data=await response.json();if(!response.ok)throw new Error(data.error||"无法启动任务");
+    $("#deploymentLog").textContent="";deploymentLogOffset=0;pollDeploymentJob(data.jobId,false);
+  }catch(error){$("#deploymentLog").textContent+=`\n启动失败：${error.message}\n`;}
+}
+function deploymentKindName(kind){return ({connection_test:"连接测试",code_deploy:"代码部署",resource_sync:"资源同步",code_rollback:"版本回滚",release_list:"版本读取"})[kind]||kind;}
+function renderDeploymentHistory(jobs){$("#deploymentHistory").innerHTML=(jobs||[]).slice(0,10).map(job=>`<div class="${escapeHtml(job.status)}"><b>${escapeHtml(deploymentKindName(job.kind))}</b><span>${escapeHtml(job.step||job.status)}</span><small>${escapeHtml(job.updated_at||"")}</small></div>`).join("");}
+function pollDeploymentJob(jobId,resume=false){
+  clearInterval(deploymentPollTimer);activeDeploymentJob=jobId;if(!resume)deploymentLogOffset=0;$("#deploymentProgress").classList.remove("hidden");
+  const check=async()=>{try{const response=await fetch(`/api/deployment/jobs/${jobId}?offset=${deploymentLogOffset}`,{cache:"no-store"}),job=await response.json();if(!response.ok)throw new Error(job.error||"无法读取任务");deploymentLogOffset=job.logOffset||deploymentLogOffset;if(job.logChunk){const log=$("#deploymentLog");if(log.textContent==="尚未运行部署任务。")log.textContent="";log.textContent+=job.logChunk;log.scrollTop=log.scrollHeight;}$("#deploymentBar").value=job.progress||0;$("#deploymentPercent").textContent=`${job.progress||0}%`;$("#deploymentStep").textContent=job.step||job.status;setDeploymentButtonsBusy(["queued","running"].includes(job.status));if(["complete","failed"].includes(job.status)){clearInterval(deploymentPollTimer);deploymentPollTimer=null;activeDeploymentJob=null;setDeploymentButtonsBusy(false);loadDeploymentConfig();}}catch(error){clearInterval(deploymentPollTimer);deploymentPollTimer=null;setDeploymentButtonsBusy(false);$("#deploymentLog").textContent+=`\n日志读取失败：${error.message}\n`;}};
+  check();deploymentPollTimer=setInterval(check,1000);
+}
+function setDeploymentButtonsBusy(busy){["#testDeployment","#deployCodeBtn","#syncResourcesBtn","#rollbackCodeBtn"].forEach(selector=>$(selector).disabled=busy||(selector==="#rollbackCodeBtn"&&!$("#rollbackRelease").value));}
+async function loadDeploymentReleases(){
+  try{const response=await fetch("/api/deployment/releases",{cache:"no-store"}),data=await response.json();if(!response.ok)return;const releases=data.releases||[];$("#rollbackRelease").innerHTML='<option value="">选择历史版本</option>'+releases.filter(item=>item.status!=="current").map(item=>`<option value="${escapeHtml(item.releaseId)}">${escapeHtml(item.releaseId)}</option>`).join("");const current=releases.find(item=>item.status==="current");$("#remoteCodeVersion").textContent=current?.releaseId||"-";$("#rollbackCodeBtn").disabled=!$("#rollbackRelease").value;}catch{}
 }
 function updateShortcutHint(){$("#shortcutHint").textContent=`${keyLabel(shortcuts.previous)} 上一句 · ${keyLabel(shortcuts.repeat)} 复读 · ${keyLabel(shortcuts.next)} 下一句 · ${keyLabel(shortcuts.play)} 播放/暂停 · Q 句末暂停${sentenceAutoPause?'开':'关'}`;}
 

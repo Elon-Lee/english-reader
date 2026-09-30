@@ -61,6 +61,21 @@ def connect():
       shadow_attempts INTEGER NOT NULL DEFAULT 0, sessions INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS deployment_targets (
+      id INTEGER PRIMARY KEY CHECK(id=1), name TEXT NOT NULL DEFAULT '远程服务器', host TEXT NOT NULL,
+      port INTEGER NOT NULL DEFAULT 22, username TEXT NOT NULL DEFAULT 'root', remote_root TEXT NOT NULL DEFAULT '/srv/shiyue',
+      service_port INTEGER NOT NULL DEFAULT 8765, install_recording INTEGER NOT NULL DEFAULT 1,
+      host_fingerprint TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS deployment_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, status TEXT NOT NULL, progress INTEGER NOT NULL DEFAULT 0,
+      step TEXT DEFAULT '', release_id TEXT DEFAULT '', log_path TEXT NOT NULL, error TEXT DEFAULT '',
+      result_json TEXT DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS deployment_releases (
+      release_id TEXT PRIMARY KEY, target_id INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL,
+      content_hash TEXT DEFAULT '', health_json TEXT DEFAULT '{}', deployed_at TEXT NOT NULL
+    );
     """)
     columns={row[1] for row in db.execute("PRAGMA table_info(books)")}
     if "last_read_at" not in columns: db.execute("ALTER TABLE books ADD COLUMN last_read_at TEXT")

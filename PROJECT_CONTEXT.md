@@ -634,3 +634,85 @@ curl http://127.0.0.1:8765/api/settings
 - `.local/import_jobs`保留历史失败/取消任务，是审计记录，不代表书籍当前不可用。
 - 任务ID 5（《苏格兰玛丽女王》）在SQLite中仍显示历史状态 `running / 63%`，但当前没有对应导入进程；后续可标记失败或重新导入，不要误认为它仍在后台运行。
 - 旧静态JSON和测试媒体可能位于系统临时目录或旧 `.reader/`目录，不是当前阅读器数据源；当前数据源是SQLite。
+
+## 远程一键部署与成品同步
+
+系统设置使用Tab布局，分为“通用设置”和“打包部署”。通用设置管理账户、快捷键与阅读体验；打包部署管理远程发布、资源同步、回滚、实时日志和最近任务。部署接口仅允许通过本机`127.0.0.1`或`localhost`操作，局域网访问会返回403。
+
+用户只需要配置：
+
+```text
+SSH地址
+SSH端口（默认22）
+账号（默认root）
+密码
+远程目录（默认/srv/shiyue）
+服务端口（默认8765）
+是否安装远程录音Whisper
+```
+
+密码不写入SQLite或日志。macOS优先保存到钥匙串；首次连接后自动生成并安装拾页专用Ed25519部署密钥，后续操作优先使用密钥。
+
+主要操作：
+
+```text
+测试连接
+一键部署
+一键同步资源
+版本回滚
+```
+
+所有操作均创建后台任务，并实时写入：
+
+```text
+.local/deployment/logs/<job-id>.log
+```
+
+页面每秒增量读取日志，刷新后可以继续跟踪。
+
+远程代码采用版本目录：
+
+```text
+/srv/shiyue/releases/code-*/
+/srv/shiyue/current -> releases/<active>
+```
+
+远程运行采用Docker，服务容器名为`shiyue-reader`。代码、whisper.cpp源码和录音模型都由本机准备后上传；远程不从GitHub或Hugging Face下载。部署完成后执行`/api/health`检查，健康检查失败时恢复旧容器。
+
+资源同步只根据SQLite中`ready`书籍的实际URL生成成品清单：
+
+```text
+合并后的.reader/audio.mp3
+页面/关键帧.reader/pages/page-*.jpg
+本地MP4/YouTube source.mp4
+```
+
+不上传原始PDF、章节MP3、DOC/DOCX、TXT、CHM、Whisper分章文件、CTC环境或macOS编译产物。当前18本成品约1.236GiB、1199个文件。
+
+资源同步由本机比较当前与远程成品清单，只把新增或修改的文件打成离线增量包并通过SCP上传，同时同步删除记录。远程被替换或删除的文件先进入`backups/resources/<content-revision>/`。这种方式不会受SSH登录横幅影响，也不要求远程下载任何同步工具或代码。内容数据库包只合并`books`、`book_artifacts`和`dictionary_entries`，保留远程学习记录、生词、备注和设置。
+
+远程实例运行：
+
+```text
+SHIYUE_RUNTIME_MODE=reader
+```
+
+该模式隐藏导入入口并拒绝导入API。
+
+如果启用远程录音，Docker镜像包含Linux版FFmpeg和由本机源码构建的whisper.cpp；`ggml-base.en.bin`由本机校验后上传。部署会生成远程HTTPS CA和服务器证书，并将根证书下载到：
+
+```text
+.local/deployment/certificates/<host>-rootCA.pem
+```
+
+其他电脑或手机需要安装一次该根证书，才能在远程HTTPS页面授权麦克风。
+
+部署实现文件：
+
+```text
+tools/deployment/manager.py
+tools/deployment/remote_apply.py
+tools/deployment/ssh_expect.exp
+deployment/systemd/shiyue-reader.service
+deployment/docker/Dockerfile
+```
