@@ -5,6 +5,7 @@ import json
 import re
 from difflib import SequenceMatcher
 from pathlib import Path
+from timed_segmentation import detect_silences,normalize_word_timeline,resegment_timed_book
 
 WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?|\d+")
 NUMBERS = {
@@ -34,8 +35,10 @@ def whisper_words(data):
             confidence.append(float(token.get("p", 0)))
         p=sum(confidence)/len(confidence) if confidence else 0
         span=max(.04,end-start)
+        sentence_break=bool(re.search(r"[.!?][\"']?$",text.strip()))
         for i,match in enumerate(found):
-            words.append({"text":match.group(),"norm":norm(match.group()),
+            punctuation="".join(re.findall(r"[,.;:!?]",text[match.end():(found[i+1].start() if i+1<len(found) else len(text))]))
+            words.append({"text":match.group(),"norm":norm(match.group()),"punctuationAfter":punctuation,"speechBreakAfter":sentence_break and i==len(found)-1,
                           "start":round(start+span*i/len(found),3),
                           "end":round(start+span*(i+1)/len(found),3),"confidence":round(p,3)})
     return [w for w in words if w["norm"] and w["norm"] not in {"music"}]
@@ -43,8 +46,10 @@ def whisper_words(data):
 def canonical_words(book):
     output=[]
     for sentence_index,sentence in enumerate(book["sentences"]):
+        source_words=sentence.get("words",[])
         for word_index,match in enumerate(WORD_RE.finditer(sentence["text"])):
-            output.append({"text":match.group(),"norm":norm(match.group()),
+            source=source_words[word_index] if word_index<len(source_words) else {}
+            output.append({"text":match.group(),"norm":norm(match.group()),"punctuationAfter":source.get("punctuationAfter",""),"breakAfter":bool(source.get("breakAfter")),"speechBreakAfter":bool(source.get("speechBreakAfter")),
                            "sentence":sentence_index,"word":word_index})
     return output
 
@@ -113,6 +118,7 @@ def main():
     parser.add_argument("--report",type=Path)
     parser.add_argument("--model",default="base.en")
     parser.add_argument("--min-match",type=float,default=.5)
+    parser.add_argument("--audio",type=Path)
     args=parser.parse_args()
     book=json.loads(args.book.read_text())
     transcript=json.loads(args.whisper.read_text())
@@ -135,16 +141,16 @@ def main():
     direct_mapping={ci:heard[wi] for ci,wi in mapping.items()}
     mapping=dict(direct_mapping)
     interpolate(mapping,canonical,heard,book)
-    per_sentence=[[] for _ in book["sentences"]]
+    per_sentence=[[] for _ in book["sentences"]];all_aligned=[]
     for ci,item in enumerate(canonical):
         timing=mapping[ci]
-        per_sentence[item["sentence"]].append({"text":item["text"],"start":round(timing["start"],3),
+        aligned={"text":item["text"],"start":round(timing["start"],3),
             "end":round(max(timing["start"]+.03,timing["end"]),3),
-            "confidence":round(timing.get("confidence",0),3),"aligned":not timing.get("estimated",False)})
-    normalization={"overlapsFixed":0,"durationsCapped":0}
+            "confidence":round(timing.get("confidence",0),3),"aligned":not timing.get("estimated",False),
+            "punctuationAfter":item.get("punctuationAfter",timing.get("punctuationAfter","")),"breakAfter":bool(item.get("breakAfter")),"speechBreakAfter":bool(item.get("speechBreakAfter") or timing.get("speechBreakAfter"))}
+        per_sentence[item["sentence"]].append(aligned);all_aligned.append(aligned)
+    normalization=normalize_word_timeline(all_aligned)
     for sentence,words in zip(book["sentences"],per_sentence):
-        result=normalize_words(words)
-        for key,value in result.items(): normalization[key]+=value
         sentence["words"]=words
         if words:
             sentence["start"]=round(words[0]["start"],3)
@@ -153,8 +159,9 @@ def main():
     if ratio < args.min_match:
         raise SystemExit(f"Alignment rejected: direct word match {ratio:.1%} is below {args.min_match:.0%}")
     book["alignment"]="whisper-dtw-normalized"
+    segmentation=resegment_timed_book(book,"yt",detect_silences(args.audio) if args.audio else None)
     book["whisper"]={"engine":"whisper.cpp","model":args.model,"directWordMatch":round(ratio,4),
-                     "timestampMethod":"dtw","normalization":normalization,
+                     "timestampMethod":"dtw","normalization":normalization,"segmentation":segmentation,
                      "canonicalWords":len(canonical),"matchedWords":direct,"transcribedWords":len(heard)}
     output=args.output or args.book
     output.write_text(json.dumps(book,ensure_ascii=False,indent=2))

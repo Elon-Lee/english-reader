@@ -44,7 +44,7 @@
     <section id="vocab" class="screen dashboard vocab-screen hidden"><div class="page-title vocab-page-title"><small>VOCABULARY REVIEW</small><h1>生词复习</h1><p>通过主动回忆和听写，把阅读中遇到的生词真正记住。</p></div><div class="review-workspace"><div id="reviewContent"></div><aside id="reviewWordPanel" class="review-word-panel"><div class="word-empty"><span>Aa</span><h3>点击生词</h3><p>在这里查看完整释义、当前句用法、例句和备注。</p></div></aside></div></section>
     <section id="import" class="screen dashboard hidden">
       <div class="page-title"><small>CONTENT IMPORTER</small><h1>导入内容</h1><p>扫描 books 全部目录，支持PDF、DOC、TXT、CHM、纯音频、视频和YouTube。</p></div>
-      <div class="import-type-tabs"><button data-import-type="books" class="active">目录书籍</button><button data-import-type="video">视频文件</button><button data-import-type="youtube">YouTube 地址</button></div>
+      <div class="import-type-tabs"><button data-import-type="books" class="active">目录书籍</button><button data-import-type="video">视频 / 音频</button><button data-import-type="youtube">YouTube 地址</button></div>
       <div id="activeImportActions" class="active-import-actions hidden"><div><b id="activeImportTitle">后台正在处理导入任务</b><small id="activeImportHint">可以关闭或刷新页面，任务会继续执行。</small></div><button id="cancelActiveImports" type="button">中断并删除任务</button></div>
       <div id="booksImportPane" class="panel import-panel">
         <label>系列<select id="importSeries"><option>正在扫描…</option></select></label>
@@ -53,7 +53,7 @@
         <div id="importMeta" class="import-meta">将展示 books 下全部书籍目录；缺少音频的项目会保留并标注原因。</div>
       </div>
       <form id="videoImportPane" class="panel video-import-panel hidden">
-        <label>MP4 / MOV视频<input id="videoFile" type="file" accept="video/mp4,video/quicktime,.m4v" required></label>
+        <label>视频或音频文件<input id="videoFile" type="file" accept="video/mp4,video/quicktime,.m4v,audio/mpeg,audio/mp4,audio/wav,audio/x-wav,audio/flac,audio/aac,audio/ogg,.mp3,.m4a,.wav,.flac,.aac,.ogg,.opus" required><small class="field-help">支持 MP4、MOV、M4V、MP3、M4A、WAV、FLAC、AAC、OGG；纯音频会自动识别正文、断句并生成词级时间轴。</small></label>
         <label>可选字幕<input id="videoSubtitle" type="file" accept=".srt,.vtt,text/vtt"></label>
         <label>中文标题<input id="videoTitle" required placeholder="视频课程标题"></label>
         <label>英文标题<input id="videoEnglishTitle" placeholder="Optional English title"></label>
@@ -66,7 +66,7 @@
         </label>
         <label>等级<input id="videoLevel" placeholder="例如 0"></label>
         <label>字幕策略<select id="videoSubtitleStrategy"><option value="auto">自动：外部 → 内嵌 → Whisper</option><option value="external">优先字幕</option><option value="whisper">只使用Whisper</option></select></label>
-        <button type="submit">上传并导入视频</button>
+        <button type="submit">上传并导入媒体</button>
         <div id="videoUploadProgress" class="video-upload-progress hidden"><div><b id="videoUploadStep">准备上传</b><span id="videoUploadPercent">0%</span></div><progress id="videoUploadBar" max="100" value="0"></progress><p id="videoUploadMessage"></p></div>
       </form>
       <form id="youtubeImportPane" class="panel youtube-import-panel hidden">
@@ -190,6 +190,6 @@
       <div class="cancel-import-dialog-actions"><button value="cancel">继续当前任务</button><button id="confirmCancelImports" type="button">中断并删除</button></div>
     </form>
   </dialog>
-  <script src="app.js?v=20260930-22"></script>
+  <script src="app.js?v=20261001-3"></script>
 </body>
 </html>

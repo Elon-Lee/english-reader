@@ -13,6 +13,8 @@ from urllib.parse import unquote
 
 import torch
 import torchaudio
+from sat_integration import annotate_sat_boundaries
+from timed_segmentation import detect_silences,resegment_timed_book
 
 ROOT=Path(__file__).resolve().parents[1]
 DB=ROOT/".local/library.sqlite3"
@@ -40,7 +42,8 @@ def audio_path(url):
     if not url.startswith(prefix):raise ValueError(f"Unsupported audio URL: {url}")
     path=(BOOKS/unquote(url[len(prefix):])).resolve();path.relative_to(BOOKS.resolve());return path
 
-def load_book(book_id):
+def load_book(book_id,input_path=None):
+    if input_path:return json.loads(Path(input_path).read_text())
     db=sqlite3.connect(DB);row=db.execute("SELECT data_json FROM books WHERE id=?",(book_id,)).fetchone();db.close()
     if not row:raise ValueError("Book not found")
     return json.loads(row[0])
@@ -88,8 +91,8 @@ def align_sentence(model,waveform,sample_rate,sentence,labels,dictionary,padding
     return result,None
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument("--book-id",required=True);parser.add_argument("--job-id",type=int);parser.add_argument("--output",type=Path);parser.add_argument("--sentence",type=int);parser.add_argument("--limit",type=int);parser.add_argument("--padding",type=float,default=1.0);parser.add_argument("--update-db",action="store_true")
-    args=parser.parse_args();torch.set_num_threads(max(1,min(3,int(os.environ.get("SHIYUE_CTC_THREADS","3")))));torch.set_num_interop_threads(1);book=load_book(args.book_id);audio=audio_path(book["audio"]);waveform,sample_rate=load_waveform(audio)
+    parser=argparse.ArgumentParser();parser.add_argument("--book-id",required=True);parser.add_argument("--input",type=Path);parser.add_argument("--job-id",type=int);parser.add_argument("--output",type=Path);parser.add_argument("--sentence",type=int);parser.add_argument("--limit",type=int);parser.add_argument("--padding",type=float,default=1.0);parser.add_argument("--segmentation-profile",choices=["youtube-auto","youtube-manual","local-subtitle","speech-asr"]);parser.add_argument("--update-db",action="store_true")
+    args=parser.parse_args();torch.set_num_threads(max(1,min(3,int(os.environ.get("SHIYUE_CTC_THREADS","3")))));torch.set_num_interop_threads(1);book=load_book(args.book_id,args.input);audio=audio_path(book["audio"]);waveform,sample_rate=load_waveform(audio)
     bundle=torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H;labels=bundle.get_labels();dictionary={char:index for index,char in enumerate(labels)};model=bundle.get_model().eval()
     selected=range(len(book["sentences"]))
     if args.sentence is not None:selected=[args.sentence]
@@ -105,12 +108,25 @@ def main():
         if args.job_id and (number==1 or number%5==0 or number==total):
             db=sqlite3.connect(DB);db.execute("UPDATE import_jobs SET progress=?,step=?,updated_at=datetime('now') WHERE id=?",(98 if number<total/2 else 99,f"wav2vec2 CTC {number}/{total}",args.job_id));db.commit();db.close()
     coverage=aligned/max(1,total)
+    profile=args.segmentation_profile
+    if not profile and book.get("sourceType") in {"video","youtube","audio"}:
+        if book.get("sourceType")=="youtube":profile="youtube-auto" if book.get("subtitleSource")=="automatic" else "youtube-manual"
+        elif book.get("subtitleType") in {"external","embedded"}:profile="local-subtitle"
+        else:profile="speech-asr"
+    sat_report=annotate_sat_boundaries(book,profile) if profile else None
+    segmentation=resegment_timed_book(book,"yt",detect_silences(audio),profile=profile) if profile else None
+    if segmentation:segmentation["sat"]=sat_report
+    if segmentation and (segmentation.get("sentenceOverlaps") or segmentation.get("internalPausesOver08")):
+        raise ValueError(f"Timed segmentation quality rejected: {segmentation}")
     summary={"method":"wav2vec2-ctc-forced-alignment","model":"WAV2VEC2_ASR_BASE_960H","alignedSentences":aligned,"failedSentences":len(failed),"coverage":round(coverage,4),"failures":failed}
+    if segmentation:summary["segmentation"]=segmentation
     book["forcedAlignment"]=summary
     if coverage>=.35:book["alignment"]="wav2vec2-ctc-forced-alignment"
     if args.output:args.output.write_text(json.dumps(book,ensure_ascii=False,indent=2))
     if args.update_db:
-        db=sqlite3.connect(DB);db.execute("UPDATE books SET alignment=?,data_json=?,updated_at=datetime('now') WHERE id=?",(book["alignment"],json.dumps(book,ensure_ascii=False),args.book_id));db.execute("INSERT INTO book_artifacts(book_id,kind,data_json,created_at) VALUES(?,?,?,datetime('now')) ON CONFLICT(book_id,kind) DO UPDATE SET data_json=excluded.data_json,created_at=excluded.created_at",(args.book_id,"alignment-ctc",json.dumps(summary,ensure_ascii=False)));db.commit();db.close()
+        db=sqlite3.connect(DB);row=db.execute("SELECT quality_json FROM books WHERE id=?",(args.book_id,)).fetchone();quality=json.loads(row[0] or "{}") if row else {}
+        if segmentation:quality.update({"sentences":len(book.get("sentences",[])),"timingSource":"subtitle-dedup+whisper-dtw+wav2vec2+pause-segmentation","segmentation":segmentation,"alignmentAudit":{"sentenceOverlaps":segmentation.get("sentenceOverlaps",0),"internalPausesOver08":segmentation.get("internalPausesOver08",0),"maxSentenceSeconds":segmentation.get("maxSentenceSeconds",0),"ctcCoverage":round(coverage,4)}})
+        db.execute("UPDATE books SET alignment=?,data_json=?,quality_json=?,updated_at=datetime('now') WHERE id=?",(book["alignment"],json.dumps(book,ensure_ascii=False),json.dumps(quality,ensure_ascii=False),args.book_id));db.execute("INSERT INTO book_artifacts(book_id,kind,data_json,created_at) VALUES(?,?,?,datetime('now')) ON CONFLICT(book_id,kind) DO UPDATE SET data_json=excluded.data_json,created_at=excluded.created_at",(args.book_id,"alignment-ctc",json.dumps(summary,ensure_ascii=False)));db.execute("INSERT INTO book_artifacts(book_id,kind,data_json,created_at) VALUES(?,?,?,datetime('now')) ON CONFLICT(book_id,kind) DO UPDATE SET data_json=excluded.data_json,created_at=excluded.created_at",(args.book_id,"segmentation",json.dumps(segmentation or {},ensure_ascii=False)));db.commit();db.close()
     print(json.dumps(summary,ensure_ascii=False,indent=2))
 
 if __name__=="__main__":main()

@@ -349,14 +349,14 @@ class Handler(SimpleHTTPRequestHandler):
         try:item=self.json_body()
         except Exception:self.reply({"error":"invalid json"},400);return
         if not isinstance(item,dict):self.reply({"error":"invalid json"},400);return
-        title=str(item.get("title","")).strip();series=str(item.get("series","")).strip() or "视频课程"
-        if not title:self.reply({"error":"请输入视频标题"},400);return
-        duplicates=import_duplicates(title,series,"video")
+        title=str(item.get("title","")).strip();series=str(item.get("series","")).strip() or "视频课程";media_filename=str(item.get("videoFilename","source.mp4"));media_suffix=Path(media_filename).suffix.lower();media_type="audio" if media_suffix in {".mp3",".m4a",".wav",".flac",".aac",".ogg",".opus"} else "video"
+        if not title:self.reply({"error":"请输入媒体标题"},400);return
+        duplicates=import_duplicates(title,series,media_type)
         if duplicates and not item.get("allowReimport"):
-            self.reply({"error":"该视频已经导入","code":"duplicate_import","duplicates":duplicates},409);return
+            self.reply({"error":"该媒体已经导入","code":"duplicate_import","duplicates":duplicates},409);return
         upload_id=uuid.uuid4().hex;folder=VIDEO_UPLOADS/upload_id;folder.mkdir(parents=True)
-        metadata={"title":title,"englishTitle":str(item.get("englishTitle","")).strip(),"series":series,"level":str(item.get("level","")).strip(),
-                  "subtitleStrategy":str(item.get("subtitleStrategy","auto")),"videoFilename":str(item.get("videoFilename","source.mp4")),"subtitleFilename":str(item.get("subtitleFilename",""))}
+        metadata={"title":title,"englishTitle":str(item.get("englishTitle","")).strip(),"series":series,"level":str(item.get("level","")).strip(),"sourceType":media_type,"mediaType":media_type,
+                  "subtitleStrategy":str(item.get("subtitleStrategy","auto")),"videoFilename":media_filename,"subtitleFilename":str(item.get("subtitleFilename",""))}
         (folder/"metadata.json").write_text(json.dumps(metadata,ensure_ascii=False,indent=2));self.reply({"uploadId":upload_id},201)
     def valid_youtube_url(self,value):
         try:
@@ -403,7 +403,7 @@ class Handler(SimpleHTTPRequestHandler):
         if length<=0 or length>limit:self.reply({"error":"invalid file size"},413);return
         metadata=json.loads((folder/"metadata.json").read_text());original=metadata.get("videoFilename" if kind=="video" else "subtitleFilename","")
         suffix=Path(original).suffix.lower() or (".mp4" if kind=="video" else ".srt")
-        if kind=="video" and suffix not in {".mp4",".mov",".m4v"}:suffix=".mp4"
+        if kind=="video" and suffix not in {".mp4",".mov",".m4v",".mp3",".m4a",".wav",".flac",".aac",".ogg",".opus"}:suffix=".mp4"
         if kind=="subtitle" and suffix not in {".srt",".vtt"}:suffix=".srt"
         target=folder/("source"+suffix if kind=="video" else "subtitles"+suffix)
         remaining=length
@@ -419,11 +419,11 @@ class Handler(SimpleHTTPRequestHandler):
         if length: self.rfile.read(length)
         upload_id=self.path.split("/api/import/video/complete/",1)[1].split("?",1)[0];folder=(VIDEO_UPLOADS/upload_id).resolve()
         if not folder.is_dir():self.reply({"error":"upload not found"},404);return
-        metadata=json.loads((folder/"metadata.json").read_text());video=next(iter(folder.glob("source.*")),None)
-        if not video:self.reply({"error":"video missing"},400);return
-        safe=re.sub(r"[^\w\-\u4e00-\u9fff]+","-",metadata["title"]).strip("-") or "video"
-        relative=str(Path(metadata["series"])/f"video.{safe}-{upload_id[:8]}");destination=BOOKS_ROOT/relative;destination.mkdir(parents=True,exist_ok=True)
-        shutil.move(str(video),destination/("source"+video.suffix.lower()))
+        metadata=json.loads((folder/"metadata.json").read_text());media=next(iter(folder.glob("source.*")),None)
+        if not media:self.reply({"error":"media missing"},400);return
+        media_type=metadata.get("mediaType","video");safe=re.sub(r"[^\w\-\u4e00-\u9fff]+","-",metadata["title"]).strip("-") or media_type
+        relative=str(Path(metadata["series"])/f"{media_type}.{safe}-{upload_id[:8]}");destination=BOOKS_ROOT/relative;destination.mkdir(parents=True,exist_ok=True)
+        shutil.move(str(media),destination/("source"+media.suffix.lower()))
         subtitle=next(iter(folder.glob("subtitles.*")),None)
         if subtitle:shutil.move(str(subtitle),destination/("subtitles"+subtitle.suffix.lower()))
         (destination/".video-import.json").write_text(json.dumps(metadata,ensure_ascii=False,indent=2));shutil.rmtree(folder)
