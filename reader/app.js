@@ -64,6 +64,8 @@ let vocabItems=[];
 let wordTipSeconds=2;
 let eyeComfort=false;
 let selectedWordContext=null;
+let selectedGrammarSentence=null;
+let grammarRequestId=0;
 let wordTipTimer=null;
 let wordHoverMeaningTimer=null;
 let wordHoverMeaningRequestId=0;
@@ -201,7 +203,8 @@ async function init() {
 async function loadBook(bookId) {
   const response=await fetch(`/api/books/${encodeURIComponent(bookId)}`,{cache:"no-store"});
   if(!response.ok) throw new Error("无法读取图书数据库");
-  const record=await response.json(); currentBookId=bookId; book=record.book;wordAnnotations=record.annotations||[];rebuildWordIndexes();
+  const record=await response.json(); currentBookId=bookId; book=record.book;wordAnnotations=record.annotations||[];selectedWordContext=null;selectedGrammarSentence=null;document.body.classList.remove("focus-word-open");rebuildWordIndexes();
+  $("#wordPanel").innerHTML='<div class="word-empty"><span>Aa</span><h3>单词与句子分析</h3><p>悬浮单词查看简释；点击单词查看完整释义，点击句末“句法”分析句型和语法。</p></div>';
   $("#audio").pause(); $("#audio").src=book.audio; $("#duration").textContent=fmt(book.duration);
   $(".book-heading small").textContent=`${book.level||""}级 · LOCAL BOOK`;
   $(".book-heading strong").innerHTML=`${escapeHtml(book.title)} <i>${escapeHtml(book.englishTitle||"")}</i>`;
@@ -272,6 +275,7 @@ function renderStoryWindow(center,scroll=false){
     p.dataset.i = index;
     p.dataset.section = sentence.section;
     p.innerHTML = sentenceHtml(sentence);
+    p.insertAdjacentHTML("beforeend",`<button type="button" class="sentence-grammar-btn" data-sentence-grammar title="分析这句话的句式和语法">语法</button>`);
     if(index===paintedSentenceIndex)p.classList.add("active");
     box.append(p);
     sentenceElementsByIndex[index]=p;
@@ -308,6 +312,7 @@ function bindEvents() {
     const sentenceElement = event.target.closest(".sentence");
     if (!sentenceElement) return;
     const sentence = book.sentences[+sentenceElement.dataset.i];
+    if(event.target.closest("[data-sentence-grammar]")){event.stopPropagation();showSentenceGrammar(sentence);return;}
     if (event.target.classList.contains("word")) {
       event.stopPropagation();
       const word = event.target;
@@ -602,6 +607,10 @@ function handleWordPointerOut(event){
   scheduleWordResume();
 }
 function handleWordPanelAction(event){
+  if(event.target.closest("[data-close-focus-panel]")){document.body.classList.remove("focus-word-open");syncReaderPanels();return;}
+  const tab=event.target.closest("[data-word-panel-tab]")?.dataset.wordPanelTab;
+  if(tab==="grammar"&&selectedGrammarSentence){showSentenceGrammar(selectedGrammarSentence);return;}
+  if(tab==="word"&&selectedWordContext){const item=selectedWordContext;showWord(item.word,item.sentence,item.element);return;}
   const action=event.target.closest("[data-panel-word-action]")?.dataset.panelWordAction;
   if(action){openWordEditor(action);return;}
   const editAction=event.target.closest("[data-word-edit]")?.dataset.wordEdit;
@@ -878,13 +887,14 @@ function getDefinition(raw, sentence) {
 
 async function showWord(raw, sentence, wordElement) {
   if(document.body.classList.contains("focus")){document.body.classList.add("focus-word-open");syncReaderPanels();}
+  selectedGrammarSentence=sentence;
   const definition = getDefinition(raw, sentence);
   const selectedIndex=+(wordElement?.dataset.wordIndex??-1),key=wordRecordKey(sentence.id,selectedIndex);
   const annotation=annotationIndex.get(key);
   const saved = vocabWordIndex.get(key);
   selectedWordContext={element:wordElement,sentence,wordIndex:selectedIndex,word:raw,definition,note:annotation?.note||""};
   const requestId=++wordRequestId;
-  $("#wordPanel").innerHTML = `<div class="definition">
+  $("#wordPanel").innerHTML = `${wordPanelTabsHtml("word")}<div class="definition">
     <button class="speak" id="speakWord" title="播放接口发音">♪</button><span class="phonetic">${formatText(definition.phonetic)}</span><h2>${escapeHtml(raw)}</h2>
     <div id="remoteDefinition"><p class="loading-line">正在查询中文释义…</p></div>
     <div class="rating"><small>${saved ? `当前：${ratingName(saved.rating)} · 下次 ${new Date(saved.due_at).toLocaleDateString("zh-CN")}` : "加入复习并评级"}</small>
@@ -924,6 +934,26 @@ async function showWord(raw, sentence, wordElement) {
     if(requestId!==wordRequestId) return;
     $("#remoteUsage").innerHTML=`${formatText(definition.usage)}<small class="api-source">接口不可用，已使用本地语境规则</small>`;
   });
+}
+
+function wordPanelTabsHtml(active){return `<div class="word-panel-tabs"><button type="button" data-word-panel-tab="word" class="${active==="word"?"active":""}" ${selectedWordContext?"":"disabled"}>单词释义</button><button type="button" data-word-panel-tab="grammar" class="${active==="grammar"?"active":""}" ${selectedGrammarSentence?"":"disabled"}>句子语法</button><button type="button" class="focus-panel-close" data-close-focus-panel title="关闭释义栏" aria-label="关闭释义栏">×</button></div>`;}
+function grammarTokenHtml(tokens){
+  let html="";(tokens||[]).forEach((token,index)=>{const punctuation=token.role==="punctuation";if(index&&!punctuation&&!/^[’']/.test(token.text))html+=" ";html+=`<span class="grammar-token grammar-${escapeHtml(token.role)}" title="${escapeHtml(token.posZh||token.pos)} · ${escapeHtml(token.relation||"")}">${escapeHtml(token.text)}</span>`;});return html;
+}
+function grammarAnalysisHtml(data,loadingExplanation=false){
+  const clauses=(data.clauses||[]).map(item=>`<li><b>${escapeHtml(item.type)}</b><span>${escapeHtml(item.text)}</span>${item.marker?`<small>引导词：${escapeHtml(item.marker)}</small>`:""}</li>`).join("");
+  const points=(data.grammarPoints||[]).map(item=>`<span>${escapeHtml(item)}</span>`).join("");
+  const explanation=data.aiExplanation||data.explanation||"";
+  return `${wordPanelTabsHtml("grammar")}<div class="grammar-analysis"><small class="grammar-source">SENTENCE GRAMMAR · ${escapeHtml(data.source||"本地模型")}</small><h2>${escapeHtml(data.sentenceType||"句法分析")}</h2><div class="grammar-colored-sentence">${grammarTokenHtml(data.tokens)}</div><div class="grammar-legend"><span class="grammar-subject">主语</span><span class="grammar-predicate">谓语</span><span class="grammar-object">宾语/补语</span><span class="grammar-clause">从句</span></div><section><small>基本句型</small><b>${escapeHtml(data.pattern||"")}</b></section><div class="grammar-core"><p><small>主语</small>${escapeHtml(data.subject||"")}</p><p><small>谓语</small>${escapeHtml(data.predicate||"")}</p>${data.object?`<p><small>宾语 / 补语</small>${escapeHtml(data.object)}</p>`:""}</div>${clauses?`<section class="grammar-clauses"><small>从句结构</small><ul>${clauses}</ul></section>`:""}${points?`<section><small>语法重点</small><div class="grammar-points">${points}</div></section>`:""}<section class="grammar-explanation"><small>中文讲解</small><p id="grammarExplanation">${formatText(explanation)}</p>${loadingExplanation?'<i>正在结合句法结构生成更自然的中文讲解…</i>':''}</section><details class="grammar-tree"><summary>查看成分句法树</summary><pre>${escapeHtml(data.constituency||"")}</pre></details></div>`;
+}
+async function showSentenceGrammar(sentence){
+  selectedGrammarSentence=sentence;if(document.body.classList.contains("focus")){document.body.classList.add("focus-word-open");syncReaderPanels();}
+  const requestId=++grammarRequestId;$("#wordPanel").innerHTML=`${wordPanelTabsHtml("grammar")}<div class="grammar-analysis"><span class="loading-line">正在读取本地句法分析…</span></div>`;
+  try{
+    const payload={bookId:currentBookId,sentenceId:sentence.id};const response=await fetch("/api/sentence-grammar",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const data=await response.json();if(!response.ok)throw new Error(data.error||"语法分析失败");if(requestId!==grammarRequestId)return;
+    $("#wordPanel").innerHTML=grammarAnalysisHtml(data,!data.aiExplanation);
+    if(!data.aiExplanation){fetch("/api/sentence-grammar",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...payload,enhance:true})}).then(result=>result.ok?result.json():null).then(enhanced=>{if(enhanced&&requestId===grammarRequestId)$("#wordPanel").innerHTML=grammarAnalysisHtml(enhanced,false);}).catch(()=>{});}
+  }catch(error){if(requestId===grammarRequestId)$("#wordPanel").innerHTML=`${wordPanelTabsHtml("grammar")}<div class="word-empty"><span>句</span><h3>暂时无法分析</h3><p>${escapeHtml(error.message)}</p></div>`;}
 }
 
 function highlightWord(sentence, word) {

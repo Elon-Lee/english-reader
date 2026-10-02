@@ -2,8 +2,10 @@
 """Split oversized book paragraphs while preserving existing word timings."""
 import argparse
 import json
+import os
 import re
 import sqlite3
+import subprocess
 from datetime import datetime
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -86,9 +88,12 @@ def main():
         for rowid,target in updates:db.execute(f"UPDATE {table} SET sentence_id=? WHERE rowid=?",(f"__resegment__{args.book_id}__{rowid}",rowid))
         for rowid,target in updates:db.execute(f"UPDATE {table} SET sentence_id=?,word_index=? WHERE rowid=?",(target[0],target[1],rowid))
     stamp=datetime.now().astimezone().isoformat(timespec="seconds")
-    db.execute("UPDATE books SET data_json=?,quality_json=?,updated_at=? WHERE id=?",(json.dumps(book,ensure_ascii=False),json.dumps(quality,ensure_ascii=False),stamp,args.book_id))
+    db.execute("UPDATE books SET data_json=?,quality_json=?,updated_at=? WHERE id=?",(json.dumps(book,ensure_ascii=False),json.dumps(quality,ensure_ascii=False),stamp,args.book_id));db.execute("DELETE FROM sentence_grammar WHERE book_id=?",(args.book_id,))
     db.execute("INSERT INTO book_artifacts(book_id,kind,data_json,created_at) VALUES(?,?,?,?) ON CONFLICT(book_id,kind) DO UPDATE SET data_json=excluded.data_json,created_at=excluded.created_at",(args.book_id,"segmentation",json.dumps(book["segmentation"],ensure_ascii=False),stamp))
     if book.get("forcedAlignment"):db.execute("INSERT INTO book_artifacts(book_id,kind,data_json,created_at) VALUES(?,?,?,?) ON CONFLICT(book_id,kind) DO UPDATE SET data_json=excluded.data_json,created_at=excluded.created_at",(args.book_id,"alignment-ctc",json.dumps(book["forcedAlignment"],ensure_ascii=False),stamp))
-    db.commit();db.close();print(json.dumps(book["segmentation"],ensure_ascii=False,indent=2))
+    db.commit();db.close()
+    grammar_python=ROOT/".local/forced-aligner/venv/bin/python"
+    if grammar_python.exists():subprocess.run([str(grammar_python),str(ROOT/"tools/analyze_grammar.py"),"--book-id",args.book_id],cwd=ROOT,env={**os.environ,"PYTHONPATH":str(ROOT/"tools")},check=False)
+    print(json.dumps(book["segmentation"],ensure_ascii=False,indent=2))
 
 if __name__=="__main__":main()

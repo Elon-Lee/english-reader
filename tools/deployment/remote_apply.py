@@ -26,6 +26,8 @@ def apply_bundle(bundle,db_path,preserve_removed_learning=False):
         for row in payload["book_artifacts"]:db.execute("INSERT INTO book_artifacts(book_id,kind,data_json,created_at) VALUES(?,?,?,?)",(row["book_id"],row["kind"],row["data_json"],row["created_at"]))
         db.execute("DELETE FROM dictionary_entries")
         for row in payload["dictionary_entries"]:db.execute("INSERT INTO dictionary_entries(surface,entry_json,updated_at) VALUES(?,?,?)",(row["surface"],row["entry_json"],row["updated_at"]))
+        db.execute("DELETE FROM sentence_grammar")
+        for row in payload.get("sentence_grammar",[]):db.execute("INSERT INTO sentence_grammar(book_id,sentence_id,sentence_hash,analysis_json,model,updated_at) VALUES(?,?,?,?,?,?)",(row["book_id"],row["sentence_id"],row["sentence_hash"],row["analysis_json"],row["model"],row["updated_at"]))
         db.commit()
     except Exception:
         db.rollback();raise

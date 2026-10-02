@@ -336,7 +336,7 @@ def content_file_entry(source,books_root):
 
 def export_content(job,revision):
     stage=STATE/"staging"/revision;shutil.rmtree(stage,ignore_errors=True);stage.mkdir(parents=True)
-    db=connect();books=[dict(row) for row in db.execute("SELECT * FROM books WHERE status='ready'")];artifacts=[dict(row) for row in db.execute("SELECT * FROM book_artifacts WHERE book_id IN (SELECT id FROM books WHERE status='ready')")];dictionary=[dict(row) for row in db.execute("SELECT * FROM dictionary_entries")];db.close()
+    db=connect();books=[dict(row) for row in db.execute("SELECT * FROM books WHERE status='ready'")];artifacts=[dict(row) for row in db.execute("SELECT * FROM book_artifacts WHERE book_id IN (SELECT id FROM books WHERE status='ready')")];dictionary=[dict(row) for row in db.execute("SELECT * FROM dictionary_entries")];grammar=[dict(row) for row in db.execute("SELECT * FROM sentence_grammar WHERE book_id IN (SELECT id FROM books WHERE status='ready')")];db.close()
     files=[];books_root=(ROOT/"books").resolve()
     for row in books:
         data=json.loads(row["data_json"])
@@ -351,11 +351,11 @@ def export_content(job,revision):
             entry=content_file_entry(source,books_root)
             if not entry:continue
             relative,actual=entry;destination=stage/relative;destination.parent.mkdir(parents=True,exist_ok=True);destination.symlink_to(actual);files.append({"path":str(relative),"size":actual.stat().st_size,"mtime":actual.stat().st_mtime_ns})
-    payload={"revision":revision,"books":books,"book_artifacts":artifacts,"dictionary_entries":dictionary}
+    payload={"revision":revision,"books":books,"book_artifacts":artifacts,"dictionary_entries":dictionary,"sentence_grammar":grammar}
     bundle=STATE/f"{revision}.json.gz"
     with gzip.open(bundle,"wt",encoding="utf-8") as output:json.dump(payload,output,ensure_ascii=False)
-    manifest=STATE/f"{revision}.manifest.json";manifest.write_text(json.dumps({"revision":revision,"books":len(books),"files":files},ensure_ascii=False,indent=2))
-    job.write(f"成品清单：{len(books)}本 · {len(files)}个文件 · {sum(x['size'] for x in files)/1024/1024:.1f} MiB");return stage,bundle,manifest
+    manifest=STATE/f"{revision}.manifest.json";manifest.write_text(json.dumps({"revision":revision,"books":len(books),"grammarSentences":len(grammar),"files":files},ensure_ascii=False,indent=2))
+    job.write(f"成品清单：{len(books)}本 · {len(grammar)}句语法 · {len(files)}个文件 · {sum(x['size'] for x in files)/1024/1024:.1f} MiB");return stage,bundle,manifest
 
 def sync_content(job,remote,target,progress=None):
     progress=progress or {"scan":5,"prepare":25,"generate":35,"package":40,"upload":48,"apply":74,"database":80,"merge":88}

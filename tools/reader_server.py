@@ -24,7 +24,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from library_db import BOOKS_ROOT, active_import_jobs, add_daily, annotate_word, canonical_youtube_series, create_job, delete_book, delete_import_jobs, dictionary, get_book, get_job, get_settings as db_get_settings, import_duplicates, imported_books, learning_days, library, mark_import_jobs_cancelling, now, pending_import_jobs, save_vocab, scan_catalog, set_settings, touch_book, update_job, update_vocab, vocabulary_list
+from library_db import BOOKS_ROOT, active_import_jobs, add_daily, annotate_word, canonical_youtube_series, create_job, delete_book, delete_import_jobs, dictionary, get_book, get_job, get_sentence_grammar, get_settings as db_get_settings, import_duplicates, imported_books, learning_days, library, mark_import_jobs_cancelling, now, pending_import_jobs, save_sentence_grammar, save_vocab, scan_catalog, set_settings, touch_book, update_job, update_vocab, vocabulary_list
 from deployment import manager as deployment_manager
 from youtube_subtitles import has_translated_english_track,select_native_english_track
 
@@ -32,6 +32,7 @@ ROOT=Path(__file__).resolve().parents[1]
 READER=ROOT/"reader"
 CLI=Path(os.environ.get("SHIYUE_WHISPER_CLI",str(ROOT/"tools/vendor/whisper.cpp/build/bin/whisper-cli"))).expanduser()
 MODEL=Path(os.environ.get("SHIYUE_WHISPER_MODEL",str(ROOT/"tools/vendor/whisper.cpp/models/ggml-base.en.bin"))).expanduser()
+GRAMMAR_PYTHON=Path(os.environ.get("SHIYUE_GRAMMAR_PYTHON",str(ROOT/".local/forced-aligner/venv/bin/python"))).expanduser()
 YTDLP=ROOT/".local/bin/yt-dlp"
 NODE=Path(shutil.which("node") or "/usr/local/bin/node")
 PRIVATE_CONFIG=ROOT/".dioco.local.json"
@@ -267,6 +268,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/api/import": self.start_import(); return
         if self.path == "/api/settings": self.update_settings(); return
         if self.path == "/api/word-context": self.word_context(); return
+        if self.path == "/api/sentence-grammar": self.sentence_grammar(); return
         if self.path != "/api/transcribe": self.send_error(404); return
         length=int(self.headers.get("Content-Length","0"))
         if length<=0 or length>20*1024*1024: self.send_error(413); return
@@ -638,6 +640,32 @@ class Handler(SimpleHTTPRequestHandler):
                 cached.write_text(json.dumps(result,ensure_ascii=False))
             self.reply(result)
         except Exception as exc: self.reply({"error":f"context upstream failed: {exc}"},502)
+    def sentence_grammar(self):
+        try:incoming=self.json_body()
+        except Exception:self.reply({"error":"invalid json"},400);return
+        book_id=str(incoming.get("bookId","")).strip();sentence_id=str(incoming.get("sentenceId","")).strip();enhance=bool(incoming.get("enhance",False))
+        record=get_book(book_id) if book_id else None
+        sentence=next((item for item in (record or {}).get("book",{}).get("sentences",[]) if str(item.get("id"))==sentence_id),None)
+        if not sentence:self.reply({"error":"sentence not found"},404);return
+        text=str(sentence.get("text","")).strip();result=get_sentence_grammar(book_id,sentence_id,text)
+        if not result and RUNTIME_MODE!="reader":
+            try:
+                subprocess.run([str(GRAMMAR_PYTHON),str(ROOT/"tools/analyze_grammar.py"),"--book-id",book_id,"--sentence-id",sentence_id],cwd=ROOT,env={**os.environ,"PYTHONPATH":str(ROOT/"tools")},check=True,timeout=180,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                result=get_sentence_grammar(book_id,sentence_id,text)
+            except Exception as exc:self.reply({"error":f"本地语法模型分析失败：{exc}"},503);return
+        if not result:self.reply({"error":"该句尚未生成语法数据，请先在本机补充分析"},404);return
+        explanation_version=2
+        if enhance and result.get("explanationVersion")!=explanation_version and RUNTIME_MODE!="reader":
+            try:
+                config=private_config()
+                if config.get("diocoToken") and config.get("userEmail"):
+                    structure=json.dumps({key:result.get(key) for key in ("sentenceType","pattern","subject","predicate","object","clauses","grammarPoints")},ensure_ascii=False)
+                    prompt=f"请用简洁准确的中文讲解这句英文的句型、主干、从句、时态语态和学习重点。必须以以下Stanza句法结构为准，不得把已经识别出的从句说成不存在；如果原句疑似缺词、转写错误或结构不完整，要直接指出，不要擅自补词。Stanza结构：{structure}。原句：<CONTEXT>"
+                    payload={"promptWithPlaceHolders_translated":prompt,"contextSentence":text,"expandedContext":text,"word":"sentence grammar","userLanguage_G":"zh-CN","studyLanguage_G":"en","diocoToken":config["diocoToken"],"userEmail":config["userEmail"]}
+                    raw=upstream_json("/base_lexa_generate",payload=payload,timeout=40);generation=plain_html(raw.get("data",{}).get("generation",""))
+                    if generation:result["aiExplanation"]=generation;result["explanationSource"]="Dioco Lexa + Stanza";result["explanationVersion"]=explanation_version;save_sentence_grammar(book_id,sentence_id,text,{key:value for key,value in result.items() if key not in {"bookId","sentenceId","model","updatedAt"}},result.get("model","stanza-en"))
+            except Exception:pass
+        self.reply(result)
     def reply(self,data,status=200):
         body=json.dumps(data,ensure_ascii=False).encode()
         self.send_response(status); self.send_header("Content-Type","application/json; charset=utf-8")

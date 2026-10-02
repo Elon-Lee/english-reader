@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import hashlib
 import re
 import sqlite3
 import shutil
@@ -65,6 +66,11 @@ def connect():
       book_id TEXT NOT NULL, sentence_id TEXT NOT NULL, word_index INTEGER NOT NULL,
       original_word TEXT NOT NULL, corrected_word TEXT DEFAULT '', note TEXT DEFAULT '', updated_at TEXT NOT NULL,
       PRIMARY KEY(book_id,sentence_id,word_index)
+    );
+    CREATE TABLE IF NOT EXISTS sentence_grammar (
+      book_id TEXT NOT NULL, sentence_id TEXT NOT NULL, sentence_hash TEXT NOT NULL,
+      analysis_json TEXT NOT NULL, model TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
+      PRIMARY KEY(book_id,sentence_id), FOREIGN KEY(book_id) REFERENCES books(id) ON DELETE CASCADE
     );
     CREATE TABLE IF NOT EXISTS learning_daily (
       day TEXT PRIMARY KEY, reading_seconds REAL NOT NULL DEFAULT 0, sentences INTEGER NOT NULL DEFAULT 0,
@@ -158,9 +164,8 @@ def upsert_book(book,quality,source_path,series,page_base_url,cover_url):
       (book["id"],book["title"],book.get("englishTitle",""),series,str(book.get("level","")),source_path,"ready",cover_url,page_base_url,
        book.get("audio",""),book.get("pdf",""),book.get("duration",0),book.get("alignment",""),json.dumps(book,ensure_ascii=False),
        json.dumps(quality,ensure_ascii=False),stamp,stamp))
-    db.commit(); db.close()
-    db=connect(); db.execute("UPDATE books SET source_type=?,video_url=?,subtitle_type=? WHERE id=?",
-      (book.get("sourceType","book"),book.get("video",""),book.get("subtitleType",""),book["id"])); db.commit(); db.close()
+    db.execute("DELETE FROM sentence_grammar WHERE book_id=?",(book["id"],))
+    db.execute("UPDATE books SET source_type=?,video_url=?,subtitle_type=? WHERE id=?",(book.get("sourceType","book"),book.get("video",""),book.get("subtitleType",""),book["id"]));db.commit();db.close()
 
 def save_artifact(book_id,kind,data):
     db=connect(); db.execute("INSERT INTO book_artifacts(book_id,kind,data_json,created_at) VALUES(?,?,?,?) ON CONFLICT(book_id,kind) DO UPDATE SET data_json=excluded.data_json,created_at=excluded.created_at",
@@ -168,6 +173,17 @@ def save_artifact(book_id,kind,data):
 
 def delete_artifact(book_id,kind):
     db=connect();db.execute("DELETE FROM book_artifacts WHERE book_id=? AND kind=?",(book_id,kind));db.commit();db.close()
+
+def sentence_hash(text):return hashlib.sha256(str(text).strip().encode()).hexdigest()
+
+def get_sentence_grammar(book_id,sentence_id,text=""):
+    db=connect();row=db.execute("SELECT * FROM sentence_grammar WHERE book_id=? AND sentence_id=?",(book_id,sentence_id)).fetchone();db.close()
+    if not row:return None
+    if text and row["sentence_hash"]!=sentence_hash(text):return None
+    result=json.loads(row["analysis_json"]);result.update({"bookId":book_id,"sentenceId":sentence_id,"model":row["model"],"updatedAt":row["updated_at"]});return result
+
+def save_sentence_grammar(book_id,sentence_id,text,analysis,model="stanza-en"):
+    stamp=now();db=connect();db.execute("INSERT INTO sentence_grammar(book_id,sentence_id,sentence_hash,analysis_json,model,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(book_id,sentence_id) DO UPDATE SET sentence_hash=excluded.sentence_hash,analysis_json=excluded.analysis_json,model=excluded.model,updated_at=excluded.updated_at",(book_id,sentence_id,sentence_hash(text),json.dumps(analysis,ensure_ascii=False),model,stamp));db.commit();db.close();return get_sentence_grammar(book_id,sentence_id,text)
 
 def save_dictionary(entries):
     stamp=now(); db=connect()
@@ -244,6 +260,7 @@ def annotate_word(book_id,sentence_id,word_index,corrected_word=None,note=None):
             match=matches[word_index]; sentence["text"]=sentence["text"][:match.start()]+corrected_word+sentence["text"][match.end():]
         sentence["words"][word_index]["text"]=corrected_word
         db.execute("UPDATE books SET data_json=?,updated_at=? WHERE id=?",(json.dumps(book,ensure_ascii=False),now(),book_id))
+        db.execute("DELETE FROM sentence_grammar WHERE book_id=? AND sentence_id=?",(book_id,sentence_id))
     previous=db.execute("SELECT corrected_word,note FROM word_annotations WHERE book_id=? AND sentence_id=? AND word_index=?",(book_id,sentence_id,word_index)).fetchone()
     corrected=corrected_word if corrected_word is not None else (previous[0] if previous else "")
     saved_note=note if note is not None else (previous[1] if previous else "")
@@ -302,6 +319,7 @@ def delete_book(book_id,confirmed_title):
         db.execute("BEGIN IMMEDIATE")
         db.execute("DELETE FROM vocabulary WHERE book_id=?",(book_id,))
         db.execute("DELETE FROM word_annotations WHERE book_id=?",(book_id,))
+        db.execute("DELETE FROM sentence_grammar WHERE book_id=?",(book_id,))
         db.execute("DELETE FROM book_artifacts WHERE book_id=?",(book_id,))
         db.execute("DELETE FROM import_jobs WHERE book_id=? OR source_path=?",(book_id,row["source_path"]))
         db.execute("DELETE FROM books WHERE id=?",(book_id,))
@@ -317,7 +335,7 @@ def delete_book(book_id,confirmed_title):
     for job_id in job_ids:
         log_names += [f"import-{job_id}.log",f"whisper-{job_id}.log",f"video-import-{job_id}.log",f"video-whisper-{job_id}.log",
                       f"youtube-{job_id}.log",f"youtube-import-{job_id}.log"]
-    log_names += [f"ctc-{book_id}.log",f"dtw-{book_id}.log"]
+    log_names += [f"ctc-{book_id}.log",f"dtw-{book_id}.log",f"grammar-{book_id}.log"]
     for name in log_names:
         path=LOCAL_ROOT/name
         try: path.unlink(missing_ok=True)

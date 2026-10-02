@@ -104,6 +104,7 @@ yt-dlp       2026.08.19
 whisper.cpp  1.9.4-dev
 torch        2.2.2
 torchaudio   2.2.2
+stanza       1.15.0
 Python       3.11.16
 ```
 
@@ -150,6 +151,16 @@ tools/vendor/whisper.cpp/models/ggml-base.en.bin
 ```text
 .local/forced-aligner/models/hub/checkpoints/wav2vec2_fairseq_base_ls960_asr_ls960.pth
 ```
+
+安装英文句式与语法分析模型：
+
+```bash
+./tools/install_grammar_model.sh
+```
+
+Stanza复用Python 3.11和现有PyTorch环境，模型保存在`.local/grammar/stanza`。模型只安装在本地内容生产端；远程Reader节点只读取已经同步到SQLite的语法结果，不安装Stanza或PyTorch。
+
+2026年10月2日已为SQLite中的45本现有读物补齐17,560句语法数据，分析版本统一为2，失败0、缺失0。模型目录约429MiB；结构化语法JSON约35.28MiB，并会随“同步数据”发送到远程。
 
 安装yt-dlp：
 
@@ -373,6 +384,10 @@ yt-dlp解析标题、频道、时长、字幕
 - 跟读次数
 - 学习会话数
 
+### `sentence_grammar`
+
+逐句保存原句哈希、句型、主谓宾或补语、从句、时态语态、词级句法角色、依存关系和成分句法树。正文变化后旧结果会自动失效。结构由本地Stanza生成；本地规则讲解和按需生成的Lexa中文讲解也保存在该表中。
+
 ### `app_settings`
 
 保存：
@@ -407,7 +422,12 @@ yt-dlp解析标题、频道、时长、字幕
 - `A`上一句、`S`复读、`D`下一句、空格播放/暂停。
 - `Q`切换句末自动暂停，默认关闭。
 - 鼠标悬浮单词暂停，离开恢复。
+- 普通模式、专注模式以及精读、泛听、跟读都支持悬浮单词简释。
+- 三种阅读方式点击单词都会在右栏展示完整释义和上下文用法；专注模式点击后临时展开右栏。
+- 每个句子末尾提供“句法”，右栏可在“单词释义 / 句子语法”之间切换。
 - 顶部护眼开关。
+
+句子语法使用本地Stanza的`tokenize → POS → lemma → dependency parse → constituency parse`组合管线。Stanza负责结构事实，本地规则生成稳定中文摘要；用户点击句子时可再调用Lexa结合结构生成自然中文讲解并写回SQLite。Lexa失败不影响本地结构展示。
 
 ### 单词
 
@@ -469,6 +489,7 @@ PDF/MP3
 → Whisper DTW
 → CTC强制对齐
 → 词典
+→ Stanza逐句语法分析
 → SQLite
 ```
 
@@ -497,6 +518,8 @@ PDF/MP3
 4. yt-dlp下载最高720p视频。
 5. 优先人工英文字幕，自动字幕后备。
 6. 进入视频导入、DTW和CTC流程。
+
+所有目录书籍、本地视频/音频和YouTube导入在CTC完成后都会运行逐句语法分析。语法失败只记录到`.local/grammar-<book-id>.log`，不会让已经完成的音频、正文和时间轴导入失败。
 
 当前YouTube失败任务要查看：
 
@@ -546,7 +569,10 @@ GET  /api/learning/days
 GET  /api/word-dictionary?word=...
 GET  /api/word-tts?word=...
 POST /api/word-context
+POST /api/sentence-grammar
 ```
+
+`POST /api/sentence-grammar`参数为`bookId`、`sentenceId`和可选`enhance=true`。本机缺少缓存时会按需运行Stanza；远程Reader节点只读取已同步缓存。`enhance=true`会在配置了Dioco令牌时生成并缓存受Stanza结构约束的中文讲解。
 
 ### 设置
 

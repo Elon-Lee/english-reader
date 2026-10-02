@@ -19,6 +19,13 @@ AUDIO_EXTENSIONS={".mp3",".m4a",".wav",".flac",".aac",".ogg",".opus"}
 def run(command,**kwargs):return subprocess.run([str(item) for item in command],check=True,**kwargs)
 def set_job(job_id,progress,step,**extra):update_job(job_id,progress=progress,step=step,**extra)
 
+def build_grammar(job_id,book_id,progress):
+    python=ROOT/".local/forced-aligner/venv/bin/python"
+    if not python.exists():return
+    progress(99,"生成逐句句式与语法分析")
+    with (ROOT/".local"/f"grammar-{book_id}.log").open("w") as output:
+        subprocess.run([str(python),str(ROOT/"tools/analyze_grammar.py"),"--book-id",book_id],cwd=ROOT,env={**os.environ,"PYTHONPATH":str(ROOT/"tools")},stdout=output,stderr=subprocess.STDOUT)
+
 def embedded_subtitle(video,target):
     probe=json.loads(subprocess.check_output(["ffprobe","-v","error","-select_streams","s","-show_entries","stream=index,codec_name:stream_tags=language,title","-of","json",video],text=True))
     streams=probe.get("streams",[])
@@ -103,6 +110,7 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
         progress(98,"wav2vec2 CTC 强制对齐")
         with (ROOT/".local"/f"ctc-{book_id}.log").open("w") as output:
             run([aligner_python,ROOT/"tools/ctc_forced_align.py","--book-id",book_id,"--job-id",str(job_id),"--segmentation-profile",profile,"--update-db"],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
+    build_grammar(job_id,book_id,progress)
     for item in [book_file,whisper_json,generated/"alignment.json",generated/"embedded.srt"]:
         if item.exists():item.unlink()
     update_job(job_id,status="complete",progress=100,step="音频导入完成" if audio_only else "视频导入完成")

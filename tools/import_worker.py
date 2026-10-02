@@ -19,6 +19,12 @@ WHISPER_THREADS=os.environ.get("SHIYUE_WHISPER_THREADS","3")
 def run(command,**kwargs): return subprocess.run([str(x) for x in command],check=True,**kwargs)
 def set_job(job_id,progress,step,**extra): update_job(job_id,progress=progress,step=step,**extra)
 
+def build_grammar(job_id,book_id):
+    if not ALIGN_PYTHON.exists():return
+    set_job(job_id,99,"生成逐句句式与语法分析")
+    with (ROOT/".local"/f"grammar-{book_id}.log").open("w") as output:
+        subprocess.run([str(ALIGN_PYTHON),str(ROOT/"tools/analyze_grammar.py"),"--book-id",book_id],cwd=ROOT,env={**os.environ,"PYTHONPATH":str(ROOT/"tools")},stdout=output,stderr=subprocess.STDOUT)
+
 def run_alignment(job_id,book_json,whisper_json,report):
     python=ALIGN_PYTHON if ALIGN_PYTHON.exists() else Path(sys.executable)
     command=[python,ROOT/"tools/align_whisper.py","--book",book_json,"--whisper",whisper_json,
@@ -145,6 +151,7 @@ def finish_aligned_import(job_id,relative,source,generated,book_id,plan,pdf,text
         set_job(job_id,98,"wav2vec2 CTC 强制对齐")
         with (ROOT/".local"/f"ctc-{book_id}.log").open("w") as output:
             run([aligner_python,ROOT/"tools/ctc_forced_align.py","--book-id",book_id,"--job-id",str(job_id),"--update-db"],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
+    build_grammar(job_id,book_id)
     for artifact in [generated/"ocr.json",generated/"text-ocr.json",book_json,generated/"quality-report.json",whisper_json,alignment_file,audio_out.with_suffix(".concat.txt")]:
         if artifact.exists():artifact.unlink()
     update_job(job_id,status="complete",progress=100,step="导入完成",error="",pid=None)
@@ -207,6 +214,7 @@ def import_book(job_id,relative):
             set_job(job_id,98,"纯音频 wav2vec2 CTC 强制对齐")
             with (ROOT/".local"/f"ctc-{book_id}.log").open("w") as output:
                 run([aligner_python,ROOT/"tools/ctc_forced_align.py","--book-id",book_id,"--job-id",str(job_id),"--output",book_json,"--segmentation-profile","speech-asr","--update-db"],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
+        build_grammar(job_id,book_id)
         dictionary_file=ROOT/".local"/f"dictionary-{job_id}.json"
         run([sys.executable,ROOT/"tools/build_local_dictionary.py","--book",book_json,"--output",dictionary_file]);save_dictionary(json.loads(dictionary_file.read_text()));dictionary_file.unlink()
         for artifact in [book_json,whisper_json,audio_out.with_suffix(".concat.txt")]:

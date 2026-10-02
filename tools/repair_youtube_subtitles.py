@@ -61,6 +61,7 @@ def apply_repairs(candidates,metadata_only,backup):
             if unmapped:raise ValueError(f"{row['title']} has {unmapped} study records that could not be migrated")
             quality=json.loads(row["quality_json"] or "{}");quality.update({"status":"ready","subtitleType":"external","subtitleSource":track["source"],"whisperSkipped":True,"localTranscriptionUsed":False,"timingSource":f"youtube-{track['source']}-caption+sat+pause+wav2vec2","sentences":report["sentences"],"segmentation":new.get("segmentation",{}),"alignmentAudit":report})
             db.execute("UPDATE books SET subtitle_type='external',alignment=?,data_json=?,quality_json=?,updated_at=? WHERE id=?",(new.get("alignment","wav2vec2-ctc-forced-alignment"),json.dumps(new,ensure_ascii=False),json.dumps(quality,ensure_ascii=False),stamp,row["id"]))
+            db.execute("DELETE FROM sentence_grammar WHERE book_id=?",(row["id"],))
             db.execute("DELETE FROM book_artifacts WHERE book_id=? AND kind='whisper-dtw'",(row["id"],));db.execute("INSERT INTO book_artifacts(book_id,kind,data_json,created_at) VALUES(?,?,?,?) ON CONFLICT(book_id,kind) DO UPDATE SET data_json=excluded.data_json,created_at=excluded.created_at",(row["id"],"subtitle",json.dumps({"type":"external","source":track["source"],"track":track["code"],"translated":False,"text":current.read_text(errors="replace")},ensure_ascii=False),stamp));db.execute("INSERT INTO book_artifacts(book_id,kind,data_json,created_at) VALUES(?,?,?,?) ON CONFLICT(book_id,kind) DO UPDATE SET data_json=excluded.data_json,created_at=excluded.created_at",(row["id"],"alignment-ctc",json.dumps(new.get("forcedAlignment",{}),ensure_ascii=False),stamp))
             metadata.update(subtitle_metadata(track,metadata.get("translatedEnglishRejected",False)));(source/".video-import.json").write_text(json.dumps(metadata,ensure_ascii=False,indent=2))
         for row,track,metadata in metadata_only:
@@ -88,5 +89,8 @@ def main():
         already_clean=bool(quality.get("whisperSkipped") and not whisper_artifact and metadata.get("youtubeSubtitleSource")==track["source"])
         if already_clean:metadata_only.append((row,track,metadata));continue
         work=WORK/row["id"];subtitle=work/"subtitles.srt";download_track(metadata,track,subtitle);old,new,report,metadata,profile=candidate_for(row,track,subtitle,metadata);candidates.append((row,track,subtitle,old,new,report,metadata,profile))
-    db.close();backup=backup_database();apply_repairs(candidates,metadata_only,backup);print(json.dumps({"status":"ok","rebuilt":len(candidates),"metadataOnly":len(metadata_only),"backup":str(backup)},ensure_ascii=False,indent=2))
+    db.close();backup=backup_database();apply_repairs(candidates,metadata_only,backup)
+    for row,*_ in candidates:
+        if ALIGNER.exists():subprocess.run([str(ALIGNER),str(ROOT/"tools/analyze_grammar.py"),"--book-id",row["id"]],cwd=ROOT,env={**os.environ,"PYTHONPATH":str(ROOT/"tools")},check=False)
+    print(json.dumps({"status":"ok","rebuilt":len(candidates),"metadataOnly":len(metadata_only),"backup":str(backup)},ensure_ascii=False,indent=2))
 if __name__=="__main__":main()
