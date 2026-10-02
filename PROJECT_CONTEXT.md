@@ -1,6 +1,6 @@
 # 拾页（Shiyue）英语点读系统项目上下文
 
-> 给后续开发会话使用的接手文档。最后更新：2026-09-29。
+> 给后续开发会话使用的接手文档。最后更新：2026-10-02。
 > 不要把Dioco令牌写入代码、Git或本文档；完整令牌只在项目根目录`.dioco.local.json`中保存。
 
 ## 1. 项目定位
@@ -273,9 +273,9 @@ FFmpeg提取16kHz单声道MP3
   ↓
 每15秒生成关键帧
   ↓
-外部字幕 → 内嵌字幕 → Whisper
+外部字幕 → 内嵌字幕 → 无字幕时Whisper
   ↓
-Whisper base.en + DTW
+字幕时间或Whisper词时间
   ↓
 wav2vec2 CTC强制对齐
   ↓
@@ -288,7 +288,7 @@ SQLite
 本地上传SRT/VTT         → 跳过Whisper → 字幕时间 → wav2vec2 CTC
 视频内嵌英文字幕        → 跳过Whisper → 字幕时间 → wav2vec2 CTC
 YouTube人工英文字幕     → 跳过Whisper → 字幕时间 → wav2vec2 CTC
-YouTube自动英文字幕     → Whisper校准 → wav2vec2 CTC
+YouTube原生自动英文字幕 → 跳过Whisper → 去重/断句 → wav2vec2 CTC
 没有可用英文字幕        → Whisper生成正文 → wav2vec2 CTC（有权威文本时）
 明确选择“只使用Whisper” → 忽略字幕并执行Whisper
 ```
@@ -302,9 +302,9 @@ YouTube URL
   ↓
 yt-dlp解析标题、频道、时长、字幕
   ↓
-优先人工英文字幕
+优先人工原生英文字幕（包括频道自定义的en-*轨道）
   ↓
-自动英文字幕后备
+原生自动英文字幕后备（优先en-orig，拒绝tlang=en翻译轨道）
   ↓
 无字幕时Whisper
   ↓
@@ -434,6 +434,31 @@ yt-dlp解析标题、频道、时长、字幕
 ### 目录书籍
 
 页面：`导入内容 → 目录书籍`
+
+正文源匹配使用硬优先级，不能让中英对照版去除后缀后与同名原书竞争：
+
+```text
+中文书名完全一致 PDF
+→ 英文书名完全一致 PDF
+→ 中文/英文书名完全一致 DOC/DOCX
+→ 完全一致 CHM/TXT
+→ 书名相关 PDF（中英对照、编号英文版、一字译名差异）
+→ 书名相关 DOC/DOCX
+→ 书名相关 CHM/TXT
+→ 正文规模与音频时长兜底
+```
+
+完全一致层保留“中英文对照版、英文版”等版本标签，因此`弗兰肯斯坦.pdf`属于完全一致，而`3A_01.弗兰肯斯坦中英对照.pdf`只属于次级相关候选。每本书的`.reader/import-plan.json`保存`matchPolicy`、`exactMatches`和`selectionReason`，方便排查选源。
+
+2026年10月1日对`牛津书虫全系列7级（3）`的21本书完成选源审计，报告位于：
+
+```text
+.local/source-match-audit-level3-20261001.json
+```
+
+结果：18本选择完全一致PDF；《铁道少年》按一字译名差异选择`铁路少年.pdf`；《牙齿和爪子》和《星际动物园》没有同名PDF，分别选择同名DOC。若同名PDF可以渲染页面但OCR正文不足200词，自动保留PDF页面并依次回退同名DOC/DOCX、CHM/TXT及其他书名相关正文。
+
+《弗兰肯斯坦》旧计划误选`3A_01.弗兰肯斯坦中英对照.pdf`，CTC覆盖率仅66.29%（448句失败）；修复后使用`弗兰肯斯坦.pdf`页面和`弗兰肯斯坦.docx`正文，CTC覆盖率97.13%（26句失败），共906句、9635词。
 
 选择系列、多选书籍，后台严格串行：
 
@@ -640,9 +665,9 @@ curl http://127.0.0.1:8765/api/settings
 YouTube自动字幕不能把SRT块直接视为句子。滚动字幕通常大量重叠，并且会重复前一块的单词。当前导入链路改为：
 
 ```text
-YouTube自动/人工字幕
-→ 滚动字幕相邻词组去重
-→ Whisper DTW建立全局单词时间轴
+YouTube人工字幕或原生自动字幕
+→ 自动字幕执行滚动字幕相邻词组去重，人工字幕保留可信标点
+→ 直接使用字幕时间，不运行Whisper
 → wav2vec2 CTC校准词边界
 → FFmpeg静音检测
 → 按标点、真实停顿、句长和词数重新断句
@@ -671,15 +696,20 @@ CTC覆盖率 >= 75%
 重建工具：
 
 ```bash
-PYTHONPATH=tools python3 tools/reprocess_youtube_alignment.py --all
+PYTHONPATH=tools python3 tools/repair_youtube_subtitles.py
 ```
 
-工具会先生成所有候选结果，全部通过后才开启SQLite事务；执行前使用SQLite Backup API保存完整数据库。2026年10月1日重建现有3个YouTube视频后的指标：
+工具会从每个视频的`source.info.json`重新选择严格的原生英文轨道，先生成所有候选结果，全部通过后才开启SQLite事务；执行前使用SQLite Backup API保存完整数据库。它同时迁移生词和备注、删除旧`whisper-dtw`归档及遗留Whisper文件，并把字幕轨道写入SQLite和`.video-import.json`。2026年10月2日修复现有7个YouTube视频后的指标：
 
 ```text
-TEDx：254句，短句15，CTC 98.88%，重叠0，无法解释的句内长停顿0
-Friends：723句，短句104，CTC 97.13%，重叠0，无法解释的句内长停顿0
-Vocabulary：173句，短句13，CTC 98.33%，句尾功能词错误0，重叠0，无法解释的句内长停顿0
+TEDx Stanford（人工en）：235句，短句7，CTC 99.02%
+Friends（人工en-6Pw-d3P9U40）：522句，短句22，CTC 98.57%
+Vocabulary（人工en-rfcqDbLL02Q）：138句，短句2，CTC 97.44%
+TEDx天文（原生自动en-orig）：251句，短句38，CTC 89.96%
+Top 10（人工en-6Pw-d3P9U40）：217句，短句11，CTC 98.99%
+Think in English（人工en-6Pw-d3P9U40）：162句，短句7，CTC 100%
+Grit（人工en）：86句，CTC 98.65%
+全部视频：句子重叠0，无法解释的句内0.8秒以上停顿0，Whisper未使用
 ```
 
 ### 视频画面与声音同步
@@ -697,6 +727,21 @@ requestVideoFrameCallback读取实际显示帧时间
 
 对源视频音轨与提取MP3进行90秒波形互相关，相关度99.9646%，实际内容偏移为0ms，因此不使用固定音频补偿。
 
+### 阅读页视频画布布局
+
+视频书的画面区域使用无边框、真实宽高比驱动的媒体画布，不再使用固定高卡片和`object-fit`黑边。浏览器读取视频`videoWidth/videoHeight`或关键帧`naturalWidth/naturalHeight`，按当前栏宽和可用视口高度计算画布：
+
+```text
+画布宽度 = min(布局栏宽, 最大可用高度 × 媒体宽高比)
+画布高度 = 画布宽度 ÷ 媒体宽高比
+```
+
+- 上下布局：媒体与正文处于同一主列并水平居中，最大高度约为视口44%，去除边框、标题栏和内边距后将空间直接提供给画面。
+- 上下布局媒体画布使用15px圆角和轻量阴影；浮动工具条最右侧提供关闭按钮，点击直接返回左右布局。
+- 左右布局以正文为主：桌面媒体列约占可用宽度29%，中等窗口约27%，中间正文获得最大剩余空间；画面在媒体栏内部按真实比例取最大尺寸并垂直居中，不显示固定容器产生的上下空白或黑边。左右布局的实际视频/关键帧使用15px圆角，但不增加边框、背景卡片或阴影。
+- “关键帧 / 视频 / 关闭上下布局”切换悬浮在媒体内部右上角，鼠标进入画面或键盘聚焦时显示；触屏设备保持半透明可操作状态。关闭按钮只在上下布局显示。
+- 普通PDF/图片书籍继续使用原有“标题、原书页、页码”布局，不受视频画布规则影响。
+
 ### 不同导入场景的模型组合
 
 三条导入路径互相隔离，避免YouTube自动字幕优化影响目录书籍：
@@ -709,6 +754,12 @@ PDF/DOC/DOCX/TXT/CHM/OCR权威正文
 → wav2vec2 CTC词级对齐
 → 不加载SaT
 
+目录书籍纯音频特例（没有PDF/DOC/DOCX/TXT/CHM）
+→ 合并章节音频
+→ Whisper生成正文和初始词时间
+→ speech-asr SaT + 停顿融合
+→ wav2vec2 CTC
+
 本地视频 / 本地音频
 人工外挂或内嵌字幕优先
 → 标点充足时以字幕标点+停顿+CTC为主，跳过SaT
@@ -717,9 +768,14 @@ PDF/DOC/DOCX/TXT/CHM/OCR权威正文
 
 YouTube
 人工字幕：字幕标点优先，标点稀疏才加载SaT
-自动字幕：滚动字幕去重 → Whisper全局时间 → SaT → 停顿融合 → CTC
+原生自动字幕：滚动字幕去重 → SaT → 停顿融合 → CTC（跳过Whisper）
+自动翻译英文字幕（URL含tlang=en）：拒绝，不作为英文原稿
 无英文字幕：Whisper → SaT → 停顿融合 → CTC
 ```
+
+YouTube字幕轨道必须按`人工原生英文 → 原生自动英文 → Whisper`选择。不能只请求精确`en`：人工轨道可能是`en-6Pw-d3P9U40`、`en-rfcqDbLL02Q`等频道自定义代码；自动字幕优先`en-orig`。任何URL带`tlang=en`且原始`lang`不是英文的轨道都是自动翻译结果，必须拒绝。相关选择逻辑集中在`tools/youtube_subtitles.py`，不能在其他导入器中另写宽松判断。
+
+YouTube导入不提供手动书系选择，书系由频道自动确定并由后端强制写入，避免表单残留上一次标签。频道规范化规则包括：`TED`复用`Ted`书系，任何`TEDx...`频道归入`TEDx Talks`，其他频道保留频道名称并按大小写复用已有书系。前端解析后只读展示“自动归入书系”。历史误分类的Grit视频已从`Rachel's English`修正为`Ted`，物理资源目录不移动，避免改变媒体URL。
 
 SaT使用独立本机环境与模型缓存：
 
@@ -729,7 +785,7 @@ SaT使用独立本机环境与模型缓存：
 模型：sat-3l-sm，ONNX CPU
 ```
 
-该环境不上传到远程Reader节点，也不会进入目录书籍导入进程。SaT只提供词间边界概率，最终边界由全局动态规划融合SaT、Whisper标点、音频停顿、句长、句尾功能词、条件从句开头和固定搭配决定。
+该环境不上传到远程Reader节点。普通的PDF/DOC/CHM/OCR目录书籍不会加载SaT；只有完全没有正文来源的目录纯音频书会使用`speech-asr`配置。SaT只提供词间边界概率，最终边界由全局动态规划融合SaT、Whisper标点、音频停顿、句长、句尾功能词、条件从句开头和固定搭配决定。
 
 本地“视频 / 音频”入口支持：
 
@@ -839,6 +895,10 @@ SSH端口（默认22）
 不上传原始PDF、章节MP3、DOC/DOCX、TXT、CHM、Whisper分章文件、CTC环境或macOS编译产物。2026年9月30日验收时共19本成品、1241个媒体文件、约1.275GiB。
 
 资源同步由本机比较当前与远程成品清单，只把新增或修改的文件打成离线增量包并通过SCP上传，同时同步删除记录。远程被替换或删除的文件先进入`backups/resources/<content-revision>/`。这种方式不会受SSH登录横幅影响，也不要求远程下载任何同步工具或代码。内容数据库包只合并`books`、`book_artifacts`和`dictionary_entries`，保留远程学习记录、生词、备注和设置。
+
+同步清单必须保留数据库URL对应的逻辑路径。单文件音频书的`.reader/audio.mp3`通常是指向原始章节MP3的符号链接：传输时只解引用文件内容，清单和远程目标仍使用`.reader/audio.mp3`。不能对路径先调用`resolve()`再生成相对路径，否则会误传成原始MP3路径并导致阅读端404。该行为由`tools/test_deployment_content_paths.py`覆盖。
+
+2026年10月2日修复了25本0级单文件音频书的历史错误：增量同步新增25个正确`.reader/audio.mp3`、删除25个误传原始MP3，并逐一验证远程Range请求均返回`206 Partial Content`。
 
 远程实例运行：
 

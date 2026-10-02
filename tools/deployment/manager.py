@@ -304,9 +304,14 @@ previous_release=$(readlink -f {root}/current 2>/dev/null || true)
 docker rm -f shiyue-reader >/dev/null 2>&1 || true
 ln -sfn {root}/releases/{release} {root}/current
 {run}
-sleep 3
-if ! {health} >/tmp/shiyue-health.json; then
+healthy=0
+for attempt in $(seq 1 15); do
+  if {health} >/tmp/shiyue-health.json 2>/tmp/shiyue-health-error.log; then healthy=1; break; fi
+  sleep 1
+done
+if [ "$healthy" -ne 1 ]; then
   echo '新容器健康检查失败'
+  cat /tmp/shiyue-health-error.log >&2 2>/dev/null || true
   docker logs --tail 200 shiyue-reader || true
   docker rm -f shiyue-reader >/dev/null 2>&1 || true
   if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then
@@ -319,6 +324,15 @@ fi
 cat /tmp/shiyue-health.json
 rm -f /tmp/{package_name}
 """
+
+def content_file_entry(source,books_root):
+    """Keep the URL path while dereferencing its file content for transfer."""
+    books_root=Path(books_root).resolve();source=Path(source)
+    logical=source.parent.resolve()/source.name
+    logical.relative_to(books_root)
+    actual=logical.resolve();actual.relative_to(books_root)
+    if not actual.is_file():return None
+    return logical.relative_to(books_root),actual
 
 def export_content(job,revision):
     stage=STATE/"staging"/revision;shutil.rmtree(stage,ignore_errors=True);stage.mkdir(parents=True)
@@ -334,9 +348,9 @@ def export_content(job,revision):
         if base.startswith("/books/"):
             directory=books_root/unquote(base[len('/books/'):]);paths.extend(directory.glob("page-*.jpg")) if directory.is_dir() else None
         for source in paths:
-            source=source.resolve();source.relative_to(books_root)
-            if not source.is_file():continue
-            relative=source.relative_to(books_root);destination=stage/relative;destination.parent.mkdir(parents=True,exist_ok=True);destination.symlink_to(source);files.append({"path":str(relative),"size":source.stat().st_size,"mtime":source.stat().st_mtime_ns})
+            entry=content_file_entry(source,books_root)
+            if not entry:continue
+            relative,actual=entry;destination=stage/relative;destination.parent.mkdir(parents=True,exist_ok=True);destination.symlink_to(actual);files.append({"path":str(relative),"size":actual.stat().st_size,"mtime":actual.stat().st_mtime_ns})
     payload={"revision":revision,"books":books,"book_artifacts":artifacts,"dictionary_entries":dictionary}
     bundle=STATE/f"{revision}.json.gz"
     with gzip.open(bundle,"wt",encoding="utf-8") as output:json.dump(payload,output,ensure_ascii=False)
@@ -488,7 +502,7 @@ def start_rollback(release):
     def worker(job,remote,target):
         if not re.fullmatch(r"code-[A-Za-z0-9-]+",release or ""):raise ValueError("无效的回滚版本")
         root=target["remote_root"];job.update(20,f"检查代码版本 {release}");run=docker_run_command(target);health_command=health_check_command(target)
-        script=f"set -e; test -d {shlex.quote(root)}/releases/{shlex.quote(release)}; previous_release=$(readlink -f {shlex.quote(root)}/current 2>/dev/null || true); docker rm -f shiyue-reader >/dev/null 2>&1 || true; ln -sfn {shlex.quote(root)}/releases/{shlex.quote(release)} {shlex.quote(root)}/current; {run}; sleep 3; {health_command} || {{ docker logs --tail 150 shiyue-reader || true; docker rm -f shiyue-reader; if [ -n \"$previous_release\" ]; then ln -sfn \"$previous_release\" {shlex.quote(root)}/current; {run}; fi; exit 1; }}"
+        script=f"set -e; test -d {shlex.quote(root)}/releases/{shlex.quote(release)}; previous_release=$(readlink -f {shlex.quote(root)}/current 2>/dev/null || true); docker rm -f shiyue-reader >/dev/null 2>&1 || true; ln -sfn {shlex.quote(root)}/releases/{shlex.quote(release)} {shlex.quote(root)}/current; {run}; healthy=0; for attempt in $(seq 1 15); do if {health_command}; then healthy=1; break; fi; sleep 1; done; [ \"$healthy\" -eq 1 ] || {{ docker logs --tail 150 shiyue-reader || true; docker rm -f shiyue-reader; if [ -n \"$previous_release\" ]; then ln -sfn \"$previous_release\" {shlex.quote(root)}/current; {run}; fi; exit 1; }}"
         health=remote.ssh(script);db=connect();db.execute("UPDATE deployment_releases SET status=CASE WHEN release_id=? THEN 'active' ELSE 'available' END WHERE target_id=1",(release,));db.commit();db.close();job.complete({"releaseId":release,"health":health},"代码回滚完成")
     return run_task("code_rollback",worker)
 

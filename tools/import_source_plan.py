@@ -48,6 +48,38 @@ def title_aliases(value):
         if len(item)>=2 and item not in aliases:aliases.append(item)
     return aliases
 
+def strict_title_aliases(value):
+    """Aliases for the exact-name tier; edition labels are intentionally retained."""
+    value=strip_catalog_prefix(value)
+    value=re.sub(r"\([^)]*\)|（[^）]*）|\[[^]]*]"," ",value)
+    cjk="".join(re.findall(r"[\u3400-\u9fff]+",value))
+    latin="".join(re.findall(r"[A-Za-z]+",value)).casefold()
+    latin_without_the=re.sub(r"^the", "", latin)
+    aliases=[]
+    for kind,item in (("cjk",cjk),("latin",latin_without_the),("latin",latin)):
+        item=re.sub(r"[^a-z0-9\u3400-\u9fff]","",item.casefold())
+        if len(item)>=2 and (kind,item) not in aliases:aliases.append((kind,item))
+    return aliases
+
+def exact_title_match_level(book_name,candidate_name):
+    book_aliases=strict_title_aliases(book_name);candidate_aliases=strict_title_aliases(candidate_name);best=0
+    for book_kind,book in book_aliases:
+        for candidate_kind,candidate in candidate_aliases:
+            if book==candidate:
+                best=max(best,3 if book_kind==candidate_kind=="cjk" else 2)
+    return best
+
+def edition_noise_count(path):
+    name=path.stem.casefold();return sum(noise.casefold() in name for noise in TITLE_NOISE)
+
+def exact_path_key(source,path):
+    level=exact_title_match_level(source.name,path.stem)
+    stripped=strip_catalog_prefix(path.stem);prefix_removed=int(stripped!=path.stem)
+    return (-level,edition_noise_count(path),prefix_removed,len(path.stem),natural_key(path))
+
+def select_exact_files(source,extensions):
+    return sorted([path for path in source.iterdir() if path.is_file() and path.suffix.lower() in extensions and exact_title_match_level(source.name,path.stem)],key=lambda path:exact_path_key(source,path))
+
 def title_match_score(book_name,candidate_name):
     book_aliases=title_aliases(book_name);candidate_aliases=title_aliases(candidate_name);best=0
     for book in book_aliases:
@@ -57,6 +89,9 @@ def title_match_score(book_name,candidate_name):
             elif min(len(book),len(candidate))>=5:
                 ratio=SequenceMatcher(None,book,candidate).ratio()
                 if ratio>=.78:best=max(best,round(ratio*75))
+            elif re.fullmatch(r"[\u3400-\u9fff]+",book) and re.fullmatch(r"[\u3400-\u9fff]+",candidate) and min(len(book),len(candidate))>=4:
+                ratio=SequenceMatcher(None,book,candidate).ratio()
+                if ratio>=.75:best=max(best,78)
     return best
 
 def docx_paragraphs(path):
@@ -207,6 +242,24 @@ def select_named_text(source,expected_words,extensions):
     path,paragraphs,words=choose_text_candidate(near,expected_words)
     return path,paragraphs,words,top
 
+def select_pdf_ocr_fallback_text(source,expected_words):
+    """Choose authoritative text after a selected PDF cannot provide usable OCR."""
+    tiers=[
+        ("书名完全一致 DOC/DOCX",select_exact_files(source,{".docx",".doc"})),
+        ("书名完全一致 CHM/TXT",select_exact_files(source,{".chm",".txt"})),
+    ]
+    for reason,paths in tiers:
+        candidates=[]
+        for path in paths:
+            try:candidates.append(text_candidate(path))
+            except Exception:continue
+        path,paragraphs,words=choose_text_candidate(candidates,expected_words)
+        if path:return path,paragraphs,words,reason
+    for reason,extensions in (("书名相关 DOC/DOCX",(".docx",".doc")),("书名相关 CHM/TXT",(".chm",".txt"))):
+        path,paragraphs,words,_=select_named_text(source,expected_words,extensions)
+        if path:return path,paragraphs,words,reason
+    return None,[],0,""
+
 def pdf_page_count(path):
     try:
         value=subprocess.check_output(["mdls","-raw","-name","kMDItemNumberOfPages",path],text=True,stderr=subprocess.DEVNULL).strip()
@@ -260,12 +313,33 @@ def build_source_plan(source):
     audio_extensions={".mp3",".m4a",".wav",".ogg",".aac"};audios=[path for path in files if path.suffix.lower() in audio_extensions]
     if not audios:raise ValueError("导入需要至少一个 MP3、M4A、WAV、OGG 或 AAC 音频")
     selected_audio,excluded_audio=select_audio(audios);audio_duration=sum(media_duration(path) for path in selected_audio);expected_words=audio_duration*2.4
-    named_pdfs=[(title_match_score(source.name,path.stem),path) for path in pdfs]
+    exact_pdfs=select_exact_files(source,{".pdf"});exact_docs=select_exact_files(source,{".docx",".doc"});exact_chm=select_exact_files(source,{".chm"});exact_txt=select_exact_files(source,{".txt"})
+    named_pdfs=[(title_match_score(source.name,path.stem),path) for path in pdfs if path not in exact_pdfs]
     named_pdfs=[(score,path) for score,path in named_pdfs if score>=75]
     selection_reason=""
-    if named_pdfs:
+    if exact_pdfs:
+        pdf=exact_pdfs[0];text_source=None;paragraphs=[];text_words=0;selection_reason=f"书名完全一致 PDF：{pdf.name}"
+    elif exact_docs:
+        candidates=[]
+        for path in exact_docs:
+            try:candidates.append(text_candidate(path))
+            except Exception:continue
+        text_source,paragraphs,text_words=choose_text_candidate(candidates,expected_words)
+        if text_source:selection_reason=f"书名完全一致 DOC/DOCX：{text_source.name}"
+        else:text_source=None;paragraphs=[];text_words=0;selection_reason="完全一致 DOC/DOCX 无法提取有效正文，使用 PDF/OCR 兜底"
+        pdf=select_pdf(pdfs,text_words,expected_words) if pdfs else None
+    elif exact_chm or exact_txt:
+        exact_text=exact_chm or exact_txt;candidates=[]
+        for path in exact_text:
+            try:candidates.append(text_candidate(path))
+            except Exception:continue
+        text_source,paragraphs,text_words=choose_text_candidate(candidates,expected_words)
+        if text_source:selection_reason=f"书名完全一致 {text_source.suffix.upper().lstrip('.')}：{text_source.name}"
+        else:text_source=None;paragraphs=[];text_words=0;selection_reason="完全一致 CHM/TXT 无法提取有效正文，使用 PDF/OCR 兜底"
+        pdf=select_pdf(pdfs,text_words,expected_words) if pdfs else None
+    elif named_pdfs:
         top=max(score for score,_ in named_pdfs);pdf=select_pdf([path for score,path in named_pdfs if score==top],expected_words=expected_words)
-        text_source=None;paragraphs=[];text_words=0;selection_reason="书名匹配 PDF"
+        text_source=None;paragraphs=[];text_words=0;selection_reason=f"书名相关 PDF：{pdf.name}"
     else:
         text_source,paragraphs,text_words,score=select_named_text(source,expected_words,(".docx",".doc"))
         if text_source:selection_reason="书名匹配 DOC/DOCX"
@@ -288,10 +362,12 @@ def build_source_plan(source):
             text_source=None;paragraphs=[];text_words=0
     content_mode="pdf" if pdf and not text_source else (text_source.suffix.lower().lstrip(".") if text_source else "audio")
     return {
-        "version":4,"pdf":signature(pdf) if pdf else None,"textSource":signature(text_source) if text_source else None,"selectionReason":selection_reason,"contentMode":content_mode,
+        "version":5,"pdf":signature(pdf) if pdf else None,"textSource":signature(text_source) if text_source else None,"selectionReason":selection_reason,"contentMode":content_mode,
+        "matchPolicy":"exact-pdf > exact-doc/docx > exact-chm/txt > related-pdf > related-doc/docx > related-chm/txt > duration-scale fallback",
+        "exactMatches":{"pdf":[path.name for path in exact_pdfs],"doc":[path.name for path in exact_docs],"chm":[path.name for path in exact_chm],"txt":[path.name for path in exact_txt]},
         "textWords":text_words,"audioDuration":round(audio_duration,3),"audio":[signature(path) for path in selected_audio],"excludedAudio":excluded_audio,
         "rejectedTextSource":rejected_text_source,
-        "multiplePdfs":[{"file":path.name,"pages":pdf_page_count(path),"titleScore":title_match_score(source.name,path.stem)} for path in sorted(pdfs,key=natural_key)],
+        "multiplePdfs":[{"file":path.name,"pages":pdf_page_count(path),"exactLevel":exact_title_match_level(source.name,path.stem),"titleScore":title_match_score(source.name,path.stem)} for path in sorted(pdfs,key=natural_key)],
     },pdf,text_source,paragraphs,selected_audio
 
 def authoritative_ocr(paragraphs,scanned_pages):

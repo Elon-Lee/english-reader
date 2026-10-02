@@ -15,6 +15,17 @@ DB_PATH=LOCAL_ROOT/"library.sqlite3"
 
 def now(): return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
+def normalize_youtube_series(channel):
+    channel=re.sub(r"\s+"," ",str(channel or "")).strip()
+    folded=channel.casefold()
+    if folded=="ted":return "Ted"
+    if folded.startswith("tedx") or folded in {"tedx talks","tedx talk"}:return "TEDx Talks"
+    return channel or "YouTube"
+
+def canonical_youtube_series(channel):
+    preferred=normalize_youtube_series(channel);db=connect();rows=[str(row[0]).strip() for row in db.execute("SELECT DISTINCT series FROM books WHERE series<>''")];db.close()
+    return next((value for value in rows if value.casefold()==preferred.casefold()),preferred)
+
 def connect():
     LOCAL_ROOT.mkdir(parents=True,exist_ok=True)
     db=sqlite3.connect(DB_PATH,timeout=30)

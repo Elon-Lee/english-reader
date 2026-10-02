@@ -24,8 +24,9 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from library_db import BOOKS_ROOT, active_import_jobs, add_daily, annotate_word, create_job, delete_book, delete_import_jobs, dictionary, get_book, get_job, get_settings as db_get_settings, import_duplicates, imported_books, learning_days, library, mark_import_jobs_cancelling, now, pending_import_jobs, save_vocab, scan_catalog, set_settings, touch_book, update_job, update_vocab, vocabulary_list
+from library_db import BOOKS_ROOT, active_import_jobs, add_daily, annotate_word, canonical_youtube_series, create_job, delete_book, delete_import_jobs, dictionary, get_book, get_job, get_settings as db_get_settings, import_duplicates, imported_books, learning_days, library, mark_import_jobs_cancelling, now, pending_import_jobs, save_vocab, scan_catalog, set_settings, touch_book, update_job, update_vocab, vocabulary_list
 from deployment import manager as deployment_manager
+from youtube_subtitles import has_translated_english_track,select_native_english_track
 
 ROOT=Path(__file__).resolve().parents[1]
 READER=ROOT/"reader"
@@ -369,18 +370,18 @@ class Handler(SimpleHTTPRequestHandler):
         if not self.valid_youtube_url(url):self.reply({"error":"请输入有效的 YouTube 地址"},400);return
         try:
             output=subprocess.check_output([str(YTDLP),"--js-runtimes",f"node:{NODE}","--dump-single-json","--no-playlist","--skip-download",url],text=True,stderr=subprocess.STDOUT,timeout=90)
-            data=json.loads(output); subtitles=data.get("subtitles") or {}; automatic=data.get("automatic_captions") or {}
-            self.reply({"id":data.get("id",""),"title":data.get("title","") or "YouTube Video","channel":data.get("channel") or data.get("uploader","") or "YouTube",
-                        "duration":data.get("duration",0),"thumbnail":data.get("thumbnail","") or "","hasEnglishSubtitles":any(key.startswith("en") for key in subtitles),
-                        "hasEnglishAutoCaptions":any(key.startswith("en") for key in automatic),"webpageUrl":data.get("webpage_url",url)})
+            data=json.loads(output); subtitles=data.get("subtitles") or {}; automatic=data.get("automatic_captions") or {};channel=data.get("channel") or data.get("uploader","") or "YouTube";track=select_native_english_track(data)
+            self.reply({"id":data.get("id",""),"title":data.get("title","") or "YouTube Video","channel":channel,"series":canonical_youtube_series(channel),
+                        "duration":data.get("duration",0),"thumbnail":data.get("thumbnail","") or "","hasEnglishSubtitles":bool(track and track["source"]=="manual"),
+                        "hasEnglishAutoCaptions":bool(track and track["source"]=="automatic"),"englishSubtitleTrack":track["code"] if track else "","translatedEnglishRejected":has_translated_english_track(data),"webpageUrl":data.get("webpage_url",url)})
         except subprocess.TimeoutExpired:self.reply({"error":"解析超时，请稍后重试"},504)
         except subprocess.CalledProcessError as exc:self.reply({"error":"无法解析视频，可能需要登录、Cookie或该视频不可访问","detail":exc.output[-800:]},502)
         except Exception as exc:self.reply({"error":str(exc)},502)
     def start_youtube_import(self):
-        try:item=self.json_body(); url=str(item.get("url","")).strip(); title=str(item.get("title","")).strip(); series=str(item.get("series","")).strip()
+        try:item=self.json_body(); url=str(item.get("url","")).strip(); title=str(item.get("title","")).strip(); channel=str(item.get("channel","")).strip();series=canonical_youtube_series(channel);item["series"]=series
         except Exception:self.reply({"error":"invalid json"},400);return
         if not self.valid_youtube_url(url):self.reply({"error":"请输入有效的 YouTube 地址"},400);return
-        if not title or not series:self.reply({"error":"标题和标签不能为空"},400);return
+        if not title:self.reply({"error":"标题不能为空"},400);return
         duplicates=import_duplicates(title,series,"youtube",str(item.get("videoId","")).strip())
         if duplicates and not item.get("allowReimport"):
             self.reply({"error":"该 YouTube 视频已经导入","code":"duplicate_import","duplicates":duplicates},409);return

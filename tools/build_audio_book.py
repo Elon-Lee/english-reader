@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 
 from build_video_book import duration, whisper_book
+from sat_integration import annotate_sat_boundaries
+from timed_segmentation import detect_silences, resegment_timed_book
 
 def main():
     parser=argparse.ArgumentParser()
@@ -17,14 +19,17 @@ def main():
     parser.add_argument("--level",default="")
     parser.add_argument("--audio-url",required=True)
     args=parser.parse_args()
-    whisper=json.loads(args.whisper.read_text());sentences=whisper_book(whisper)
-    for sentence in sentences:sentence["page"]=1
+    whisper=json.loads(args.whisper.read_text());sentences,initial_segmentation=whisper_book(whisper)
     book={"id":args.id,"title":args.title,"englishTitle":args.english_title,"level":args.level,
           "sourceType":"audio","audio":args.audio_url,"pdf":"","pageBase":"","hasOriginalPages":False,
           "duration":duration(args.audio),"alignment":"whisper-dtw-normalized","sentences":sentences,
           "whisper":{"engine":"whisper.cpp","model":"base.en","timestampMethod":"dtw",
-                     "transcribedWords":sum(len(sentence["words"]) for sentence in sentences)}}
+                     "transcribedWords":sum(len(sentence["words"]) for sentence in sentences)},
+          "segmentation":initial_segmentation}
+    sat=annotate_sat_boundaries(book,"speech-asr")
+    segmentation=resegment_timed_book(book,"audio",detect_silences(args.audio),profile="speech-asr");segmentation["sat"]=sat;book["segmentation"]=segmentation
+    for sentence in book["sentences"]:sentence["page"]=1
     args.output.write_text(json.dumps(book,ensure_ascii=False,indent=2))
-    print(f"Built audio book: {len(sentences)} sentences")
+    print(f"Built audio book: {len(book['sentences'])} sentences")
 
 if __name__=="__main__":main()

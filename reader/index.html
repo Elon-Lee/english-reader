@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20260930-22">
+  <link rel="stylesheet" href="styles.css?v=20261002-3">
 </head>
 <body>
   <aside class="sidebar">
@@ -74,7 +74,7 @@
         <div id="youtubePreview" class="youtube-preview hidden"><img id="youtubeThumbnail" alt="YouTube缩略图"><div><small id="youtubeChannel"></small><h3 id="youtubePreviewTitle"></h3><p id="youtubeMeta"></p></div></div>
         <label>中文标题<input id="youtubeTitle" required></label>
         <label>英文标题<input id="youtubeEnglishTitle"></label>
-        <label>所属标签<div class="tag-picker"><select id="youtubeSeriesHistory"><option value="">选择历史标签</option></select><input id="youtubeSeries" placeholder="或输入新标签" required></div></label>
+        <div class="youtube-auto-series"><small>AUTO CHANNEL</small><span>自动归入书系：<b id="youtubeAutoSeries">解析地址后自动识别</b></span><p>书系由 YouTube 频道自动确定，无需手动选择。</p></div>
         <label>等级<input id="youtubeLevel" placeholder="例如 0"></label>
         <button type="submit" id="startYoutubeImport" disabled>下载并导入</button>
         <div id="youtubeProgress" class="video-upload-progress hidden"><div><b id="youtubeStep">准备下载</b><span id="youtubePercent">0%</span></div><progress id="youtubeBar" max="100" value="0"></progress><p id="youtubeMessage"></p></div>
@@ -138,7 +138,7 @@
     </section>
 
     <section id="reader" class="screen reader hidden">
-      <aside id="pagePanel" class="page-panel"><div class="page-head"><b id="visualTitle">原书页</b><div class="visual-switch hidden" id="visualSwitch"><button id="framesViewBtn" class="active">关键帧</button><button id="videoViewBtn">视频</button></div></div><img id="pageImage" alt="原书扫描页"><video id="videoView" class="hidden" muted playsinline preload="metadata"></video><small id="pageLabel"></small></aside>
+      <aside id="pagePanel" class="page-panel"><div id="mediaStage" class="media-stage" tabindex="0"><img id="pageImage" alt="原书扫描页"><video id="videoView" class="hidden" muted playsinline preload="metadata"></video><div class="page-head"><b id="visualTitle">原书页</b><div class="visual-switch hidden" id="visualSwitch"><button id="framesViewBtn" class="active">关键帧</button><button id="videoViewBtn">视频</button><button id="closeStackLayoutBtn" class="visual-layout-close" type="button" title="切换为左右布局" aria-label="关闭上下布局，切换为左右布局">×</button></div></div><small id="pageLabel"></small></div></aside>
       <div class="story-panel">
         <div class="chapter">
           <span>INTERACTIVE STORY</span><h1>Survive!</h1>
@@ -190,6 +190,6 @@
       <div class="cancel-import-dialog-actions"><button value="cancel">继续当前任务</button><button id="confirmCancelImports" type="button">中断并删除</button></div>
     </form>
   </dialog>
-  <script src="app.js?v=20261001-3"></script>
+  <script src="app.js?v=20261002-3"></script>
 </body>
 </html>

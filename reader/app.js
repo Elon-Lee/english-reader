@@ -44,6 +44,7 @@ let wordTtsAudio = null;
 let wordRequestId = 0;
 let playbackFrameId = null;
 let videoFrameCallbackId = null;
+let mediaStageResizeFrame = null;
 let wordElementsBySentence = [];
 let sentenceElementsByIndex=[];
 let annotationIndex=new Map();
@@ -222,7 +223,7 @@ function renderLibrary() {
 function populateVideoSeriesOptions(){
   const history=[...new Set(libraryBooks.map(item=>(item.series||"").trim()).filter(Boolean).filter(name=>!name.includes("牛津")))].sort((left,right)=>left.localeCompare(right,"zh-CN"));
   const options='<option value="">选择历史标签</option>'+history.map(name=>`<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
-  [$("#videoSeriesHistory"),$("#youtubeSeriesHistory")].forEach(select=>{if(!select)return;const previous=select.value;select.innerHTML=options;if(history.includes(previous))select.value=previous;});
+  [$("#videoSeriesHistory")].forEach(select=>{if(!select)return;const previous=select.value;select.innerHTML=options;if(history.includes(previous))select.value=previous;});
 }
 function seriesActivity(item){const value=item.last_read_at||item.updated_at||"";const time=Date.parse(value);return Number.isFinite(time)?time:0;}
 function seriesAvatar(name){const latin=(name.match(/[A-Za-z]+/g)||[]).join("");if(latin)return latin.slice(0,2).toUpperCase();const compact=name.replace(/[^\u3400-\u9fff]/g,"");return compact.slice(0,1)||"书";}
@@ -307,7 +308,7 @@ function bindEvents() {
     const sentenceElement = event.target.closest(".sentence");
     if (!sentenceElement) return;
     const sentence = book.sentences[+sentenceElement.dataset.i];
-    if (event.target.classList.contains("word") && mode === "intensive") {
+    if (event.target.classList.contains("word")) {
       event.stopPropagation();
       const word = event.target;
       hideWordHoverMeaning();
@@ -347,10 +348,11 @@ function bindEvents() {
   $("#audio").onplay = () => { $("#playBtn").textContent = "Ⅱ"; if(sentenceAutoPause&&active>=0&&mode!=="shadow")wordStopAt=book.sentences[active].end+.03;if(mode==="shadow"){if(shadowSentenceIndex<0)shadowSentenceIndex=active>=0?active:sentenceIndexAt($("#audio").currentTime);if(!shadowWaiting&&shadowSentenceIndex>=0)scheduleShadowSentenceStop(shadowSentenceIndex);}if(visualMode==="video"){syncVideoToAudio(true);$("#videoView").play().then(startVideoFrameSync).catch(()=>{});}trackListening(); startPlaybackSync(); };
   $("#audio").onpause = () => { $("#playBtn").textContent = "▶"; $("#videoView").pause();stopVideoFrameSync();stopPlaybackSync();syncVideoToAudio(true);syncPlaybackFrame(); };
   $("#audio").onseeked = () => {syncVideoToAudio(true);syncPlaybackFrame();};
-  $("#videoView").onloadedmetadata=()=>{setVideoBaseRate();syncVideoToAudio(true);};
+  $("#videoView").onloadedmetadata=()=>{setVideoBaseRate();syncVideoToAudio(true);scheduleMediaStageSize();};
+  $("#pageImage").onload=scheduleMediaStageSize;
   $("#videoView").onplaying=startVideoFrameSync;
   $("#videoView").onpause=stopVideoFrameSync;
-  window.addEventListener("resize",scheduleTopbarContentAlignment);
+  window.addEventListener("resize",()=>{scheduleTopbarContentAlignment();scheduleMediaStageSize();});
   window.addEventListener("beforeunload", finishSession);
   $("#settingsTabs").onclick=event=>{const tab=event.target.closest("[data-settings-tab]");if(tab)setSettingsTab(tab.dataset.settingsTab);};
   $("#settingsTabs").onkeydown=event=>{if(!["ArrowLeft","ArrowRight","Home","End"].includes(event.key))return;event.preventDefault();const tabs=$$("#settingsTabs [data-settings-tab]:not(.hidden)"),current=Math.max(0,tabs.indexOf(document.activeElement));let next=event.key==="Home"?0:event.key==="End"?tabs.length-1:event.key==="ArrowRight"?(current+1)%tabs.length:(current-1+tabs.length)%tabs.length;tabs[next]?.focus();setSettingsTab(tabs[next].dataset.settingsTab);};
@@ -389,8 +391,8 @@ function bindEvents() {
   $("#videoEnglishTitle").oninput=syncVideoChineseTitle;
   $("#videoTitle").oninput=()=>{videoTitleManuallyEdited=true;};
   $("#videoSeriesHistory").onchange=event=>{if(event.target.value)$("#videoSeries").value=event.target.value;};
-  $("#youtubeSeriesHistory").onchange=event=>{if(event.target.value)$("#youtubeSeries").value=event.target.value;};
   $("#framesViewBtn").onclick=()=>setVisualMode("frames");$("#videoViewBtn").onclick=()=>setVisualMode("video");
+  $("#closeStackLayoutBtn").onclick=event=>{event.currentTarget.blur();if(readerLayout!=="side"){readerLayout="side";applyReaderLayout();scheduleTopbarContentAlignment();showReaderToast("布局：画面左侧，文章右侧");}};
   document.addEventListener("keydown",handleReaderShortcut);
   document.addEventListener("click",event=>{const button=event.target.closest("button");if(button)setTimeout(()=>button.blur(),0);});
   $("#wordPanel").onclick=handleWordPanelAction;
@@ -426,7 +428,7 @@ async function confirmDeleteBook(){
 
 function bookHasVideo(){return !!book?.video;}
 function bookHasVisual(){return !!(bookHasVideo()||(book?.hasOriginalPages!==false&&book?.pageBase));}
-function syncReaderPanels(){const focused=document.body.classList.contains("focus");$("#pagePanel").classList.toggle("hidden",focused||!bookHasVisual());$("#wordPanel").classList.toggle("hidden",focused);}
+function syncReaderPanels(){const focused=document.body.classList.contains("focus"),focusWordOpen=document.body.classList.contains("focus-word-open");$("#pagePanel").classList.toggle("hidden",focused||!bookHasVisual());$("#wordPanel").classList.toggle("hidden",focused&&!focusWordOpen);}
 function readerIsVisible(){return !$("#reader").classList.contains("hidden");}
 function syncReaderActionVisibility(){const reading=readerIsVisible();$("#focusBtn").classList.toggle("hidden",!reading);$("#eyeComfortBtn").classList.toggle("hidden",!reading);$("#readerLayoutBtn").classList.toggle("hidden",!reading||!bookHasVisual());}
 function syncTopbarContentAlignment(){
@@ -439,19 +441,33 @@ function readerLayoutIcon(layout){
 function applyReaderLayout(){
   const reader=$("#reader"),button=$("#readerLayoutBtn"),hasVisual=bookHasVisual();reader.dataset.visualLayout=readerLayout;
   button.classList.toggle("hidden",!readerIsVisible()||!hasVisual);button.classList.toggle("active",readerLayout==="stack");button.setAttribute("aria-pressed",String(readerLayout==="stack"));button.innerHTML=readerLayoutIcon(readerLayout);
-  const next=readerLayout==="side"?"上下":"左右";button.title=`切换为${next}布局`;button.setAttribute("aria-label",`当前${readerLayout==="side"?"左右":"上下"}布局，切换为${next}布局`);
+  const next=readerLayout==="side"?"上下":"左右";button.title=`切换为${next}布局`;button.setAttribute("aria-label",`当前${readerLayout==="side"?"左右":"上下"}布局，切换为${next}布局`);scheduleMediaStageSize();
 }
 function recommendedReaderLayout(){return bookHasVideo()?"stack":"side";}
 function toggleReaderLayout(){readerLayout=readerLayout==="side"?"stack":"side";applyReaderLayout();scheduleTopbarContentAlignment();showReaderToast(readerLayout==="side"?"布局：画面左侧，文章右侧":"布局：画面上方，文章下方");}
 function setSidebarCollapsed(collapsed){document.body.classList.toggle("sidebar-collapsed",collapsed);$("#sidebarToggle").setAttribute("aria-expanded",String(!collapsed));$("#sidebarReveal").setAttribute("aria-expanded",String(!collapsed));$(".topbar").setAttribute("aria-hidden",String(!readerIsVisible()&&!collapsed));scheduleTopbarContentAlignment();}
 function setFocusMode(enabled){
-  document.body.classList.toggle("focus",enabled);setSidebarCollapsed(false);
+  document.body.classList.toggle("focus",enabled);document.body.classList.remove("focus-word-open");setSidebarCollapsed(false);
   const button=$("#focusBtn");button.textContent=enabled?"普通模式":"专注模式";button.classList.toggle("active",enabled);button.setAttribute("aria-pressed",String(enabled));
   syncReaderPanels();syncReaderActionVisibility();scheduleTopbarContentAlignment();
 }
 function toggleFocusMode(){setFocusMode(!document.body.classList.contains("focus"));}
-function configureBookVisual(){const isVideo=bookHasVideo(),hasPages=book?.hasOriginalPages!==false&&!!book?.pageBase;readerLayout=recommendedReaderLayout();$("#visualSwitch").classList.toggle("hidden",!isVideo);$("#visualTitle").textContent=isVideo?"视频画面":hasPages?"原书页":"无原书页面";stopVideoFrameSync();$("#videoView").src=isVideo?book.video:"";setVisualMode(isVideo?"video":"frames");applyReaderLayout();syncReaderPanels();scheduleTopbarContentAlignment();}
-function setVisualMode(mode){visualMode=mode;const isVideo=bookHasVideo();$("#framesViewBtn").classList.toggle("active",mode==="frames");$("#videoViewBtn").classList.toggle("active",mode==="video");$("#pageImage").classList.toggle("hidden",mode==="video");$("#videoView").classList.toggle("hidden",mode!=="video");if(isVideo&&mode==="video"){const video=$("#videoView"),audio=$("#audio");setVideoBaseRate();syncVideoToAudio(true);if(!audio.paused)video.play().then(startVideoFrameSync).catch(()=>{});}else{stopVideoFrameSync();$("#videoView").pause();}}
+function configureBookVisual(){const isVideo=bookHasVideo(),hasPages=book?.hasOriginalPages!==false&&!!book?.pageBase;readerLayout=recommendedReaderLayout();$("#pagePanel").classList.toggle("has-video",isVideo);$("#visualSwitch").classList.toggle("hidden",!isVideo);$("#visualTitle").textContent=isVideo?"视频画面":hasPages?"原书页":"无原书页面";stopVideoFrameSync();$("#videoView").src=isVideo?book.video:"";setVisualMode(isVideo?"video":"frames");applyReaderLayout();syncReaderPanels();scheduleTopbarContentAlignment();scheduleMediaStageSize();}
+function setVisualMode(mode){visualMode=mode;const isVideo=bookHasVideo();$("#pagePanel").dataset.visualMode=mode;$("#framesViewBtn").classList.toggle("active",mode==="frames");$("#videoViewBtn").classList.toggle("active",mode==="video");$("#pageImage").classList.toggle("hidden",mode==="video");$("#videoView").classList.toggle("hidden",mode!=="video");if(isVideo&&mode==="video"){const video=$("#videoView"),audio=$("#audio");setVideoBaseRate();syncVideoToAudio(true);if(!audio.paused)video.play().then(startVideoFrameSync).catch(()=>{});}else{stopVideoFrameSync();$("#videoView").pause();}scheduleMediaStageSize();}
+
+function activeMediaAspectRatio(){
+  if(visualMode==="video"&&bookHasVideo()){const video=$("#videoView");if(video.videoWidth&&video.videoHeight)return video.videoWidth/video.videoHeight;}
+  const image=$("#pageImage");if(image.naturalWidth&&image.naturalHeight)return image.naturalWidth/image.naturalHeight;
+  return bookHasVideo()?16/9:3/4;
+}
+function updateMediaStageSize(){
+  mediaStageResizeFrame=null;const panel=$("#pagePanel"),stage=$("#mediaStage");if(!panel||!stage||panel.classList.contains("hidden"))return;
+  if(!panel.classList.contains("has-video")){stage.style.width="";stage.style.aspectRatio="";return;}
+  const ratio=Math.max(.35,Math.min(4,activeMediaAspectRatio())),available=Math.max(180,panel.clientWidth||stage.parentElement?.clientWidth||innerWidth*.25);
+  const effectiveStack=readerLayout==="stack"||innerWidth<=950,maxHeight=effectiveStack?Math.min(innerHeight*.44,540):Math.min(innerHeight*.72,720);
+  const width=Math.max(160,Math.min(available,maxHeight*ratio));stage.style.width=`${Math.round(width)}px`;stage.style.aspectRatio=String(ratio);stage.style.setProperty("--media-ratio",String(ratio));
+}
+function scheduleMediaStageSize(){if(mediaStageResizeFrame!==null)cancelAnimationFrame(mediaStageResizeFrame);mediaStageResizeFrame=requestAnimationFrame(()=>requestAnimationFrame(updateMediaStageSize));}
 function setImportType(type){$$('[data-import-type]').forEach(button=>button.classList.toggle('active',button.dataset.importType===type));$("#booksImportPane").classList.toggle("hidden",type!=="books");$("#videoImportPane").classList.toggle("hidden",type!=="video");$("#youtubeImportPane").classList.toggle("hidden",type!=="youtube");}
 function videoNameWithoutExtension(name){return name.replace(/\.[^.]+$/,'').replace(/[._-]+/g,' ').trim();}
 function handleVideoFileSelected(){const file=$("#videoFile").files[0];if(!file)return;const derived=videoNameWithoutExtension(file.name);if(!$("#videoEnglishTitle").value)$("#videoEnglishTitle").value=derived;if(!$("#videoTitle").value||!videoTitleManuallyEdited)$("#videoTitle").value=$("#videoEnglishTitle").value||derived;}
@@ -462,8 +478,8 @@ async function startVideoImport(event){event.preventDefault();const video=$("#vi
 function pollVideoImport(jobId){clearInterval(videoImportPollTimer);$("#videoUploadProgress").classList.remove("hidden");const check=async()=>{try{const response=await fetch(`/api/import/jobs/${jobId}`,{cache:'no-store'}),job=await response.json();if(!response.ok)throw new Error(job.error||'无法读取任务');const overall=20+(job.progress||0)*.8;setVideoOverallProgress(overall,job.step||job.status,job.error||`后台处理中：${job.progress||0}%`);if(job.status==='complete'||job.status==='failed'){clearInterval(videoImportPollTimer);videoImportPollTimer=null;forgetImportTracking("video");refreshPendingImportJobs();if(job.status==='complete'){setVideoOverallProgress(100,'媒体导入完成','音频、正文、SaT断句、词级时间轴和SQLite数据均已完成；视频文件还包含关键帧。');const data=await fetch('/api/library',{cache:'no-store'}).then(r=>r.json());libraryBooks=data.books||[];populateVideoSeriesOptions();setupSeriesSelector();renderLibrary();await loadImportCatalog();}else setVideoOverallProgress(overall,'媒体导入失败',job.error||'后台任务失败');}}catch(error){clearInterval(videoImportPollTimer);videoImportPollTimer=null;setVideoOverallProgress($("#videoUploadBar").value,'进度查询失败',error.message);}};check();videoImportPollTimer=setInterval(check,1000);}
 
 function setYoutubeProgress(percent,step,message=''){const value=Math.max(0,Math.min(100,Math.round(percent)));$("#youtubeBar").value=value;$("#youtubePercent").textContent=`${value}%`;$("#youtubeStep").textContent=step;if(message)$("#youtubeMessage").textContent=message;}
-async function analyzeYoutubeUrl(){const url=$("#youtubeUrl").value.trim();if(!url)return;$("#analyzeYoutubeBtn").disabled=true;$("#youtubeProgress").classList.remove("hidden");setYoutubeProgress(1,"解析 YouTube 地址","正在读取标题、频道、时长和字幕信息。");try{const response=await fetch('/api/import/youtube/info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})}),data=await response.json();if(!response.ok)throw new Error(data.error||'解析失败');youtubeInfo=data;$("#youtubeThumbnail").src=data.thumbnail||'';$("#youtubeChannel").textContent=data.channel||'YouTube';$("#youtubePreviewTitle").textContent=data.title;$("#youtubeMeta").textContent=`${fmt(data.duration||0)} · ${data.hasEnglishSubtitles?'有人工英文字幕':data.hasEnglishAutoCaptions?'有自动英文字幕':'无英文字幕，将使用Whisper'}`;$("#youtubePreview").classList.remove("hidden");$("#youtubeEnglishTitle").value=data.title;youtubeTitleManuallyEdited=false;$("#youtubeTitle").value=data.title;if(!$("#youtubeSeries").value||$("#youtubeSeries").value==='视频课程')$("#youtubeSeries").value=data.channel||'视频课程';$("#startYoutubeImport").disabled=false;setYoutubeProgress(3,"解析完成","确认标题和标签后开始下载。");}catch(error){youtubeInfo=null;$("#startYoutubeImport").disabled=true;setYoutubeProgress(0,"解析失败",error.message);}finally{$("#analyzeYoutubeBtn").disabled=false;}}
-async function startYoutubeImport(event){event.preventDefault();if(!youtubeInfo)return;const series=$("#youtubeSeries").value.trim();if(!series)return;clearInterval(youtubePollTimer);$("#youtubeProgress").classList.remove("hidden");setYoutubeProgress(1,"创建 YouTube 导入任务","下载、字幕和后续处理将严格顺序执行。");try{const payload={url:youtubeInfo.webpageUrl||$("#youtubeUrl").value,title:$("#youtubeTitle").value.trim()||youtubeInfo.title,englishTitle:$("#youtubeEnglishTitle").value.trim()||youtubeInfo.title,series,level:$("#youtubeLevel").value.trim(),videoId:youtubeInfo.id,channel:youtubeInfo.channel};const request=await postImportRequest('/api/import/youtube',payload);if(request.cancelled)return;const {response,data}=request;if(!response.ok)throw new Error(data.error||'无法开始导入');rememberImportTracking("youtube",[data.jobId]);refreshPendingImportJobs();pollYoutubeImport(data.jobId);}catch(error){setYoutubeProgress($("#youtubeBar").value,'YouTube 导入失败',error.message);}}
+async function analyzeYoutubeUrl(){const url=$("#youtubeUrl").value.trim();if(!url)return;$("#analyzeYoutubeBtn").disabled=true;$("#youtubeProgress").classList.remove("hidden");setYoutubeProgress(1,"解析 YouTube 地址","正在读取标题、频道、时长和字幕信息。");try{const response=await fetch('/api/import/youtube/info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})}),data=await response.json();if(!response.ok)throw new Error(data.error||'解析失败');youtubeInfo=data;$("#youtubeThumbnail").src=data.thumbnail||'';$("#youtubeChannel").textContent=data.channel||'YouTube';$("#youtubeAutoSeries").textContent=data.series||data.channel||'YouTube';$("#youtubePreviewTitle").textContent=data.title;$("#youtubeMeta").textContent=`${fmt(data.duration||0)} · ${data.hasEnglishSubtitles?'有人工英文字幕':data.hasEnglishAutoCaptions?'有自动英文字幕':'无英文字幕，将使用Whisper'}`;$("#youtubePreview").classList.remove("hidden");$("#youtubeEnglishTitle").value=data.title;youtubeTitleManuallyEdited=false;$("#youtubeTitle").value=data.title;$("#startYoutubeImport").disabled=false;setYoutubeProgress(3,"解析完成",`将自动归入“${data.series||data.channel||'YouTube'}”，确认标题后开始下载。`);}catch(error){youtubeInfo=null;$("#youtubeAutoSeries").textContent='解析地址后自动识别';$("#startYoutubeImport").disabled=true;setYoutubeProgress(0,"解析失败",error.message);}finally{$("#analyzeYoutubeBtn").disabled=false;}}
+async function startYoutubeImport(event){event.preventDefault();if(!youtubeInfo)return;clearInterval(youtubePollTimer);$("#youtubeProgress").classList.remove("hidden");setYoutubeProgress(1,"创建 YouTube 导入任务",`将自动归入“${youtubeInfo.series||youtubeInfo.channel||'YouTube'}”。`);try{const payload={url:youtubeInfo.webpageUrl||$("#youtubeUrl").value,title:$("#youtubeTitle").value.trim()||youtubeInfo.title,englishTitle:$("#youtubeEnglishTitle").value.trim()||youtubeInfo.title,level:$("#youtubeLevel").value.trim(),videoId:youtubeInfo.id,channel:youtubeInfo.channel};const request=await postImportRequest('/api/import/youtube',payload);if(request.cancelled)return;const {response,data}=request;if(!response.ok)throw new Error(data.error||'无法开始导入');rememberImportTracking("youtube",[data.jobId]);refreshPendingImportJobs();pollYoutubeImport(data.jobId);}catch(error){setYoutubeProgress($("#youtubeBar").value,'YouTube 导入失败',error.message);}}
 function pollYoutubeImport(jobId){clearInterval(youtubePollTimer);$("#youtubeProgress").classList.remove("hidden");const check=async()=>{try{const response=await fetch(`/api/import/jobs/${jobId}`,{cache:'no-store'}),job=await response.json();if(!response.ok)throw new Error(job.error||'无法读取任务');setYoutubeProgress(job.progress||0,job.step||job.status,job.error||youtubeProgressMessage(job));if(job.status==='complete'||job.status==='failed'){clearInterval(youtubePollTimer);youtubePollTimer=null;forgetImportTracking("youtube");refreshPendingImportJobs();if(job.status==='complete'){setYoutubeProgress(100,'YouTube 导入完成','视频、字幕、音频、关键帧、词级时间轴和SQLite数据均已完成。');const data=await fetch('/api/library',{cache:'no-store'}).then(r=>r.json());libraryBooks=data.books||[];populateVideoSeriesOptions();setupSeriesSelector();renderLibrary();}else setYoutubeProgress(job.progress||0,'YouTube 导入失败',job.error||'任务失败');}}catch(error){clearInterval(youtubePollTimer);youtubePollTimer=null;setYoutubeProgress($("#youtubeBar").value,'进度查询失败',error.message);}};check();youtubePollTimer=setInterval(check,1000);}
 function youtubeProgressMessage(job){if((job.progress||0)<25)return '正在下载最高720p视频、英文字幕和缩略图。';return `YouTube下载已完成，正在复用视频处理流程：${job.progress||0}%`;}
 
@@ -479,7 +495,7 @@ function positionWordHoverMeaning(element){
   tip.style.left=`${left}px`;tip.style.top=`${top}px`;
 }
 function showWordHoverMeaning(element,entries){
-  if(wordHoverMeaningElement!==element||!element.isConnected||mode!=="intensive")return;
+  if(wordHoverMeaningElement!==element||!element.isConnected||!readerIsVisible())return;
   const tip=$("#wordHoverMeaning");tip.innerHTML=`<b>${escapeHtml(element.textContent.trim())}</b><span>${entries.map(escapeHtml).join("；")}</span>`;
   tip.classList.remove("hidden");positionWordHoverMeaning(element);
 }
@@ -487,7 +503,7 @@ function scheduleWordHoverMeaning(element){
   clearTimeout(wordHoverMeaningTimer);const word=element.textContent.trim();if(!word)return;
   wordHoverMeaningElement=element;const requestId=++wordHoverMeaningRequestId,key=word.toLowerCase();
   wordHoverMeaningTimer=setTimeout(async()=>{
-    if(wordHoverMeaningElement!==element||requestId!==wordHoverMeaningRequestId||mode!=="intensive")return;
+    if(wordHoverMeaningElement!==element||requestId!==wordHoverMeaningRequestId||!readerIsVisible())return;
     const cached=wordHoverMeaningCache.get(key);if(cached){showWordHoverMeaning(element,cached);return;}
     showWordHoverMeaning(element,["查询中…"]);
     try{
@@ -562,11 +578,11 @@ function resumeBookAfterWordHover(){
   });
 }
 function handleWordPointerOver(event){
-  if(mode!=="intensive")return;
   const word=wordTarget(event.target),from=wordTarget(event.relatedTarget);
   if(!word||from===word)return;
   hideWordHoverMeaning();scheduleWordHoverMeaning(word);
   cancelWordResume();
+  if(mode!=="intensive")return;
   if(!$("#audio").paused&&!pausedForWord){
     const audio=$("#audio");
     if(mainAudioFadeTarget===null||mainAudioFadeTarget<=audio.volume)mainAudioRestoreVolume=audio.volume;
@@ -579,7 +595,6 @@ function handleWordPointerOver(event){
   }
 }
 function handleWordPointerOut(event){
-  if(mode!=="intensive")return;
   const word=wordTarget(event.target),to=wordTarget(event.relatedTarget);
   if(word&&to!==word)hideWordHoverMeaning();
   if(!word||to===word||to)return;
@@ -862,6 +877,7 @@ function getDefinition(raw, sentence) {
 }
 
 async function showWord(raw, sentence, wordElement) {
+  if(document.body.classList.contains("focus")){document.body.classList.add("focus-word-open");syncReaderPanels();}
   const definition = getDefinition(raw, sentence);
   const selectedIndex=+(wordElement?.dataset.wordIndex??-1),key=wordRecordKey(sentence.id,selectedIndex);
   const annotation=annotationIndex.get(key);

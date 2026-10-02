@@ -9,6 +9,7 @@ from pathlib import Path
 
 from import_video_worker import import_video
 from library_db import BOOKS_ROOT, ROOT, update_job
+from youtube_subtitles import has_translated_english_track,select_native_english_track
 
 YTDLP=ROOT/".local/bin/yt-dlp"
 NODE=Path(shutil.which("node") or "/usr/local/bin/node")
@@ -27,17 +28,20 @@ def run_ytdlp(command,log,job_id,progress=False):
         code=process.wait()
     return code,recent
 
-def download_english_subtitle(url,destination,log,job_id):
-    existing=next(iter(sorted(destination.glob("source.en*.srt"))),None)
-    if existing:return existing,"manual"
-    common=[YTDLP,"--js-runtimes",f"node:{NODE}","--no-playlist","--skip-download","--sub-langs","en","--sub-format","srt","--convert-subs","srt","-o",str(destination/"source.%(ext)s")]
-    update_job(job_id,progress=4,step="下载 YouTube 英文字幕")
-    code,_=run_ytdlp(common[:4]+["--write-subs"]+common[4:]+[url],log,job_id)
-    subtitle=next(iter(sorted(destination.glob("source.en*.srt"))),None)
-    if code==0 and subtitle:return subtitle,"manual"
-    code,_=run_ytdlp(common[:4]+["--write-auto-subs"]+common[4:]+[url],log,job_id)
-    subtitle=next(iter(sorted(destination.glob("source.en*.srt"))),None)
-    return (subtitle,"automatic") if code==0 and subtitle else (None,"none")
+def probe_info(url):
+    output=subprocess.check_output([str(YTDLP),"--js-runtimes",f"node:{NODE}","--dump-single-json","--no-playlist","--skip-download",url],text=True,stderr=subprocess.STDOUT,timeout=120)
+    return json.loads(output)
+
+def download_english_subtitle(url,destination,log,job_id,info):
+    for stale in destination.glob("source.*.srt"):stale.unlink()
+    track=select_native_english_track(info)
+    if not track:return None,"none",None
+    common=[YTDLP,"--js-runtimes",f"node:{NODE}","--no-playlist","--skip-download","--sub-langs",track["code"],"--sub-format","srt","--convert-subs","srt","-o",str(destination/"source.%(ext)s")]
+    label="人工英文字幕" if track["source"]=="manual" else "原生自动英文字幕";update_job(job_id,progress=4,step=f"下载 YouTube {label}")
+    flag="--write-subs" if track["source"]=="manual" else "--write-auto-subs";code,_=run_ytdlp(common[:4]+[flag]+common[4:]+[url],log,job_id)
+    subtitle=next(iter(sorted(destination.glob("source.*.srt"))),None)
+    if code!=0 or not subtitle:return None,"none",track
+    return subtitle,track["source"],track
 
 def main():
     try:os.nice(10)
@@ -53,7 +57,7 @@ def main():
     log=ROOT/".local"/f"youtube-{job_id}.log"
     try:
         log.write_text("")
-        subtitle,subtitle_source=download_english_subtitle(url,destination,log,job_id)
+        info=probe_info(url);subtitle,subtitle_source,subtitle_track=download_english_subtitle(url,destination,log,job_id,info)
         code,recent=run_ytdlp(command,log,job_id,progress=True)
         if code!=0:
             reason=next((line for line in reversed(recent) if line.startswith("ERROR:") or "HTTP Error" in line),"")
@@ -64,7 +68,7 @@ def main():
             converted=destination/"source.mp4"; subprocess.run(["ffmpeg","-y","-v","error","-i",video,"-c","copy",converted],check=True); video.unlink()
         if subtitle and subtitle.exists() and subtitle.name!="subtitles.srt": shutil.move(subtitle,destination/"subtitles.srt")
         metadata={"title":title,"englishTitle":request.get("englishTitle",title),"series":series,"level":request.get("level",""),"sourceType":"youtube",
-          "subtitleStrategy":"auto","youtubeSubtitleSource":subtitle_source,"sourceUrl":url,"youtubeId":video_id,"channel":request.get("channel","")}
+          "subtitleStrategy":"auto","youtubeSubtitleSource":subtitle_source,"youtubeSubtitleTrack":subtitle_track["code"] if subtitle_track else "","youtubeSubtitleLanguage":"en" if subtitle_track else "","youtubeSubtitleTranslated":False,"translatedEnglishRejected":has_translated_english_track(info),"sourceUrl":url,"youtubeId":video_id,"channel":request.get("channel","")}
         (destination/".video-import.json").write_text(json.dumps(metadata,ensure_ascii=False,indent=2))
         update_job(job_id,source_path=relative,progress=25,step="YouTube 下载完成，开始视频处理")
         import_video(job_id,relative,progress_base=25,progress_span=75)

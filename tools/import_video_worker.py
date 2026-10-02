@@ -55,11 +55,12 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
     subtitle_cues=subtitle_entries(subtitle) if subtitle and subtitle.exists() else []
     if subtitle and len(subtitle_cues)<3:subtitle=None;subtitle_type="whisper";subtitle_cues=[]
     youtube_manual=source_type=="youtube" and metadata.get("youtubeSubtitleSource")=="manual"
+    youtube_native_caption=source_type=="youtube" and metadata.get("youtubeSubtitleSource") in {"manual","automatic"} and not metadata.get("youtubeSubtitleTranslated",False)
     local_subtitle=source_type!="youtube" and subtitle is not None
-    skip_whisper=bool(subtitle_cues) and strategy!="whisper" and (youtube_manual or local_subtitle)
+    skip_whisper=bool(subtitle_cues) and strategy!="whisper" and (youtube_native_caption or local_subtitle)
     prefix=generated/"whisper";whisper_json=Path(str(prefix)+".json")
     if skip_whisper:
-        label="YouTube 人工英文字幕" if youtube_manual else ("外挂英文字幕" if subtitle_type=="external" else "内嵌英文字幕")
+        label=("YouTube 人工英文字幕" if youtube_manual else "YouTube 原生自动英文字幕") if source_type=="youtube" else ("外挂英文字幕" if subtitle_type=="external" else "内嵌英文字幕")
         progress(35,f"检测到{label}，已跳过 Whisper")
         whisper_json.unlink(missing_ok=True)
     else:
@@ -85,7 +86,9 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
     subtitle_source=metadata.get("youtubeSubtitleSource",subtitle_type)
     if source_type=="youtube":profile="youtube-auto" if subtitle_source=="automatic" else ("youtube-manual" if subtitle_source=="manual" else "speech-asr")
     else:profile="local-subtitle" if subtitle and skip_whisper else "speech-asr"
-    book=json.loads(book_file.read_text());book.update({"sourceType":source_type,"sourceUrl":metadata.get("sourceUrl",""),"channel":metadata.get("channel",""),"externalId":metadata.get("youtubeId",""),"video":video_url,"subtitleType":subtitle_type,"subtitleSource":subtitle_source,"pageBase":page_base});book_file.write_text(json.dumps(book,ensure_ascii=False,indent=2))
+    book=json.loads(book_file.read_text());book.update({"sourceType":source_type,"sourceUrl":metadata.get("sourceUrl",""),"channel":metadata.get("channel",""),"externalId":metadata.get("youtubeId",""),"video":video_url,"subtitleType":subtitle_type,"subtitleSource":subtitle_source,"pageBase":page_base})
+    if source_type=="youtube":book.update({"youtubeSubtitleTrack":metadata.get("youtubeSubtitleTrack",""),"youtubeSubtitleLanguage":metadata.get("youtubeSubtitleLanguage",""),"youtubeSubtitleTranslated":bool(metadata.get("youtubeSubtitleTranslated",False)),"translatedEnglishRejected":bool(metadata.get("translatedEnglishRejected",False))})
+    book_file.write_text(json.dumps(book,ensure_ascii=False,indent=2))
     progress(88,"SaT 语义断句与停顿融合")
     run([sys.executable,ROOT/"tools/apply_sat_segmentation.py","--book",book_file,"--audio",audio,"--output",book_file,"--profile",profile])
     book=json.loads(book_file.read_text());quality={"status":"ready","sourceType":book["sourceType"],"subtitleType":subtitle_type,"subtitleSource":book["subtitleSource"],"whisperSkipped":skip_whisper,"timingSource":f"{profile}+sat+pause+wav2vec2","sentences":len(book["sentences"]),"segmentation":book.get("segmentation",{})}

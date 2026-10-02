@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from library_db import BOOKS_ROOT, ROOT, display_title, save_artifact, save_dictionary, slug_for, update_job, upsert_book
-from import_source_plan import WORD_RE, authoritative_ocr, build_source_plan, write_plan
+from import_source_plan import WORD_RE, authoritative_ocr, build_source_plan, select_pdf_ocr_fallback_text, signature, text_candidate, write_plan
 
 PDF_OCR=ROOT/".local/bin/pdf_ocr"
 WHISPER=ROOT/"tools/vendor/whisper.cpp/build/bin/whisper-cli"
@@ -172,9 +172,15 @@ def import_book(job_id,relative):
     plan,pdf,text_source,paragraphs,audios=build_source_plan(source);plan_file=generated/"import-plan.json"
     validate_source_plan(plan)
     previous=json.loads(plan_file.read_text()) if plan_file.exists() else None
-    if previous!=plan:reset_generated(generated)
+    preserve_fallback=bool(previous and previous.get("ocrFallback") and previous.get("pdf")==plan.get("pdf") and previous.get("audio")==plan.get("audio"))
+    if preserve_fallback:
+        plan=previous;text_source=source/plan["textSource"]["file"] if plan.get("textSource") else None
+        if text_source:
+            try:_,_,_,paragraphs=text_candidate(text_source)
+            except Exception:paragraphs=[]
+    elif previous!=plan:reset_generated(generated)
     pages.mkdir(parents=True,exist_ok=True);write_plan(plan_file,plan)
-    update_job(job_id,book_id=book_id,status="running")
+    update_job(job_id,book_id=book_id,status="running",error="")
 
     excluded=len(plan.get("excludedAudio",[]));set_job(job_id,5,f"准备音频：{len(audios)} 个文件"+(f"，排除 {excluded} 个重复候选" if excluded else ""))
     audio_out=generated/"audio.mp3"
@@ -192,10 +198,15 @@ def import_book(job_id,relative):
         set_job(job_id,90,"根据 Whisper 生成音频书")
         run([sys.executable,ROOT/"tools/build_audio_book.py","--whisper",whisper_json,"--audio",audio_out,"--output",book_json,
              "--id",book_id,"--title",title,"--level",level,"--audio-url",audio_url])
-        book=json.loads(book_json.read_text());quality={"status":"ready","summary":{"sentences":len(book["sentences"]),"alignment":book["alignment"]},
-              "sourcePlan":plan,"recommendations":["该书没有原始正文和扫描页，正文完全来自 Whisper；建议抽查专有名词和断句。"]}
+        book=json.loads(book_json.read_text());quality={"status":"ready","summary":{"sentences":len(book["sentences"]),"alignment":book["alignment"]},"timingSource":"whisper-dtw+sat+pause",
+              "segmentation":book.get("segmentation",{}),"sourcePlan":plan,"recommendations":["该书没有原始正文和扫描页，正文完全来自 Whisper；建议抽查专有名词和断句。"]}
         cover="/favicon.svg";set_job(job_id,96,"写入音频书数据库")
         upsert_book(book,quality,relative,series,"",cover);save_artifact(book_id,"import-plan",plan);save_artifact(book_id,"whisper",json.loads(whisper_json.read_text()))
+        aligner_python=ROOT/".local/forced-aligner/venv/bin/python"
+        if aligner_python.exists():
+            set_job(job_id,98,"纯音频 wav2vec2 CTC 强制对齐")
+            with (ROOT/".local"/f"ctc-{book_id}.log").open("w") as output:
+                run([aligner_python,ROOT/"tools/ctc_forced_align.py","--book-id",book_id,"--job-id",str(job_id),"--output",book_json,"--segmentation-profile","speech-asr","--update-db"],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
         dictionary_file=ROOT/".local"/f"dictionary-{job_id}.json"
         run([sys.executable,ROOT/"tools/build_local_dictionary.py","--book",book_json,"--output",dictionary_file]);save_dictionary(json.loads(dictionary_file.read_text()));dictionary_file.unlink()
         for artifact in [book_json,whisper_json,audio_out.with_suffix(".concat.txt")]:
@@ -211,6 +222,17 @@ def import_book(job_id,relative):
             run([PDF_OCR,pdf,ocr_file,pages,"1.6"],stdout=subprocess.DEVNULL)
         else:set_job(job_id,54,"复用已完成的 OCR 数据")
         ocr=json.loads(ocr_file.read_text())
+        ocr_words=sum(len(WORD_RE.findall(line.get("text",""))) for page in ocr for line in page.get("lines",[]))
+        if ocr_words<200 and not paragraphs:
+            expected_words=max(1,float(plan.get("audioDuration",0))*2.4)
+            fallback_source,fallback_paragraphs,fallback_words,fallback_reason=select_pdf_ocr_fallback_text(source,expected_words)
+            if fallback_source:
+                text_source=fallback_source;paragraphs=fallback_paragraphs
+                plan["textSource"]=signature(fallback_source);plan["textWords"]=fallback_words;plan["contentMode"]=fallback_source.suffix.lower().lstrip(".")
+                plan["selectionReason"]+=f"；PDF OCR仅识别到{ocr_words}词，回退{fallback_reason}：{fallback_source.name}"
+                plan["ocrFallback"]={"pdf":pdf.name,"ocrWords":ocr_words,"textSource":fallback_source.name,"textWords":fallback_words,"reason":fallback_reason}
+                write_plan(plan_file,plan);set_job(job_id,54,f"PDF页面可用但OCR正文不足，改用 {fallback_source.name}")
+            elif ocr_words==0:raise ValueError(f"同名 PDF {pdf.name} 无法识别正文，且没有可用的 DOC/DOCX/CHM/TXT 回退")
     content_ocr_file=ocr_file
     if paragraphs:
         content_ocr_file=generated/"text-ocr.json"
