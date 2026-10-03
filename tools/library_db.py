@@ -277,11 +277,15 @@ def get_book(book_id):
     result=dict(row); result["book"]=json.loads(result.pop("data_json")); result["quality"]=json.loads(result.pop("quality_json") or "{}"); result["annotations"]=annotations
     return result
 
+def normalize_confirmation_title(value):
+    """Ignore every Unicode whitespace character when confirming a destructive delete."""
+    return re.sub(r"\s+","",str(value or ""))
+
 def delete_book(book_id,confirmed_title):
     """Delete one imported title and its private media tree with rollback protection."""
     db=connect(); row=db.execute("SELECT * FROM books WHERE id=?",(book_id,)).fetchone()
     if not row: db.close(); raise ValueError("book not found")
-    if str(confirmed_title).strip()!=row["title"]: db.close(); raise ValueError("书名确认不匹配")
+    if normalize_confirmation_title(confirmed_title)!=normalize_confirmation_title(row["title"]):db.close();raise ValueError("书名确认不匹配（空白字符可忽略，其他字符必须一致）")
     source=(BOOKS_ROOT/row["source_path"]).resolve()
     try: source.relative_to(BOOKS_ROOT.resolve())
     except ValueError: db.close(); raise ValueError("资源路径越界，拒绝删除")

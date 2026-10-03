@@ -148,3 +148,7 @@ body:not(.focus) .reader:not([data-visual-layout="stack"]) .page-panel.has-video
 
 /* YouTube series is derived from the channel and cannot inherit stale form state. */
 .youtube-auto-series{display:grid;align-content:center;gap:4px;padding:11px 13px;border:1px solid #d9e2da;border-radius:10px;background:#f3f6f1}.youtube-auto-series small{color:var(--accent);font-size:8px;letter-spacing:1.4px;font-weight:750}.youtube-auto-series span{font-size:12px;color:var(--ink)}.youtube-auto-series b{color:var(--green)}.youtube-auto-series p{margin:0;color:var(--muted);font-size:9px;line-height:1.45}.eye-comfort .youtube-auto-series{background:#e7ecdf;border-color:#c5d0c1}
+
+/* Chinese meaning from the original YouTube subtitle track. */
+.grammar-translation{padding:11px 12px!important;border:1px solid #ead6b9!important;border-radius:9px;background:#fff8e9}.grammar-translation p{margin:0;color:#704f2d;font-size:13px;line-height:1.65}.eye-comfort .grammar-translation{background:#e9ead7;border-color:#c9c5a5!important}.eye-comfort .grammar-translation p{color:#4c5437}
+.grammar-translation em{color:var(--muted);font-size:11px;font-style:normal}

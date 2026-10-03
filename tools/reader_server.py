@@ -26,7 +26,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from library_db import BOOKS_ROOT, active_import_jobs, add_daily, annotate_word, canonical_youtube_series, create_job, delete_book, delete_import_jobs, dictionary, get_book, get_job, get_sentence_grammar, get_settings as db_get_settings, import_duplicates, imported_books, learning_days, library, mark_import_jobs_cancelling, now, pending_import_jobs, save_sentence_grammar, save_vocab, scan_catalog, set_settings, touch_book, update_job, update_vocab, vocabulary_list
 from deployment import manager as deployment_manager
-from youtube_subtitles import has_translated_english_track,select_native_english_track
+from youtube_subtitles import has_translated_english_track,select_chinese_track,select_native_english_track
 
 ROOT=Path(__file__).resolve().parents[1]
 READER=ROOT/"reader"
@@ -372,10 +372,10 @@ class Handler(SimpleHTTPRequestHandler):
         if not self.valid_youtube_url(url):self.reply({"error":"请输入有效的 YouTube 地址"},400);return
         try:
             output=subprocess.check_output([str(YTDLP),"--js-runtimes",f"node:{NODE}","--dump-single-json","--no-playlist","--skip-download",url],text=True,stderr=subprocess.STDOUT,timeout=90)
-            data=json.loads(output); subtitles=data.get("subtitles") or {}; automatic=data.get("automatic_captions") or {};channel=data.get("channel") or data.get("uploader","") or "YouTube";track=select_native_english_track(data)
+            data=json.loads(output); subtitles=data.get("subtitles") or {}; automatic=data.get("automatic_captions") or {};channel=data.get("channel") or data.get("uploader","") or "YouTube";track=select_native_english_track(data);chinese=select_chinese_track(data)
             self.reply({"id":data.get("id",""),"title":data.get("title","") or "YouTube Video","channel":channel,"series":canonical_youtube_series(channel),
                         "duration":data.get("duration",0),"thumbnail":data.get("thumbnail","") or "","hasEnglishSubtitles":bool(track and track["source"]=="manual"),
-                        "hasEnglishAutoCaptions":bool(track and track["source"]=="automatic"),"englishSubtitleTrack":track["code"] if track else "","translatedEnglishRejected":has_translated_english_track(data),"webpageUrl":data.get("webpage_url",url)})
+                        "hasEnglishAutoCaptions":bool(track and track["source"]=="automatic"),"englishSubtitleTrack":track["code"] if track else "","hasChineseSubtitles":bool(chinese),"chineseSubtitleTrack":chinese["code"] if chinese else "","chineseSubtitleSource":chinese["source"] if chinese else "","chineseSubtitleTranslated":bool(chinese and chinese["translated"]),"translatedEnglishRejected":has_translated_english_track(data),"webpageUrl":data.get("webpage_url",url)})
         except subprocess.TimeoutExpired:self.reply({"error":"解析超时，请稍后重试"},504)
         except subprocess.CalledProcessError as exc:self.reply({"error":"无法解析视频，可能需要登录、Cookie或该视频不可访问","detail":exc.output[-800:]},502)
         except Exception as exc:self.reply({"error":str(exc)},502)
@@ -654,6 +654,7 @@ class Handler(SimpleHTTPRequestHandler):
                 result=get_sentence_grammar(book_id,sentence_id,text)
             except Exception as exc:self.reply({"error":f"本地语法模型分析失败：{exc}"},503);return
         if not result:self.reply({"error":"该句尚未生成语法数据，请先在本机补充分析"},404);return
+        result["translation"]=str(sentence.get("translation","")).strip();result["translationSource"]=sentence.get("translationSource","");result["translationMissing"]=not bool(result["translation"]) and (record or {}).get("source_type")=="youtube"
         explanation_version=2
         if enhance and result.get("explanationVersion")!=explanation_version and RUNTIME_MODE!="reader":
             try:

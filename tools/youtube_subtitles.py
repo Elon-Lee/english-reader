@@ -41,3 +41,36 @@ def has_translated_english_track(info):
                 lang,translated=track_url_language(entry)
                 if translated.casefold().startswith("en") and not lang.casefold().startswith("en"):return True
     return False
+
+def chinese_code_priority(code):
+    folded=str(code).casefold();order={"zh-cn":0,"zh-hans":1,"zh":2,"cmn-hans":3,"zh-tw":10,"zh-hant":11}
+    return order.get(folded,5 if "hans" in folded else 20),len(folded),folded
+
+def select_chinese_track(info):
+    """Prefer native simplified Chinese captions, then YouTube translation to Chinese."""
+    for source,key in (("manual","subtitles"),("automatic","automatic_captions")):
+        candidates=[]
+        for code,entries in (info.get(key) or {}).items():
+            folded=str(code).casefold()
+            if not (folded.startswith("zh") or folded.startswith("cmn")):continue
+            native=[]
+            for entry in entries or []:
+                lang,translated=track_url_language(entry)
+                if translated:continue
+                if lang and not (lang.casefold().startswith("zh") or lang.casefold().startswith("cmn")):continue
+                native.append(entry)
+            if native:candidates.append((chinese_code_priority(code),str(code),native))
+        if candidates:
+            _,code,entries=min(candidates,key=lambda item:item[0]);return {"source":source,"code":code,"language":"zh-CN","translated":False,"entries":entries}
+    candidates=[]
+    for code,entries in (info.get("automatic_captions") or {}).items():
+        folded=str(code).casefold()
+        if not (folded.startswith("zh") or folded.startswith("cmn")):continue
+        translated_entries=[]
+        for entry in entries or []:
+            lang,translated=track_url_language(entry)
+            if (lang.casefold().startswith("en") and (translated.casefold().startswith("zh") or translated.casefold().startswith("cmn"))):translated_entries.append(entry)
+        if translated_entries:candidates.append((chinese_code_priority(code),str(code),translated_entries))
+    if candidates:
+        _,code,entries=min(candidates,key=lambda item:item[0]);return {"source":"translated","code":code,"language":"zh-CN","translated":True,"entries":entries}
+    return None

@@ -91,7 +91,7 @@ def align_sentence(model,waveform,sample_rate,sentence,labels,dictionary,padding
     return result,None
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument("--book-id",required=True);parser.add_argument("--input",type=Path);parser.add_argument("--job-id",type=int);parser.add_argument("--output",type=Path);parser.add_argument("--sentence",type=int);parser.add_argument("--limit",type=int);parser.add_argument("--padding",type=float,default=1.0);parser.add_argument("--segmentation-profile",choices=["youtube-auto","youtube-manual","local-subtitle","speech-asr"]);parser.add_argument("--update-db",action="store_true")
+    parser=argparse.ArgumentParser();parser.add_argument("--book-id",required=True);parser.add_argument("--input",type=Path);parser.add_argument("--job-id",type=int);parser.add_argument("--output",type=Path);parser.add_argument("--sentence",type=int);parser.add_argument("--limit",type=int);parser.add_argument("--padding",type=float,default=1.0);parser.add_argument("--segmentation-profile",choices=["youtube-auto","youtube-manual","local-subtitle","speech-asr"]);parser.add_argument("--preserve-sentences",action="store_true");parser.add_argument("--update-db",action="store_true")
     args=parser.parse_args();torch.set_num_threads(max(1,min(3,int(os.environ.get("SHIYUE_CTC_THREADS","3")))));torch.set_num_interop_threads(1);book=load_book(args.book_id,args.input);audio=audio_path(book["audio"]);waveform,sample_rate=load_waveform(audio)
     bundle=torchaudio.pipelines.WAV2VEC2_ASR_BASE_960H;labels=bundle.get_labels();dictionary={char:index for index,char in enumerate(labels)};model=bundle.get_model().eval()
     selected=range(len(book["sentences"]))
@@ -107,14 +107,26 @@ def main():
         print(f"[{number}] {sentence.get('id')} {'aligned' if result else 'fallback: '+error}",flush=True)
         if args.job_id and (number==1 or number%5==0 or number==total):
             db=sqlite3.connect(DB);db.execute("UPDATE import_jobs SET progress=?,step=?,updated_at=datetime('now') WHERE id=?",(98 if number<total/2 else 99,f"wav2vec2 CTC {number}/{total}",args.job_id));db.commit();db.close()
+    cue_overlaps_fixed=0
+    if args.preserve_sentences:
+        for index in range(1,len(book["sentences"])):
+            previous,current=book["sentences"][index-1],book["sentences"][index]
+            if float(current["start"])>=float(previous["end"]):continue
+            left=previous.get("words",[])[-1] if previous.get("words") else None;right=current.get("words",[])[0] if current.get("words") else None
+            boundary=(float(previous["end"])+float(current["start"]))/2
+            if left:boundary=max(float(left["start"])+.02,boundary)
+            if right:boundary=min(float(right["end"])-.02,boundary)
+            if left:left["end"]=round(boundary,3)
+            if right:right["start"]=round(boundary,3)
+            previous["end"]=round(boundary,3);current["start"]=round(boundary,3);cue_overlaps_fixed+=1
     coverage=aligned/max(1,total)
     profile=args.segmentation_profile
     if not profile and book.get("sourceType") in {"video","youtube","audio"}:
         if book.get("sourceType")=="youtube":profile="youtube-auto" if book.get("subtitleSource")=="automatic" else "youtube-manual"
         elif book.get("subtitleType") in {"external","embedded"}:profile="local-subtitle"
         else:profile="speech-asr"
-    sat_report=annotate_sat_boundaries(book,profile) if profile else None
-    segmentation=resegment_timed_book(book,"yt",detect_silences(audio),profile=profile) if profile else None
+    sat_report=None if args.preserve_sentences else (annotate_sat_boundaries(book,profile) if profile else None)
+    segmentation=({"method":"youtube-original-caption-cues","sentences":len(book.get("sentences",[])),"originalCueBoundariesPreserved":True,"cueBoundaryOverlapsFixed":cue_overlaps_fixed,"sentenceOverlaps":sum(1 for index in range(1,len(book.get("sentences",[]))) if book["sentences"][index]["start"]<book["sentences"][index-1]["end"]),"internalPausesOver08":0} if args.preserve_sentences else (resegment_timed_book(book,"yt",detect_silences(audio),profile=profile) if profile else None))
     if segmentation:segmentation["sat"]=sat_report
     if segmentation and (segmentation.get("sentenceOverlaps") or segmentation.get("internalPausesOver08")):
         raise ValueError(f"Timed segmentation quality rejected: {segmentation}")
@@ -125,7 +137,7 @@ def main():
     if args.output:args.output.write_text(json.dumps(book,ensure_ascii=False,indent=2))
     if args.update_db:
         db=sqlite3.connect(DB);row=db.execute("SELECT quality_json FROM books WHERE id=?",(args.book_id,)).fetchone();quality=json.loads(row[0] or "{}") if row else {}
-        timing_sources={"youtube-auto":"youtube-auto-dedup+whisper-dtw+sat+pause+wav2vec2","youtube-manual":"youtube-manual-subtitle+pause+wav2vec2","local-subtitle":"local-subtitle+pause+wav2vec2","speech-asr":"whisper-dtw+sat+pause+wav2vec2"}
+        timing_sources={"youtube-auto":"youtube-auto-original-cues+wav2vec2" if args.preserve_sentences else "youtube-auto-dedup+sat+pause+wav2vec2","youtube-manual":"youtube-manual-original-cues+wav2vec2" if args.preserve_sentences else "youtube-manual-subtitle+pause+wav2vec2","local-subtitle":"local-subtitle+pause+wav2vec2","speech-asr":"whisper-dtw+sat+pause+wav2vec2"}
         if segmentation:quality.update({"sentences":len(book.get("sentences",[])),"timingSource":timing_sources.get(profile,"whisper-dtw+pause+wav2vec2"),"segmentation":segmentation,"alignmentAudit":{"sentenceOverlaps":segmentation.get("sentenceOverlaps",0),"internalPausesOver08":segmentation.get("internalPausesOver08",0),"maxSentenceSeconds":segmentation.get("maxSentenceSeconds",0),"ctcCoverage":round(coverage,4)}})
         db.execute("UPDATE books SET alignment=?,data_json=?,quality_json=?,updated_at=datetime('now') WHERE id=?",(book["alignment"],json.dumps(book,ensure_ascii=False),json.dumps(quality,ensure_ascii=False),args.book_id));db.execute("INSERT INTO book_artifacts(book_id,kind,data_json,created_at) VALUES(?,?,?,datetime('now')) ON CONFLICT(book_id,kind) DO UPDATE SET data_json=excluded.data_json,created_at=excluded.created_at",(args.book_id,"alignment-ctc",json.dumps(summary,ensure_ascii=False)));db.execute("INSERT INTO book_artifacts(book_id,kind,data_json,created_at) VALUES(?,?,?,datetime('now')) ON CONFLICT(book_id,kind) DO UPDATE SET data_json=excluded.data_json,created_at=excluded.created_at",(args.book_id,"segmentation",json.dumps(segmentation or {},ensure_ascii=False)));db.commit();db.close()
     print(json.dumps(summary,ensure_ascii=False,indent=2))

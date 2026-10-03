@@ -160,7 +160,7 @@ tools/vendor/whisper.cpp/models/ggml-base.en.bin
 
 Stanza复用Python 3.11和现有PyTorch环境，模型保存在`.local/grammar/stanza`。模型只安装在本地内容生产端；远程Reader节点只读取已经同步到SQLite的语法结果，不安装Stanza或PyTorch。
 
-2026年10月2日已为SQLite中的45本现有读物补齐17,560句语法数据，分析版本统一为2，失败0、缺失0。模型目录约429MiB；结构化语法JSON约35.28MiB，并会随“同步数据”发送到远程。
+2026年10月3日当前SQLite中有39本读物、16,109句，语法数据覆盖16,109句，缺失0。YouTube内容重置后只保留重新导入的`How to THINK in English`；本次变更未同步远程。
 
 安装yt-dlp：
 
@@ -298,8 +298,7 @@ SQLite
 ```text
 本地上传SRT/VTT         → 跳过Whisper → 字幕时间 → wav2vec2 CTC
 视频内嵌英文字幕        → 跳过Whisper → 字幕时间 → wav2vec2 CTC
-YouTube人工英文字幕     → 跳过Whisper → 字幕时间 → wav2vec2 CTC
-YouTube原生自动英文字幕 → 跳过Whisper → 去重/断句 → wav2vec2 CTC
+YouTube人工/自动英文字幕 → 跳过Whisper → 保留原始cue断句 → wav2vec2 CTC
 没有可用英文字幕        → Whisper生成正文 → wav2vec2 CTC（有权威文本时）
 明确选择“只使用Whisper” → 忽略字幕并执行Whisper
 ```
@@ -692,23 +691,15 @@ YouTube自动字幕不能把SRT块直接视为句子。滚动字幕通常大量�
 
 ```text
 YouTube人工字幕或原生自动字幕
-→ 自动字幕执行滚动字幕相邻词组去重，人工字幕保留可信标点
-→ 直接使用字幕时间，不运行Whisper
-→ wav2vec2 CTC校准词边界
-→ FFmpeg静音检测
-→ 按标点、真实停顿、句长和词数重新断句
-→ 强制全局时间单调
-→ 质量门槛检查
+→ 同时下载英文和中文字幕
+→ 每个英文原始cue直接作为一条阅读句子
+→ 不去重、不运行SaT、不按停顿或标点重新断句
+→ wav2vec2 CTC只校准cue内部的英文单词边界
+→ 按时间重叠把原始中文字幕挂到英文cue
+→ 语法栏展示该句原始中文字幕
 ```
 
-断句默认参数：
-
-```text
-强停顿：0.78秒
-弱停顿：0.48秒（结合语义、句长决定）
-最大句长：约11秒
-最大词数：22词，必要时在附近最佳停顿拆分
-```
+YouTube不再使用项目的动态断句参数；阅读句子数量必须等于有效英文字幕cue数量。句子保留`originalCueIndex`、`cueStart`和`cueEnd`，CTC只调整实际朗读词的开始和结束时间。
 
 提交数据库前必须满足：
 
@@ -793,13 +784,15 @@ PDF/DOC/DOCX/TXT/CHM/OCR权威正文
 无字幕时：Whisper → SaT → 停顿融合 → CTC
 
 YouTube
-人工字幕：字幕标点优先，标点稀疏才加载SaT
-原生自动字幕：滚动字幕去重 → SaT → 停顿融合 → CTC（跳过Whisper）
+人工或自动英文字幕：保留原始cue → CTC词级对齐（跳过Whisper与SaT）
+中文字幕：人工中文 → 原生自动中文 → 英文自动翻译中文
 自动翻译英文字幕（URL含tlang=en）：拒绝，不作为英文原稿
 无英文字幕：Whisper → SaT → 停顿融合 → CTC
 ```
 
 YouTube字幕轨道必须按`人工原生英文 → 原生自动英文 → Whisper`选择。不能只请求精确`en`：人工轨道可能是`en-6Pw-d3P9U40`、`en-rfcqDbLL02Q`等频道自定义代码；自动字幕优先`en-orig`。任何URL带`tlang=en`且原始`lang`不是英文的轨道都是自动翻译结果，必须拒绝。相关选择逻辑集中在`tools/youtube_subtitles.py`，不能在其他导入器中另写宽松判断。
+
+中文字幕必须与英文字幕同时下载，优先人工简体中文，其次原生自动中文，最后才使用由英文自动翻译的简体中文。2026年10月3日已删除旧的7本YouTube内容及生成资源，只重新导入`How to THINK in English | No More Translating in Your Head!`：人工英文轨道`en-6Pw-d3P9U40`、人工中文轨道`zh-CN`、160个英文原始cue、CTC 160/160、相邻句时间重叠0、中文原始字幕覆盖155/160。未提供中文的5个发音示范cue在语法栏明确显示“原始中文字幕未提供该段译文”。此次未同步远程。
 
 YouTube导入不提供手动书系选择，书系由频道自动确定并由后端强制写入，避免表单残留上一次标签。频道规范化规则包括：`TED`复用`Ted`书系，任何`TEDx...`频道归入`TEDx Talks`，其他频道保留频道名称并按大小写复用已有书系。前端解析后只读展示“自动归入书系”。历史误分类的Grit视频已从`Rachel's English`修正为`Ted`，物理资源目录不移动，避免改变媒体URL。
 

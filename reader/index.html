@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20261002-5">
+  <link rel="stylesheet" href="styles.css?v=20261003-2">
 </head>
 <body>
   <aside class="sidebar">
@@ -168,7 +168,7 @@
     <form method="dialog">
       <div class="delete-dialog-head"><div><small>PERMANENT DELETE</small><h2>删除《<span id="deleteBookTitle"></span>》？</h2></div><button value="cancel" aria-label="关闭">×</button></div>
       <div class="delete-warning"><b>此操作不可恢复</b><p>将永久删除原始PDF、MP3、MP4、字幕、生成页面、正文与时间轴、Whisper/CTC归档、生词、备注、OCR订正和相关导入记录。</p></div>
-      <label>输入完整书名确认删除<input id="deleteBookConfirmInput" autocomplete="off"></label>
+      <label>输入完整书名确认删除<input id="deleteBookConfirmInput" autocomplete="off"><small>比对时忽略空格、换行、制表符和全角空格，其他字符必须一致。</small></label>
       <p id="deleteBookError" class="delete-error"></p>
       <div class="delete-dialog-actions"><button value="cancel">取消</button><button id="confirmDeleteBook" type="button" disabled>永久删除</button></div>
     </form>
@@ -190,6 +190,6 @@
       <div class="cancel-import-dialog-actions"><button value="cancel">继续当前任务</button><button id="confirmCancelImports" type="button">中断并删除</button></div>
     </form>
   </dialog>
-  <script src="app.js?v=20261002-5"></script>
+  <script src="app.js?v=20261003-4"></script>
 </body>
 </html>

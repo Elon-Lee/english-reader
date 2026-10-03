@@ -40,6 +40,7 @@ let recognizedText = "";
 let wordStopAt = null;
 let spokenWordElement = null;
 let audioStopTimer = null;
+let playbackRequestToken = 0;
 let wordTtsAudio = null;
 let wordRequestId = 0;
 let playbackFrameId = null;
@@ -254,6 +255,7 @@ function renderStory() {
 }
 function renderStoryWindow(center,scroll=false){
   const box=$("#sentences"),total=book.sentences.length;
+  const showSectionMarkers=(book.sourceType||"book")==="book";
   const start=virtualStory?Math.max(0,center-STORY_WINDOW_RADIUS):0;
   const end=virtualStory?Math.min(total,center+STORY_WINDOW_RADIUS+1):total;
   storyWindowStart=start;storyWindowEnd=end;box.innerHTML="";
@@ -262,7 +264,7 @@ function renderStoryWindow(center,scroll=false){
   let previousSection=start>0?book.sentences[start-1].section:null;
   for(let index=start;index<end;index++){
     const sentence=book.sentences[index];
-    if (sentence.section != null && sentence.section !== previousSection) {
+    if (showSectionMarkers && sentence.section != null && sentence.section !== previousSection) {
       const marker = document.createElement("div");
       marker.className = "section-marker";
       marker.id = `section-${sentence.section}`;
@@ -417,7 +419,8 @@ function openDeleteBookDialog(bookId){
   $("#deleteBookTitle").textContent=pendingDeleteBook.title;$("#deleteBookConfirmInput").value="";$("#deleteBookConfirmInput").placeholder=pendingDeleteBook.title;
   $("#deleteBookError").textContent="";$("#confirmDeleteBook").disabled=true;$("#deleteBookDialog").showModal();setTimeout(()=>$("#deleteBookConfirmInput").focus(),0);
 }
-function validateDeleteBookConfirmation(){$("#confirmDeleteBook").disabled=!pendingDeleteBook||$("#deleteBookConfirmInput").value.trim()!==pendingDeleteBook.title;$("#deleteBookError").textContent="";}
+function normalizedDeleteTitle(value){return String(value||"").replace(/\s+/gu,"");}
+function validateDeleteBookConfirmation(){$("#confirmDeleteBook").disabled=!pendingDeleteBook||normalizedDeleteTitle($("#deleteBookConfirmInput").value)!==normalizedDeleteTitle(pendingDeleteBook.title);$("#deleteBookError").textContent="";}
 function resetDeleteBookDialog(){pendingDeleteBook=null;$("#deleteBookConfirmInput").value="";$("#deleteBookError").textContent="";$("#confirmDeleteBook").disabled=true;}
 async function confirmDeleteBook(){
   if(!pendingDeleteBook)return;const target={...pendingDeleteBook},button=$("#confirmDeleteBook");button.disabled=true;button.textContent="正在删除…";
@@ -483,7 +486,7 @@ async function startVideoImport(event){event.preventDefault();const video=$("#vi
 function pollVideoImport(jobId){clearInterval(videoImportPollTimer);$("#videoUploadProgress").classList.remove("hidden");const check=async()=>{try{const response=await fetch(`/api/import/jobs/${jobId}`,{cache:'no-store'}),job=await response.json();if(!response.ok)throw new Error(job.error||'无法读取任务');const overall=20+(job.progress||0)*.8;setVideoOverallProgress(overall,job.step||job.status,job.error||`后台处理中：${job.progress||0}%`);if(job.status==='complete'||job.status==='failed'){clearInterval(videoImportPollTimer);videoImportPollTimer=null;forgetImportTracking("video");refreshPendingImportJobs();if(job.status==='complete'){setVideoOverallProgress(100,'媒体导入完成','音频、正文、SaT断句、词级时间轴和SQLite数据均已完成；视频文件还包含关键帧。');const data=await fetch('/api/library',{cache:'no-store'}).then(r=>r.json());libraryBooks=data.books||[];populateVideoSeriesOptions();setupSeriesSelector();renderLibrary();await loadImportCatalog();}else setVideoOverallProgress(overall,'媒体导入失败',job.error||'后台任务失败');}}catch(error){clearInterval(videoImportPollTimer);videoImportPollTimer=null;setVideoOverallProgress($("#videoUploadBar").value,'进度查询失败',error.message);}};check();videoImportPollTimer=setInterval(check,1000);}
 
 function setYoutubeProgress(percent,step,message=''){const value=Math.max(0,Math.min(100,Math.round(percent)));$("#youtubeBar").value=value;$("#youtubePercent").textContent=`${value}%`;$("#youtubeStep").textContent=step;if(message)$("#youtubeMessage").textContent=message;}
-async function analyzeYoutubeUrl(){const url=$("#youtubeUrl").value.trim();if(!url)return;$("#analyzeYoutubeBtn").disabled=true;$("#youtubeProgress").classList.remove("hidden");setYoutubeProgress(1,"解析 YouTube 地址","正在读取标题、频道、时长和字幕信息。");try{const response=await fetch('/api/import/youtube/info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})}),data=await response.json();if(!response.ok)throw new Error(data.error||'解析失败');youtubeInfo=data;$("#youtubeThumbnail").src=data.thumbnail||'';$("#youtubeChannel").textContent=data.channel||'YouTube';$("#youtubeAutoSeries").textContent=data.series||data.channel||'YouTube';$("#youtubePreviewTitle").textContent=data.title;$("#youtubeMeta").textContent=`${fmt(data.duration||0)} · ${data.hasEnglishSubtitles?'有人工英文字幕':data.hasEnglishAutoCaptions?'有自动英文字幕':'无英文字幕，将使用Whisper'}`;$("#youtubePreview").classList.remove("hidden");$("#youtubeEnglishTitle").value=data.title;youtubeTitleManuallyEdited=false;$("#youtubeTitle").value=data.title;$("#startYoutubeImport").disabled=false;setYoutubeProgress(3,"解析完成",`将自动归入“${data.series||data.channel||'YouTube'}”，确认标题后开始下载。`);}catch(error){youtubeInfo=null;$("#youtubeAutoSeries").textContent='解析地址后自动识别';$("#startYoutubeImport").disabled=true;setYoutubeProgress(0,"解析失败",error.message);}finally{$("#analyzeYoutubeBtn").disabled=false;}}
+async function analyzeYoutubeUrl(){const url=$("#youtubeUrl").value.trim();if(!url)return;$("#analyzeYoutubeBtn").disabled=true;$("#youtubeProgress").classList.remove("hidden");setYoutubeProgress(1,"解析 YouTube 地址","正在读取标题、频道、时长和中英文字幕信息。");try{const response=await fetch('/api/import/youtube/info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})}),data=await response.json();if(!response.ok)throw new Error(data.error||'解析失败');youtubeInfo=data;$("#youtubeThumbnail").src=data.thumbnail||'';$("#youtubeChannel").textContent=data.channel||'YouTube';$("#youtubeAutoSeries").textContent=data.series||data.channel||'YouTube';$("#youtubePreviewTitle").textContent=data.title;const english=data.hasEnglishSubtitles?'人工英文':data.hasEnglishAutoCaptions?'自动英文':'无英文字幕，将使用Whisper',chinese=data.hasChineseSubtitles?(data.chineseSubtitleTranslated?'自动翻译中文':data.chineseSubtitleSource==='manual'?'人工中文':'自动中文'):'无中文字幕';$("#youtubeMeta").textContent=`${fmt(data.duration||0)} · ${english} · ${chinese}`;$("#youtubePreview").classList.remove("hidden");$("#youtubeEnglishTitle").value=data.title;youtubeTitleManuallyEdited=false;$("#youtubeTitle").value=data.title;$("#startYoutubeImport").disabled=false;setYoutubeProgress(3,"解析完成",`将自动归入“${data.series||data.channel||'YouTube'}”，确认标题后开始下载。`);}catch(error){youtubeInfo=null;$("#youtubeAutoSeries").textContent='解析地址后自动识别';$("#startYoutubeImport").disabled=true;setYoutubeProgress(0,"解析失败",error.message);}finally{$("#analyzeYoutubeBtn").disabled=false;}}
 async function startYoutubeImport(event){event.preventDefault();if(!youtubeInfo)return;clearInterval(youtubePollTimer);$("#youtubeProgress").classList.remove("hidden");setYoutubeProgress(1,"创建 YouTube 导入任务",`将自动归入“${youtubeInfo.series||youtubeInfo.channel||'YouTube'}”。`);try{const payload={url:youtubeInfo.webpageUrl||$("#youtubeUrl").value,title:$("#youtubeTitle").value.trim()||youtubeInfo.title,englishTitle:$("#youtubeEnglishTitle").value.trim()||youtubeInfo.title,level:$("#youtubeLevel").value.trim(),videoId:youtubeInfo.id,channel:youtubeInfo.channel};const request=await postImportRequest('/api/import/youtube',payload);if(request.cancelled)return;const {response,data}=request;if(!response.ok)throw new Error(data.error||'无法开始导入');rememberImportTracking("youtube",[data.jobId]);refreshPendingImportJobs();pollYoutubeImport(data.jobId);}catch(error){setYoutubeProgress($("#youtubeBar").value,'YouTube 导入失败',error.message);}}
 function pollYoutubeImport(jobId){clearInterval(youtubePollTimer);$("#youtubeProgress").classList.remove("hidden");const check=async()=>{try{const response=await fetch(`/api/import/jobs/${jobId}`,{cache:'no-store'}),job=await response.json();if(!response.ok)throw new Error(job.error||'无法读取任务');setYoutubeProgress(job.progress||0,job.step||job.status,job.error||youtubeProgressMessage(job));if(job.status==='complete'||job.status==='failed'){clearInterval(youtubePollTimer);youtubePollTimer=null;forgetImportTracking("youtube");refreshPendingImportJobs();if(job.status==='complete'){setYoutubeProgress(100,'YouTube 导入完成','视频、字幕、音频、关键帧、词级时间轴和SQLite数据均已完成。');const data=await fetch('/api/library',{cache:'no-store'}).then(r=>r.json());libraryBooks=data.books||[];populateVideoSeriesOptions();setupSeriesSelector();renderLibrary();}else setYoutubeProgress(job.progress||0,'YouTube 导入失败',job.error||'任务失败');}}catch(error){clearInterval(youtubePollTimer);youtubePollTimer=null;setYoutubeProgress($("#youtubeBar").value,'进度查询失败',error.message);}};check();youtubePollTimer=setInterval(check,1000);}
 function youtubeProgressMessage(job){if((job.progress||0)<25)return '正在下载最高720p视频、英文字幕和缩略图。';return `YouTube下载已完成，正在复用视频处理流程：${job.progress||0}%`;}
@@ -718,7 +721,7 @@ function playSentence(index) {
   shadowSentenceIndex=mode==="shadow"?index:-1;
   wordStopAt = mode === "shadow" || !sentenceAutoPause ? null : sentence.end + .03;
   const playback=seekAndPlay(sentence.start, mode === "shadow" || !sentenceAutoPause ? null : sentence.end + .03);
-  if(mode==="shadow")playback.then(()=>scheduleShadowSentenceStop(index));
+  if(mode==="shadow")playback.then(started=>{if(started&&active===index)scheduleShadowSentenceStop(index);});
   highlight(index, true);
   showPage(sentence.page);
   if (mode === "shadow") { $("#shadowStatus").textContent = "先听原音…"; $("#shadowPrompt").textContent = sentence.text; }
@@ -944,7 +947,8 @@ function grammarAnalysisHtml(data,loadingExplanation=false){
   const clauses=(data.clauses||[]).map(item=>`<li><b>${escapeHtml(item.type)}</b><span>${escapeHtml(item.text)}</span>${item.marker?`<small>引导词：${escapeHtml(item.marker)}</small>`:""}</li>`).join("");
   const points=(data.grammarPoints||[]).map(item=>`<span>${escapeHtml(item)}</span>`).join("");
   const explanation=data.aiExplanation||data.explanation||"";
-  return `${wordPanelTabsHtml("grammar")}<div class="grammar-analysis"><small class="grammar-source">SENTENCE GRAMMAR · ${escapeHtml(data.source||"本地模型")}</small><h2>${escapeHtml(data.sentenceType||"句法分析")}</h2><div class="grammar-colored-sentence">${grammarTokenHtml(data.tokens)}</div><div class="grammar-legend"><span class="grammar-subject">主语</span><span class="grammar-predicate">谓语</span><span class="grammar-object">宾语/补语</span><span class="grammar-clause">从句</span></div><section><small>基本句型</small><b>${escapeHtml(data.pattern||"")}</b></section><div class="grammar-core"><p><small>主语</small>${escapeHtml(data.subject||"")}</p><p><small>谓语</small>${escapeHtml(data.predicate||"")}</p>${data.object?`<p><small>宾语 / 补语</small>${escapeHtml(data.object)}</p>`:""}</div>${clauses?`<section class="grammar-clauses"><small>从句结构</small><ul>${clauses}</ul></section>`:""}${points?`<section><small>语法重点</small><div class="grammar-points">${points}</div></section>`:""}<section class="grammar-explanation"><small>中文讲解</small><p id="grammarExplanation">${formatText(explanation)}</p>${loadingExplanation?'<i>正在结合句法结构生成更自然的中文讲解…</i>':''}</section><details class="grammar-tree"><summary>查看成分句法树</summary><pre>${escapeHtml(data.constituency||"")}</pre></details></div>`;
+  const translation=data.translation?escapeHtml(data.translation):data.translationMissing?'<em>原始中文字幕未提供该段译文</em>':'';
+  return `${wordPanelTabsHtml("grammar")}<div class="grammar-analysis"><small class="grammar-source">SENTENCE GRAMMAR · ${escapeHtml(data.source||"本地模型")}</small><h2>${escapeHtml(data.sentenceType||"句法分析")}</h2><div class="grammar-colored-sentence">${grammarTokenHtml(data.tokens)}</div>${translation?`<section class="grammar-translation"><small>原始字幕中文意思</small><p>${translation}</p></section>`:""}<div class="grammar-legend"><span class="grammar-subject">主语</span><span class="grammar-predicate">谓语</span><span class="grammar-object">宾语/补语</span><span class="grammar-clause">从句</span></div><section><small>基本句型</small><b>${escapeHtml(data.pattern||"")}</b></section><div class="grammar-core"><p><small>主语</small>${escapeHtml(data.subject||"")}</p><p><small>谓语</small>${escapeHtml(data.predicate||"")}</p>${data.object?`<p><small>宾语 / 补语</small>${escapeHtml(data.object)}</p>`:""}</div>${clauses?`<section class="grammar-clauses"><small>从句结构</small><ul>${clauses}</ul></section>`:""}${points?`<section><small>语法重点</small><div class="grammar-points">${points}</div></section>`:""}<section class="grammar-explanation"><small>中文讲解</small><p id="grammarExplanation">${formatText(explanation)}</p>${loadingExplanation?'<i>正在结合句法结构生成更自然的中文讲解…</i>':''}</section><details class="grammar-tree"><summary>查看成分句法树</summary><pre>${escapeHtml(data.constituency||"")}</pre></details></div>`;
 }
 async function showSentenceGrammar(sentence){
   selectedGrammarSentence=sentence;if(document.body.classList.contains("focus")){document.body.classList.add("focus-word-open");syncReaderPanels();}
@@ -981,16 +985,48 @@ async function playWordTts(word) {
 }
 async function seekAndPlay(time, stopAt=null) {
   const audio=$("#audio");
-  clearTimeout(audioStopTimer);
-  if (audio.readyState < 1) await new Promise(resolve => audio.addEventListener("loadedmetadata",resolve,{once:true}));
-  audio.currentTime=time;
-  try {
-    await audio.play();
-    if (stopAt !== null) {
-      const delay=Math.max(0,(stopAt-audio.currentTime)/audio.playbackRate*1000);
-      audioStopTimer=setTimeout(()=>{ audio.pause(); wordStopAt=null; },delay);
+  const token=++playbackRequestToken;
+  clearTimeout(audioStopTimer);audioStopTimer=null;
+  const current=()=>token===playbackRequestToken;
+  const waitFor=(events,timeout)=>new Promise((resolve,reject)=>{
+    let settled=false;
+    const cleanup=()=>{events.forEach(name=>audio.removeEventListener(name,onReady));audio.removeEventListener("error",onError);clearTimeout(timer);};
+    const finish=callback=>{if(settled)return;settled=true;cleanup();callback();};
+    const onReady=()=>finish(resolve),onError=()=>finish(()=>reject(audio.error||new Error("音频加载失败")));
+    events.forEach(name=>audio.addEventListener(name,onReady,{once:true}));audio.addEventListener("error",onError,{once:true});
+    const timer=setTimeout(()=>finish(resolve),timeout);
+  });
+  try{
+    if(audio.readyState<1){const metadata=waitFor(["loadedmetadata"],5000);if(audio.readyState>=1)audio.dispatchEvent(new Event("loadedmetadata"));await metadata;}
+    if(!current())return false;
+    audio.pause();
+    const duration=Number.isFinite(audio.duration)&&audio.duration>0?audio.duration:time;
+    audio.currentTime=Math.max(0,Math.min(duration,time));
+    if(audio.seeking){await waitFor(["seeked","canplay"],2500);if(!current())return false;}
+    let lastError=null;
+    for(let attempt=0;attempt<2;attempt++){
+      if(!current())return false;
+      try{await audio.play();lastError=null;break;}
+      catch(error){
+        lastError=error;
+        if(!current())return false;
+        if(error?.name!=="AbortError"||attempt===1)break;
+        await waitFor(["seeked","canplay","canplaythrough"],350);
+      }
     }
-  } catch { /* Browser will expose its normal play control if autoplay is denied. */ }
+    if(lastError)throw lastError;
+    if(!current())return false;
+    if(stopAt!==null){
+      const delay=Math.max(0,(stopAt-audio.currentTime)/Math.max(.1,audio.playbackRate)*1000);
+      audioStopTimer=setTimeout(()=>{if(current()){audio.pause();wordStopAt=null;}},delay);
+    }
+    return true;
+  }catch(error){
+    if(!current())return false;
+    console.warn("句子音频启动失败",error);
+    showReaderToast(error?.name==="NotAllowedError"?"浏览器阻止了播放，请先点击一次播放键":"音频启动失败，请再按一次快捷键");
+    return false;
+  }
 }
 function ratingName(rating) { return ({ known:"认识", fuzzy:"模糊", unknown:"不认识" })[rating]; }
 

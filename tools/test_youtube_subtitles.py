@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import unittest
 
-from youtube_subtitles import has_translated_english_track,select_native_english_track
+from youtube_subtitles import has_translated_english_track,select_chinese_track,select_native_english_track
 
 class YoutubeSubtitleTests(unittest.TestCase):
     def test_manual_nonstandard_english_code_is_selected(self):
@@ -19,5 +19,13 @@ class YoutubeSubtitleTests(unittest.TestCase):
     def test_native_manual_en_is_accepted(self):
         info={"subtitles":{"en":[{"url":"https://x.test/t?lang=en"}]}}
         self.assertEqual(select_native_english_track(info)["source"],"manual")
+
+    def test_manual_simplified_chinese_is_preferred(self):
+        info={"subtitles":{"zh-CN":[{"url":"https://x.test/t?lang=zh-CN"}]},"automatic_captions":{"zh-Hans":[{"url":"https://x.test/t?lang=en&tlang=zh-Hans"}]}}
+        track=select_chinese_track(info);self.assertEqual(track["source"],"manual");self.assertEqual(track["code"],"zh-CN");self.assertFalse(track["translated"])
+
+    def test_translated_chinese_is_last_resort(self):
+        info={"automatic_captions":{"zh-Hans":[{"url":"https://x.test/t?lang=en&tlang=zh-Hans"}]}}
+        track=select_chinese_track(info);self.assertEqual(track["source"],"translated");self.assertTrue(track["translated"])
 
 if __name__=="__main__":unittest.main()

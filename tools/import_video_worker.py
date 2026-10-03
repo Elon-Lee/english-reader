@@ -53,8 +53,11 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
         if not any(pages.glob("*.jpg")):run(["ffmpeg","-y","-v","error","-ss","0","-i",video,"-frames:v","1","-vf","scale=960:-2",pages/"page-001.jpg"])
     else:progress(18,"音频读物无需生成画面")
 
-    strategy=metadata.get("subtitleStrategy","auto");subtitle=None;subtitle_type="whisper"
-    external=next(iter(sorted(source.glob("*.srt"))+sorted(source.glob("*.vtt"))),None)
+    strategy=metadata.get("subtitleStrategy","auto");subtitle=None;translation_subtitle=None;subtitle_type="whisper"
+    if source_type=="youtube":
+        external=source/"subtitles.en.srt";external=external if external.exists() else None
+        candidate=source/"subtitles.zh-CN.srt";translation_subtitle=candidate if candidate.exists() else None
+    else:external=next(iter(sorted(source.glob("*.srt"))+sorted(source.glob("*.vtt"))),None)
     if strategy!="whisper" and external:subtitle=external;subtitle_type="external"
     elif strategy!="whisper" and video:
         extracted=generated/"embedded.srt"
@@ -83,6 +86,9 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
       "--video-url",video_url,"--page-base",page_base,"--subtitle-type",subtitle_type,"--subtitle-source",metadata.get("youtubeSubtitleSource",subtitle_type)]
     if not skip_whisper:command += ["--whisper",whisper_json]
     if subtitle:command += ["--subtitle",subtitle]
+    if source_type=="youtube" and subtitle:
+        command += ["--preserve-cues"]
+        if translation_subtitle:command += ["--translation-subtitle",translation_subtitle]
     run(command)
     if subtitle and not skip_whisper:
         progress(82,"对齐字幕与视频音频")
@@ -94,22 +100,29 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
     if source_type=="youtube":profile="youtube-auto" if subtitle_source=="automatic" else ("youtube-manual" if subtitle_source=="manual" else "speech-asr")
     else:profile="local-subtitle" if subtitle and skip_whisper else "speech-asr"
     book=json.loads(book_file.read_text());book.update({"sourceType":source_type,"sourceUrl":metadata.get("sourceUrl",""),"channel":metadata.get("channel",""),"externalId":metadata.get("youtubeId",""),"video":video_url,"subtitleType":subtitle_type,"subtitleSource":subtitle_source,"pageBase":page_base})
-    if source_type=="youtube":book.update({"youtubeSubtitleTrack":metadata.get("youtubeSubtitleTrack",""),"youtubeSubtitleLanguage":metadata.get("youtubeSubtitleLanguage",""),"youtubeSubtitleTranslated":bool(metadata.get("youtubeSubtitleTranslated",False)),"translatedEnglishRejected":bool(metadata.get("translatedEnglishRejected",False))})
+    if source_type=="youtube":book.update({"youtubeSubtitleTrack":metadata.get("youtubeSubtitleTrack",""),"youtubeSubtitleLanguage":metadata.get("youtubeSubtitleLanguage",""),"youtubeSubtitleTranslated":bool(metadata.get("youtubeSubtitleTranslated",False)),"youtubeChineseSubtitleSource":metadata.get("youtubeChineseSubtitleSource",""),"youtubeChineseSubtitleTrack":metadata.get("youtubeChineseSubtitleTrack",""),"youtubeChineseSubtitleLanguage":metadata.get("youtubeChineseSubtitleLanguage",""),"youtubeChineseSubtitleTranslated":bool(metadata.get("youtubeChineseSubtitleTranslated",False)),"translatedEnglishRejected":bool(metadata.get("translatedEnglishRejected",False))})
     book_file.write_text(json.dumps(book,ensure_ascii=False,indent=2))
-    progress(88,"SaT 语义断句与停顿融合")
-    run([sys.executable,ROOT/"tools/apply_sat_segmentation.py","--book",book_file,"--audio",audio,"--output",book_file,"--profile",profile])
-    book=json.loads(book_file.read_text());quality={"status":"ready","sourceType":book["sourceType"],"subtitleType":subtitle_type,"subtitleSource":book["subtitleSource"],"whisperSkipped":skip_whisper,"timingSource":f"{profile}+sat+pause+wav2vec2","sentences":len(book["sentences"]),"segmentation":book.get("segmentation",{})}
+    preserve_youtube_cues=source_type=="youtube" and bool(subtitle) and skip_whisper
+    if preserve_youtube_cues:
+        progress(88,"保留 YouTube 原始字幕断句")
+    else:
+        progress(88,"SaT 语义断句与停顿融合")
+        run([sys.executable,ROOT/"tools/apply_sat_segmentation.py","--book",book_file,"--audio",audio,"--output",book_file,"--profile",profile])
+    book=json.loads(book_file.read_text());quality={"status":"ready","sourceType":book["sourceType"],"subtitleType":subtitle_type,"subtitleSource":book["subtitleSource"],"whisperSkipped":skip_whisper,"timingSource":"youtube-original-cues+wav2vec2" if preserve_youtube_cues else f"{profile}+sat+pause+wav2vec2","sentences":len(book["sentences"]),"segmentation":book.get("segmentation",{})}
     progress(94,"写入音频读物数据库" if audio_only else "写入视频书籍数据库")
     cover=page_base+"/page-001.jpg" if page_base else "/favicon.svg";upsert_book(book,quality,relative,metadata["series"],page_base,cover)
     if whisper_json.exists():save_artifact(book_id,"whisper-dtw",json.loads(whisper_json.read_text()))
     else:delete_artifact(book_id,"whisper-dtw")
-    if subtitle:save_artifact(book_id,"subtitle",{"type":subtitle_type,"text":subtitle.read_text(errors="replace")})
+    if subtitle:save_artifact(book_id,"subtitle",{"type":subtitle_type,"source":subtitle_source,"track":metadata.get("youtubeSubtitleTrack",""),"text":subtitle.read_text(errors="replace")})
+    if translation_subtitle:save_artifact(book_id,"subtitle-zh",{"type":"external","source":metadata.get("youtubeChineseSubtitleSource",""),"track":metadata.get("youtubeChineseSubtitleTrack",""),"translated":bool(metadata.get("youtubeChineseSubtitleTranslated",False)),"text":translation_subtitle.read_text(errors="replace")})
     dictionary_file=ROOT/".local"/f"video-dictionary-{job_id}.json";run([sys.executable,ROOT/"tools/build_local_dictionary.py","--book",book_file,"--output",dictionary_file]);save_dictionary(json.loads(dictionary_file.read_text()));dictionary_file.unlink()
     aligner_python=ROOT/".local/forced-aligner/venv/bin/python"
     if aligner_python.exists():
         progress(98,"wav2vec2 CTC 强制对齐")
         with (ROOT/".local"/f"ctc-{book_id}.log").open("w") as output:
-            run([aligner_python,ROOT/"tools/ctc_forced_align.py","--book-id",book_id,"--job-id",str(job_id),"--segmentation-profile",profile,"--update-db"],cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
+            command=[aligner_python,ROOT/"tools/ctc_forced_align.py","--book-id",book_id,"--job-id",str(job_id),"--segmentation-profile",profile,"--update-db"]
+            if preserve_youtube_cues:command += ["--preserve-sentences","--padding","0.25"]
+            run(command,cwd=ROOT,stdout=output,stderr=subprocess.STDOUT)
     build_grammar(job_id,book_id,progress)
     for item in [book_file,whisper_json,generated/"alignment.json",generated/"embedded.srt"]:
         if item.exists():item.unlink()
