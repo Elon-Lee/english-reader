@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20261003-2">
+  <link rel="stylesheet" href="styles.css?v=20261003-7">
 </head>
 <body>
   <aside class="sidebar">
@@ -137,7 +137,7 @@
       </section>
     </section>
 
-    <section id="reader" class="screen reader hidden">
+    <section id="reader" class="screen reader hidden" tabindex="-1">
       <aside id="pagePanel" class="page-panel"><div id="mediaStage" class="media-stage" tabindex="0"><img id="pageImage" alt="原书扫描页"><video id="videoView" class="hidden" muted playsinline preload="metadata"></video><div class="page-head"><b id="visualTitle">原书页</b><div class="visual-switch hidden" id="visualSwitch"><button id="framesViewBtn" class="active">关键帧</button><button id="videoViewBtn">视频</button><button id="closeStackLayoutBtn" class="visual-layout-close" type="button" title="切换为左右布局" aria-label="关闭上下布局，切换为左右布局">×</button></div></div><small id="pageLabel"></small></div></aside>
       <div class="story-panel">
         <div class="chapter">
@@ -190,6 +190,6 @@
       <div class="cancel-import-dialog-actions"><button value="cancel">继续当前任务</button><button id="confirmCancelImports" type="button">中断并删除</button></div>
     </form>
   </dialog>
-  <script src="app.js?v=20261003-4"></script>
+  <script src="app.js?v=20261003-7"></script>
 </body>
 </html>

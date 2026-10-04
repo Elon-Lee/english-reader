@@ -187,24 +187,35 @@ def ensure_remote_docker(job,remote):
         job.write("远程Docker已安装且运行正常");return
     job.update(9,"远程安装Docker")
     script="""set -e
-if command -v curl >/dev/null 2>&1; then
+as_root=""
+if [ "$(id -u)" -ne 0 ]; then
+  command -v sudo >/dev/null 2>&1 || { echo '当前SSH账号不是root且没有sudo，无法安装Docker' >&2; exit 2; }
+  as_root=sudo
+fi
+if command -v yum >/dev/null 2>&1; then
+  echo '检测到yum，按Docker CE仓库安装流程执行'
+  $as_root yum install -y yum-utils
+  $as_root yum-config-manager --add-repo http://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
+  $as_root yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+  $as_root yum makecache fast || $as_root yum makecache
+  $as_root yum install -y docker-ce docker-ce-cli containerd.io
+elif command -v curl >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com | sh
 elif command -v wget >/dev/null 2>&1; then
   wget -qO- https://get.docker.com | sh
 elif command -v apt-get >/dev/null 2>&1; then
-  apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io
+  $as_root apt-get update -y && $as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io
 elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y docker
-elif command -v yum >/dev/null 2>&1; then
-  yum install -y docker
+  $as_root dnf install -y docker
 else
   echo '无法自动安装Docker：远程缺少curl、wget和支持的包管理器' >&2
   exit 2
 fi
 if command -v systemctl >/dev/null 2>&1; then
-  systemctl enable --now docker
+  $as_root systemctl start docker
+  $as_root systemctl enable docker
 else
-  service docker start
+  $as_root service docker start
 fi
 docker info >/dev/null
 docker --version

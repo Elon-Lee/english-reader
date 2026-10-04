@@ -150,5 +150,12 @@ body:not(.focus) .reader:not([data-visual-layout="stack"]) .page-panel.has-video
 .youtube-auto-series{display:grid;align-content:center;gap:4px;padding:11px 13px;border:1px solid #d9e2da;border-radius:10px;background:#f3f6f1}.youtube-auto-series small{color:var(--accent);font-size:8px;letter-spacing:1.4px;font-weight:750}.youtube-auto-series span{font-size:12px;color:var(--ink)}.youtube-auto-series b{color:var(--green)}.youtube-auto-series p{margin:0;color:var(--muted);font-size:9px;line-height:1.45}.eye-comfort .youtube-auto-series{background:#e7ecdf;border-color:#c5d0c1}
 
 /* Chinese meaning from the original YouTube subtitle track. */
-.grammar-translation{padding:11px 12px!important;border:1px solid #ead6b9!important;border-radius:9px;background:#fff8e9}.grammar-translation p{margin:0;color:#704f2d;font-size:13px;line-height:1.65}.eye-comfort .grammar-translation{background:#e9ead7;border-color:#c9c5a5!important}.eye-comfort .grammar-translation p{color:#4c5437}
-.grammar-translation em{color:var(--muted);font-size:11px;font-style:normal}
+.sentence-translation-btn{margin-left:5px!important;color:#8a6339!important;border-color:#dfc9a7!important;background:#fff9ec!important}.sentence-translation-btn:hover,.sentence-translation-btn[aria-expanded="true"]{color:#70491f!important;border-color:#cba871!important;background:#fff1d7!important}.sentence-translation{display:block;margin:7px 2px 3px;padding:8px 11px;border-left:3px solid #d4ad72;border-radius:3px 8px 8px 3px;background:#fff8e9;color:#704f2d;font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;cursor:default}.eye-comfort .sentence-translation-btn{background:#e7e7d4!important;border-color:#c3bd98!important}.eye-comfort .sentence-translation{background:#e8ead8;border-color:#9da578;color:#465033}
+
+/* Central shortcut focus target: keep keyboard navigation active after reader interactions. */
+.reader:focus{outline:none}
+
+/* Long word definitions and sentence grammar stay inside the right panel. */
+.word-panel,.review-word-panel{min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#b9c8bd transparent}
+@media(min-width:951px){.word-panel,.review-word-panel{max-height:calc(100vh - 125px)}}
+@media(max-width:950px){.word-panel,.review-word-panel{overflow-y:auto;overscroll-behavior:contain}}

@@ -67,6 +67,7 @@ let eyeComfort=false;
 let selectedWordContext=null;
 let selectedGrammarSentence=null;
 let grammarRequestId=0;
+let expandedSentenceTranslations=new Set();
 let wordTipTimer=null;
 let wordHoverMeaningTimer=null;
 let wordHoverMeaningRequestId=0;
@@ -204,7 +205,7 @@ async function init() {
 async function loadBook(bookId) {
   const response=await fetch(`/api/books/${encodeURIComponent(bookId)}`,{cache:"no-store"});
   if(!response.ok) throw new Error("无法读取图书数据库");
-  const record=await response.json(); currentBookId=bookId; book=record.book;wordAnnotations=record.annotations||[];selectedWordContext=null;selectedGrammarSentence=null;document.body.classList.remove("focus-word-open");rebuildWordIndexes();
+  const record=await response.json(); currentBookId=bookId; book=record.book;wordAnnotations=record.annotations||[];selectedWordContext=null;selectedGrammarSentence=null;expandedSentenceTranslations=new Set();document.body.classList.remove("focus-word-open");rebuildWordIndexes();
   $("#wordPanel").innerHTML='<div class="word-empty"><span>Aa</span><h3>单词与句子分析</h3><p>悬浮单词查看简释；点击单词查看完整释义，点击句末“句法”分析句型和语法。</p></div>';
   $("#audio").pause(); $("#audio").src=book.audio; $("#duration").textContent=fmt(book.duration);
   $(".book-heading small").textContent=`${book.level||""}级 · LOCAL BOOK`;
@@ -278,6 +279,10 @@ function renderStoryWindow(center,scroll=false){
     p.dataset.section = sentence.section;
     p.innerHTML = sentenceHtml(sentence);
     p.insertAdjacentHTML("beforeend",`<button type="button" class="sentence-grammar-btn" data-sentence-grammar title="分析这句话的句式和语法">语法</button>`);
+    if(book.sourceType==="youtube"){
+      const expanded=expandedSentenceTranslations.has(sentence.id),translation=sentence.translation||"原始中文字幕未提供该段译文";
+      p.insertAdjacentHTML("beforeend",`<button type="button" class="sentence-grammar-btn sentence-translation-btn" data-sentence-translation aria-expanded="${expanded}" title="${expanded?'收起':'查看'}原始中文字幕">${expanded?'收起翻译':'翻译'}</button><span class="sentence-translation ${expanded?'':'hidden'}">${escapeHtml(translation)}</span>`);
+    }
     if(index===paintedSentenceIndex)p.classList.add("active");
     box.append(p);
     sentenceElementsByIndex[index]=p;
@@ -314,6 +319,13 @@ function bindEvents() {
     const sentenceElement = event.target.closest(".sentence");
     if (!sentenceElement) return;
     const sentence = book.sentences[+sentenceElement.dataset.i];
+    const translationButton=event.target.closest("[data-sentence-translation]");
+    if(translationButton){
+      event.stopPropagation();const translation=sentenceElement.querySelector(".sentence-translation"),expanded=translationButton.getAttribute("aria-expanded")!=="true";
+      translationButton.setAttribute("aria-expanded",String(expanded));translationButton.textContent=expanded?"收起翻译":"翻译";translationButton.title=`${expanded?'收起':'查看'}原始中文字幕`;translation?.classList.toggle("hidden",!expanded);
+      if(expanded)expandedSentenceTranslations.add(sentence.id);else expandedSentenceTranslations.delete(sentence.id);return;
+    }
+    if(event.target.closest(".sentence-translation")){event.stopPropagation();return;}
     if(event.target.closest("[data-sentence-grammar]")){event.stopPropagation();showSentenceGrammar(sentence);return;}
     if (event.target.classList.contains("word")) {
       event.stopPropagation();
@@ -401,7 +413,9 @@ function bindEvents() {
   $("#framesViewBtn").onclick=()=>setVisualMode("frames");$("#videoViewBtn").onclick=()=>setVisualMode("video");
   $("#closeStackLayoutBtn").onclick=event=>{event.currentTarget.blur();if(readerLayout!=="side"){readerLayout="side";applyReaderLayout();scheduleTopbarContentAlignment();showReaderToast("布局：画面左侧，文章右侧");}};
   document.addEventListener("keydown",handleReaderShortcut);
-  document.addEventListener("click",event=>{const button=event.target.closest("button");if(button)setTimeout(()=>button.blur(),0);});
+  document.addEventListener("pointerup",scheduleReaderShortcutFocus,true);
+  document.addEventListener("click",event=>{const button=event.target.closest("button");if(button)setTimeout(()=>button.blur(),0);scheduleReaderShortcutFocus(event);});
+  document.addEventListener("change",scheduleReaderShortcutFocus,true);
   $("#wordPanel").onclick=handleWordPanelAction;
   document.addEventListener("click",handleContextToggle);
   $("#statsContent").onclick=event=>{const button=event.target.closest("[data-heatmap-range]");if(button)setHeatmapRange(button.dataset.heatmapRange);};
@@ -625,13 +639,13 @@ function openWordEditor(mode){
   input.placeholder="输入简短备注";input.value=selectedWordContext.note||"";
   editor.classList.remove("hidden");setTimeout(()=>input.focus(),0);
 }
-function closeWordEditor(event){event?.preventDefault();$("#wordPanelEditor")?.classList.add("hidden");}
+function closeWordEditor(event){event?.preventDefault();$("#wordPanelEditor")?.classList.add("hidden");scheduleReaderShortcutFocus();}
 async function saveWordEdit(event){
   event.preventDefault();const value=$("#wordPanelEditValue")?.value.trim();if(!value||!selectedWordContext)return;const c=selectedWordContext;
   const payload={bookId:currentBookId,sentenceId:c.sentence.id,wordIndex:c.wordIndex,note:value};
   const response=await fetch("/api/word-annotation",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(!response.ok)return;
   const result=await response.json(),key=wordRecordKey(c.sentence.id,c.wordIndex),existing=annotationIndex.get(key),record={book_id:currentBookId,sentence_id:c.sentence.id,word_index:c.wordIndex,original_word:result.originalWord,corrected_word:result.correctedWord,note:result.note};
-  if(existing)Object.assign(existing,record);else wordAnnotations.push(record);annotationIndex.set(key,existing||record);c.note=value;closeWordEditor();refreshWordMarks();showWord(c.word,c.sentence,c.element);
+  if(existing)Object.assign(existing,record);else wordAnnotations.push(record);annotationIndex.set(key,existing||record);c.note=value;closeWordEditor();refreshWordMarks();showWord(c.word,c.sentence,c.element);scheduleReaderShortcutFocus();
 }
 async function addSelectedWordToVocab(){const c=selectedWordContext,d=c.definition;const payload={book_id:currentBookId,sentence_id:c.sentence.id,word_index:c.wordIndex,word:c.word,root:d.root,phonetic:d.phonetic,meaning:d.meaning,context:focusedWordContext(c.sentence.text,c.wordIndex),note:c.note||"",rating:"unknown",interval_days:1,due_at:new Date(Date.now()+86400000).toISOString()};const r=await fetch("/api/vocabulary",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(r.ok){vocabItems=(await r.json()).items||[];rebuildWordIndexes();refreshWordMarks();refreshDashboards();}}
 
@@ -642,6 +656,20 @@ function applyEyeComfort(){const enabled=eyeComfort&&readerIsVisible();document.
 function keyName(event){return event.key===" "?"space":event.key.toLowerCase();}
 function keyLabel(key){return key==="space"?"空格":key.length===1?key.toUpperCase():key;}
 function captureShortcut(event){event.preventDefault();event.stopPropagation();const key=keyName(event);if(["shift","control","alt","meta"].includes(key))return;event.target.value=keyLabel(key);event.target.dataset.key=key;event.target.blur();}
+
+function readerTextInput(target){
+  const editable=target?.closest?.('textarea,[contenteditable="true"],input:not([type="range"]):not([type="button"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"])');
+  return !!editable;
+}
+function scheduleReaderShortcutFocus(event){
+  if(!readerIsVisible())return;
+  const target=event?.target;
+  if(target?.closest?.('[data-panel-word-action="note"]')||readerTextInput(target))return;
+  requestAnimationFrame(()=>{
+    if(!readerIsVisible()||readerTextInput(document.activeElement))return;
+    try{$("#reader").focus({preventScroll:true});}catch{$("#reader").focus();}
+  });
+}
 
 function handleReaderShortcut(event) {
   if(!$("#vocab").classList.contains("hidden")){handleReviewShortcut(event);return;}
@@ -694,6 +722,7 @@ function openReader() {
     const index = book.sentences.findIndex(s => saved >= s.start && saved < s.end);
     highlight(index >= 0 ? index : 0, true);
   }
+  scheduleReaderShortcutFocus();
 }
 
 function setMode(nextMode) {
@@ -947,8 +976,7 @@ function grammarAnalysisHtml(data,loadingExplanation=false){
   const clauses=(data.clauses||[]).map(item=>`<li><b>${escapeHtml(item.type)}</b><span>${escapeHtml(item.text)}</span>${item.marker?`<small>引导词：${escapeHtml(item.marker)}</small>`:""}</li>`).join("");
   const points=(data.grammarPoints||[]).map(item=>`<span>${escapeHtml(item)}</span>`).join("");
   const explanation=data.aiExplanation||data.explanation||"";
-  const translation=data.translation?escapeHtml(data.translation):data.translationMissing?'<em>原始中文字幕未提供该段译文</em>':'';
-  return `${wordPanelTabsHtml("grammar")}<div class="grammar-analysis"><small class="grammar-source">SENTENCE GRAMMAR · ${escapeHtml(data.source||"本地模型")}</small><h2>${escapeHtml(data.sentenceType||"句法分析")}</h2><div class="grammar-colored-sentence">${grammarTokenHtml(data.tokens)}</div>${translation?`<section class="grammar-translation"><small>原始字幕中文意思</small><p>${translation}</p></section>`:""}<div class="grammar-legend"><span class="grammar-subject">主语</span><span class="grammar-predicate">谓语</span><span class="grammar-object">宾语/补语</span><span class="grammar-clause">从句</span></div><section><small>基本句型</small><b>${escapeHtml(data.pattern||"")}</b></section><div class="grammar-core"><p><small>主语</small>${escapeHtml(data.subject||"")}</p><p><small>谓语</small>${escapeHtml(data.predicate||"")}</p>${data.object?`<p><small>宾语 / 补语</small>${escapeHtml(data.object)}</p>`:""}</div>${clauses?`<section class="grammar-clauses"><small>从句结构</small><ul>${clauses}</ul></section>`:""}${points?`<section><small>语法重点</small><div class="grammar-points">${points}</div></section>`:""}<section class="grammar-explanation"><small>中文讲解</small><p id="grammarExplanation">${formatText(explanation)}</p>${loadingExplanation?'<i>正在结合句法结构生成更自然的中文讲解…</i>':''}</section><details class="grammar-tree"><summary>查看成分句法树</summary><pre>${escapeHtml(data.constituency||"")}</pre></details></div>`;
+  return `${wordPanelTabsHtml("grammar")}<div class="grammar-analysis"><small class="grammar-source">SENTENCE GRAMMAR · ${escapeHtml(data.source||"本地模型")}</small><h2>${escapeHtml(data.sentenceType||"句法分析")}</h2><div class="grammar-colored-sentence">${grammarTokenHtml(data.tokens)}</div><div class="grammar-legend"><span class="grammar-subject">主语</span><span class="grammar-predicate">谓语</span><span class="grammar-object">宾语/补语</span><span class="grammar-clause">从句</span></div><section><small>基本句型</small><b>${escapeHtml(data.pattern||"")}</b></section><div class="grammar-core"><p><small>主语</small>${escapeHtml(data.subject||"")}</p><p><small>谓语</small>${escapeHtml(data.predicate||"")}</p>${data.object?`<p><small>宾语 / 补语</small>${escapeHtml(data.object)}</p>`:""}</div>${clauses?`<section class="grammar-clauses"><small>从句结构</small><ul>${clauses}</ul></section>`:""}${points?`<section><small>语法重点</small><div class="grammar-points">${points}</div></section>`:""}<section class="grammar-explanation"><small>中文讲解</small><p id="grammarExplanation">${formatText(explanation)}</p>${loadingExplanation?'<i>正在结合句法结构生成更自然的中文讲解…</i>':''}</section><details class="grammar-tree"><summary>查看成分句法树</summary><pre>${escapeHtml(data.constituency||"")}</pre></details></div>`;
 }
 async function showSentenceGrammar(sentence){
   selectedGrammarSentence=sentence;if(document.body.classList.contains("focus")){document.body.classList.add("focus-word-open");syncReaderPanels();}
