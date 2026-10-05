@@ -19,6 +19,10 @@ AUDIO_EXTENSIONS={".mp3",".m4a",".wav",".flac",".aac",".ogg",".opus"}
 def run(command,**kwargs):return subprocess.run([str(item) for item in command],check=True,**kwargs)
 def set_job(job_id,progress,step,**extra):update_job(job_id,progress=progress,step=step,**extra)
 
+def probe_video(path,url,label):
+    data=json.loads(subprocess.check_output(["ffprobe","-v","error","-select_streams","v:0","-show_entries","stream=codec_name,width,height,bit_rate:format=bit_rate,duration","-of","json",path],text=True));stream=(data.get("streams") or [{}])[0];fmt=data.get("format") or {}
+    return {"label":label,"url":url,"status":"ready","codec":stream.get("codec_name","") or "","width":int(stream.get("width",0) or 0),"height":int(stream.get("height",0) or 0),"bitrate":int(stream.get("bit_rate") or fmt.get("bit_rate") or 0),"bytes":path.stat().st_size,"duration":float(fmt.get("duration",0) or 0)}
+
 def build_grammar(job_id,book_id,progress):
     python=ROOT/".local/forced-aligner/venv/bin/python"
     if not python.exists():return
@@ -52,6 +56,9 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
         progress(18,"生成视频关键帧");run(["ffmpeg","-y","-v","error","-i",video,"-vf","fps=1/15,scale=960:-2","-q:v","3",pages/"page-%03d.jpg"])
         if not any(pages.glob("*.jpg")):run(["ffmpeg","-y","-v","error","-ss","0","-i",video,"-frames:v","1","-vf","scale=960:-2",pages/"page-001.jpg"])
         optimized_video=generated/"video-muted.mp4";run(["ffmpeg","-y","-v","error","-i",video,"-map","0:v:0","-c:v","copy","-an","-movflags","+faststart",optimized_video])
+        low_video=generated/"video-low.mp4";low_video_error="";progress(24,"生成360p流畅视频")
+        try:run(["ffmpeg","-y","-v","error","-i",video,"-map","0:v:0","-an","-vf","scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2","-c:v","libx264","-preset","veryfast","-crf","27","-maxrate","380k","-bufsize","760k","-g","50","-keyint_min","50","-pix_fmt","yuv420p","-threads","2","-movflags","+faststart",low_video])
+        except subprocess.CalledProcessError as exc:low_video.unlink(missing_ok=True);low_video_error=str(exc);progress(28,"流畅视频生成失败，继续导入高清版")
     else:progress(18,"音频读物无需生成画面")
 
     strategy=metadata.get("subtitleStrategy","auto");subtitle=None;translation_subtitle=None;subtitle_type="whisper"
@@ -80,7 +87,7 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
         with log.open("w") as output:
             run([WHISPER,"-m",MODEL,"-f",audio,"-l","en","-t",WHISPER_THREADS,"-p","2","-ng","-dtw","base.en","-ml","1","-sow","-ojf","-of",prefix,"-np"],stdout=subprocess.DEVNULL,stderr=output)
     progress(72,"构建音频正文与词级时间轴" if audio_only else "构建视频正文与词级时间轴")
-    page_base="/books/"+str(pages.relative_to(BOOKS_ROOT)) if video else "";audio_url="/books/"+str(audio.relative_to(BOOKS_ROOT));video_url="/books/"+str(optimized_video.relative_to(BOOKS_ROOT)) if video else ""
+    page_base="/books/"+str(pages.relative_to(BOOKS_ROOT)) if video else "";audio_url="/books/"+str(audio.relative_to(BOOKS_ROOT));video_url="/books/"+str(optimized_video.relative_to(BOOKS_ROOT)) if video else "";low_video_url="/books/"+str(low_video.relative_to(BOOKS_ROOT)) if video and low_video.exists() else ""
     book_file=generated/"book.json"
     command=[sys.executable,ROOT/"tools/build_video_book.py","--audio",audio,"--output",book_file,"--id",book_id,
       "--title",metadata["title"],"--english-title",metadata.get("englishTitle",""),"--level",metadata.get("level",""),"--audio-url",audio_url,
@@ -101,6 +108,11 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
     if source_type=="youtube":profile="youtube-auto" if subtitle_source=="automatic" else ("youtube-manual" if subtitle_source=="manual" else "speech-asr")
     else:profile="local-subtitle" if subtitle and skip_whisper else "speech-asr"
     book=json.loads(book_file.read_text());book.update({"sourceType":source_type,"sourceUrl":metadata.get("sourceUrl",""),"channel":metadata.get("channel",""),"externalId":metadata.get("youtubeId",""),"video":video_url,"subtitleType":subtitle_type,"subtitleSource":subtitle_source,"pageBase":page_base})
+    if video:
+        variants={"high":probe_video(optimized_video,video_url,"高清")}
+        if low_video_url:variants["low"]=probe_video(low_video,low_video_url,"流畅")
+        elif low_video_error:variants["low"]={"label":"流畅","status":"failed","error":low_video_error}
+        book.update({"videoDefaultQuality":"high","videoVariants":variants})
     if source_type=="youtube":book.update({"youtubeSubtitleTrack":metadata.get("youtubeSubtitleTrack",""),"youtubeSubtitleLanguage":metadata.get("youtubeSubtitleLanguage",""),"youtubeSubtitleTranslated":bool(metadata.get("youtubeSubtitleTranslated",False)),"youtubeChineseSubtitleSource":metadata.get("youtubeChineseSubtitleSource",""),"youtubeChineseSubtitleTrack":metadata.get("youtubeChineseSubtitleTrack",""),"youtubeChineseSubtitleLanguage":metadata.get("youtubeChineseSubtitleLanguage",""),"youtubeChineseSubtitleTranslated":bool(metadata.get("youtubeChineseSubtitleTranslated",False)),"translatedEnglishRejected":bool(metadata.get("translatedEnglishRejected",False))})
     book_file.write_text(json.dumps(book,ensure_ascii=False,indent=2))
     preserve_youtube_cues=source_type=="youtube" and bool(subtitle) and skip_whisper
@@ -109,7 +121,7 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
     else:
         progress(88,"SaT 语义断句与停顿融合")
         run([sys.executable,ROOT/"tools/apply_sat_segmentation.py","--book",book_file,"--audio",audio,"--output",book_file,"--profile",profile])
-    book=json.loads(book_file.read_text());quality={"status":"ready","sourceType":book["sourceType"],"subtitleType":subtitle_type,"subtitleSource":book["subtitleSource"],"whisperSkipped":skip_whisper,"timingSource":"youtube-original-cues+wav2vec2" if preserve_youtube_cues else f"{profile}+sat+pause+wav2vec2","sentences":len(book["sentences"]),"segmentation":book.get("segmentation",{})}
+    book=json.loads(book_file.read_text());quality={"status":"ready","sourceType":book["sourceType"],"subtitleType":subtitle_type,"subtitleSource":book["subtitleSource"],"whisperSkipped":skip_whisper,"timingSource":"youtube-original-cues+wav2vec2" if preserve_youtube_cues else f"{profile}+sat+pause+wav2vec2","sentences":len(book["sentences"]),"segmentation":book.get("segmentation",{}),"videoVariants":book.get("videoVariants",{})}
     progress(94,"写入音频读物数据库" if audio_only else "写入视频书籍数据库")
     cover=page_base+"/page-001.jpg" if page_base else "/favicon.svg";upsert_book(book,quality,relative,metadata["series"],page_base,cover)
     if whisper_json.exists():save_artifact(book_id,"whisper-dtw",json.loads(whisper_json.read_text()))

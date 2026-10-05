@@ -425,6 +425,9 @@ def export_content(job,revision):
         for key in ("audio","video"):
             url=data.get(key,"")
             if url.startswith("/books/"):paths.append(books_root/unquote(url[len('/books/'):]))
+        for variant in (data.get("videoVariants") or {}).values():
+            url=variant.get("url","") if isinstance(variant,dict) else ""
+            if url.startswith("/books/"):paths.append(books_root/unquote(url[len('/books/'):]))
         base=data.get("pageBase","")
         if base.startswith("/books/"):
             directory=books_root/unquote(base[len('/books/'):]);paths.extend(directory.glob("page-*.jpg")) if directory.is_dir() else None

@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20261005-2">
+  <link rel="stylesheet" href="styles.css?v=20261005-6">
 </head>
-<body>
+<body class="runtime-pending">
   <aside class="sidebar">
-    <div class="brand"><img class="brand-mark" src="shiyue-mark.svg" alt="拾页图标"><div><b>拾页</b><small>LOCAL READER</small></div><button id="sidebarToggle" class="sidebar-toggle" type="button" title="隐藏菜单栏" aria-label="隐藏菜单栏"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4" r="1.6"></circle><circle cx="10" cy="10" r="1.6"></circle><circle cx="10" cy="16" r="1.6"></circle></svg></button></div>
+    <div class="brand"><img class="brand-mark" src="shiyue-mark.svg" alt="拾页图标"><div><b>拾页</b><small id="brandModeLabel">ENGLISH READER</small></div><button id="sidebarToggle" class="sidebar-toggle" type="button" title="隐藏菜单栏" aria-label="隐藏菜单栏"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4" r="1.6"></circle><circle cx="10" cy="10" r="1.6"></circle><circle cx="10" cy="16" r="1.6"></circle></svg></button></div>
     <nav>
       <button class="nav active" data-screen="shelf">⌂ <span>我的书架</span></button>
       <button class="nav" data-screen="stats">◎ <span>学习记录</span></button>
@@ -36,11 +36,11 @@
     <section id="shelf" class="screen shelf">
       <div class="welcome"><small>GOOD EVENING</small><h1>今天，读一点英文。</h1><p>从故事里学会真实的表达，而不是孤立地背单词。</p></div>
       <div class="shelf-title"><div><h2 id="shelfSeriesTitle">我的书架</h2><p id="shelfSeriesSubtitle">按书系浏览已导入书籍</p></div><div class="shelf-tools"><span id="shelfCount">0 本</span><div class="view-switch"><button id="tileViewBtn" class="active" title="平铺">▦</button><button id="listViewBtn" title="列表">☷</button></div></div></div>
-      <div id="libraryGrid" class="library-grid"><div class="empty-state">正在从本地数据库读取书架…</div></div>
+      <div id="libraryGrid" class="library-grid"><div id="libraryLoadingText" class="empty-state">正在读取书架…</div></div>
       <div class="tip"><span>✦</span><div><b>推荐学习路径</b><p>先用泛听了解故事，再用精读点词，最后进入跟读模式模仿原音。</p></div></div>
     </section>
 
-    <section id="stats" class="screen dashboard hidden"><div class="page-title"><small>LEARNING LOG</small><h1>学习记录</h1><p>你的数据只保存在这台设备。</p></div><div id="statsContent"></div></section>
+    <section id="stats" class="screen dashboard hidden"><div class="page-title"><small>LEARNING LOG</small><h1>学习记录</h1><p id="statsDescription">查看最近的阅读与复习情况。</p></div><div id="statsContent"></div></section>
     <section id="vocab" class="screen dashboard vocab-screen hidden"><div class="page-title vocab-page-title"><small>VOCABULARY REVIEW</small><h1>生词复习</h1><p>通过主动回忆和听写，把阅读中遇到的生词真正记住。</p></div><div class="review-workspace"><div id="reviewContent"></div><aside id="reviewWordPanel" class="review-word-panel"><div class="word-empty"><span>Aa</span><h3>点击生词</h3><p>在这里查看完整释义、当前句用法、例句和备注。</p></div></aside></div></section>
     <section id="import" class="screen dashboard hidden">
       <div class="page-title"><small>CONTENT IMPORTER</small><h1>导入内容</h1><p>扫描 books 全部目录，支持PDF、DOC、TXT、CHM、纯音频、视频和YouTube。</p></div>
@@ -82,7 +82,7 @@
       <div id="importProgress" class="panel import-progress hidden"><div><b id="importStep">等待开始</b><span id="importPercent">0%</span></div><progress id="importBar" max="100" value="0"></progress><p id="importMessage"></p><div id="batchJobs" class="batch-jobs"></div></div>
     </section>
     <section id="settings" class="screen dashboard hidden">
-      <div class="page-title settings-page-title"><small>LOCAL SYSTEM SETTINGS</small><h1>系统设置</h1><p>阅读偏好与服务器运维分区管理，配置只保存在你的设备中。</p></div>
+      <div class="page-title settings-page-title"><small id="settingsModeLabel">READER SETTINGS</small><h1>系统设置</h1><p id="settingsDescription">管理账户、快捷键与阅读体验。</p></div>
       <div id="settingsTabs" class="settings-tabs" role="tablist" aria-label="系统设置分类">
         <button id="settingsGeneralTab" class="active" type="button" role="tab" aria-selected="true" aria-controls="settingsGeneralPanel" data-settings-tab="general"><span class="settings-tab-icon">Aa</span><span><b>通用设置</b><small>账户、快捷键与阅读体验</small></span></button>
         <button id="settingsDeploymentTab" type="button" role="tab" aria-selected="false" aria-controls="settingsDeploymentPanel" data-settings-tab="deployment"><span class="settings-tab-icon">⇧</span><span><b>打包部署</b><small>远程发布、资源同步与回滚</small></span></button>
@@ -108,7 +108,7 @@
             <label>听写词间停顿<input id="manualPauseSeconds" type="number" min="0.5" max="10" step="0.5" value="2"><span>秒</span></label>
             <label class="highlight-setting">单词高亮提前量<input id="highlightLeadMs" type="number" min="-300" max="600" step="20" value="0"><span>毫秒</span><small class="field-help">音素强制对齐默认无需补偿，设备存在延迟时再调整。</small></label>
           </fieldset>
-          <div class="settings-save-row"><p class="privacy-note">令牌只提交给本机服务，并保存在仅当前用户可读的配置文件中。</p><button type="submit">保存通用设置</button></div>
+          <div class="settings-save-row"><p id="tokenPrivacyText" class="privacy-note">令牌由阅读服务安全保存，仅在调用词典服务时使用。</p><button type="submit">保存通用设置</button></div>
         </form>
       </section>
       <section id="settingsDeploymentPanel" class="settings-tab-panel hidden" role="tabpanel" aria-labelledby="settingsDeploymentTab" data-settings-panel="deployment">
@@ -153,7 +153,7 @@
     </section>
 
     <section id="reader" class="screen reader hidden" tabindex="-1">
-      <aside id="pagePanel" class="page-panel"><div id="mediaStage" class="media-stage" tabindex="0"><img id="pageImage" alt="原书扫描页"><video id="videoView" class="hidden" muted playsinline preload="none"></video><div class="page-head"><b id="visualTitle">原书页</b><div class="visual-switch hidden" id="visualSwitch"><button id="framesViewBtn" class="active">关键帧</button><button id="videoViewBtn">视频</button><button id="closeStackLayoutBtn" class="visual-layout-close" type="button" title="切换为左右布局" aria-label="关闭上下布局，切换为左右布局">×</button></div></div><small id="pageLabel"></small></div></aside>
+      <aside id="pagePanel" class="page-panel"><div id="mediaStage" class="media-stage" tabindex="0"><img id="pageImage" alt="原书扫描页"><video id="videoView" class="hidden" muted playsinline preload="none"></video><div id="videoStatusOverlay" class="video-status-overlay hidden"><i></i><b id="videoStatusText">正在准备视频</b><button id="videoRetryBtn" type="button" class="hidden">重试</button></div><div class="page-head"><b id="visualTitle">原书页</b><div class="visual-switch hidden" id="visualSwitch"><span id="videoQualitySwitch" class="video-quality-switch hidden"><button id="videoHighBtn" type="button" class="active">高清</button><button id="videoLowBtn" type="button">流畅</button></span><button id="closeStackLayoutBtn" class="visual-layout-close" type="button" title="切换为左右布局" aria-label="关闭上下布局，切换为左右布局">×</button></div></div><small id="pageLabel"></small></div></aside>
       <div class="story-panel">
         <div class="chapter">
           <span>INTERACTIVE STORY</span><h1>Survive!</h1>
@@ -214,6 +214,6 @@
       <div class="delete-dialog-actions"><button value="cancel">取消</button><button id="confirmUninstallNode" type="button" disabled>确认卸载</button></div>
     </form>
   </dialog>
-  <script src="app.js?v=20261005-2"></script>
+  <script src="app.js?v=20261005-6"></script>
 </body>
 </html>

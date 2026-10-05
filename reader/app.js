@@ -6,6 +6,7 @@ let localDictionary = {};
 let libraryBooks = [];
 let currentBookId = "";
 let importCatalog = [];
+let runtimeMode="full";
 let importPollTimer = null;
 let displayedPage = null;
 let active = -1;
@@ -84,6 +85,13 @@ let manualRepeatCount=3;
 let manualPauseSeconds=2;
 let manualDictation={items:[],index:-1,played:new Set(),running:false,complete:false,timer:null,audio:null,repeatIndex:0,stage:"ready",token:0};
 let visualMode="frames";
+let videoQuality="high";
+let videoQualitySwitchToken=0;
+let videoBufferTimer=null;
+let videoDowngradeTimer=null;
+let videoStatusTimer=null;
+let videoRetryCount=0;
+let videoAutoDowngraded=false;
 let videoTitleManuallyEdited=false;
 let videoImportPollTimer=null;
 let sentenceAutoPause=false;
@@ -159,6 +167,19 @@ function fmt(seconds) { seconds = Math.max(0, seconds || 0); return `${String(Ma
 function day(ms) { return new Date(ms).toLocaleDateString("zh-CN", { month:"short", day:"numeric" }); }
 function escapeHtml(value) { return value.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c])); }
 function formatText(value) { return escapeHtml(value || "").replace(/\\n/g,"\n").replace(/\n/g,"<br>"); }
+function displaySource(value){
+  const source=String(value||"");if(runtimeMode!=="reader")return source;
+  return source.replace("Stanza 本地句法模型","Stanza 句法模型").replace("本地 ECDICT + Stanza","内置词典与句法").replace("本地词典","内置词典").replace("本地语境规则","语境规则").replace("本地模型","句法模型");
+}
+function applyRuntimePresentation(){
+  const remote=runtimeMode==="reader";document.body.dataset.runtimeMode=runtimeMode;document.body.classList.remove("runtime-pending");
+  $("#brandModeLabel").textContent=remote?"WEB READER":"LOCAL READER";
+  const loading=$("#libraryLoadingText");if(loading)loading.textContent=remote?"正在读取书架…":"正在从本地数据库读取书架…";
+  $("#statsDescription").textContent=remote?"查看最近的阅读、查词、复习和跟读情况。":"你的数据只保存在这台设备。";
+  $("#settingsModeLabel").textContent=remote?"READER SETTINGS":"LOCAL SYSTEM SETTINGS";
+  $("#settingsDescription").textContent=remote?"管理账户、快捷键与阅读体验。":"阅读偏好与服务器运维分区管理，配置只保存在你的设备中。";
+  $("#tokenPrivacyText").textContent=remote?"令牌由当前阅读服务安全保存，仅在调用词典服务时使用。":"令牌只提交给本机服务，并保存在仅当前用户可读的配置文件中。";
+}
 function focusedWordContext(text,wordIndex){
   const matches=[...text.matchAll(/[A-Za-z]+(?:['’][A-Za-z]+)?|\d+/g)];const target=matches[wordIndex];if(!target)return text.slice(0,220);
   const position=target.index,terminator=/[.!?。！？…]/g;let start=0,end=text.length,match;
@@ -224,7 +245,7 @@ async function loadBook(bookId) {
   const saved=load(`${STORE.state}-${bookId}`,{}).time||book.sentences[0]?.start||0,center=Math.max(0,sentenceIndexAt(saved));await ensureBookChunksAround(center);
   $("#wordPanel").innerHTML='<div class="word-empty"><span>Aa</span><h3>单词与句子分析</h3><p>悬浮单词查看简释；点击单词查看完整释义，点击句末“句法”分析句型和语法。</p></div>';
   $("#audio").pause(); $("#audio").src=book.audio; $("#duration").textContent=fmt(book.duration);
-  $(".book-heading small").textContent=`${book.level||""}级 · LOCAL BOOK`;
+  $(".book-heading small").textContent=runtimeMode==="reader"?`${book.level||""}级 · READING`:`${book.level||""}级 · LOCAL BOOK`;
   $(".book-heading strong").innerHTML=`${escapeHtml(book.title)} <i>${escapeHtml(book.englishTitle||"")}</i>`;
   $(".book-heading strong").title=[book.title,book.englishTitle].filter(Boolean).join(" · ");
   $(".chapter h1").textContent=book.englishTitle||book.title;
@@ -255,7 +276,7 @@ function renderLibrary() {
   $("#shelfCount").textContent=`${visible.length} 本`; $("#shelfSeriesTitle").textContent=currentSeries||"全部书籍";
   $("#tileViewBtn").classList.toggle("active",shelfView==="tile"); $("#listViewBtn").classList.toggle("active",shelfView==="list");
   if(!visible.length){grid.innerHTML='<div class="empty-state"><h3>当前书系暂无已导入书籍</h3><p>请从“导入书籍”选择书籍。</p></div>';return;}
-  grid.innerHTML=visible.map((item,index)=>`<article class="book-card" data-book-id="${escapeHtml(item.id)}" data-source-type="${escapeHtml(item.source_type||'book')}"><details class="book-actions"><summary title="书籍操作" aria-label="书籍操作"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4" r="1.6"></circle><circle cx="10" cy="10" r="1.6"></circle><circle cx="10" cy="16" r="1.6"></circle></svg></summary><div class="book-actions-menu"><button data-delete-book="${escapeHtml(item.id)}">删除书籍</button></div></details><img src="${encodeURI(item.cover_url)}" alt="${escapeHtml(item.title)}封面" width="160" height="220" loading="${index<8?'eager':'lazy'}" decoding="async" fetchpriority="${index<4?'high':'low'}"><div class="book-info"><span class="tag">LEVEL ${escapeHtml(item.level||"-")}</span><h3>${escapeHtml(item.title)}</h3><em>${escapeHtml(item.english_title||"")}</em><p>${escapeHtml(item.series)}</p><div class="progress"><i style="width:${bookProgress(item.id)}%"></i></div><small>${item.alignment.startsWith('whisper-')?'Whisper 词级点读':'本地点读'}</small></div><button class="round-play">▶</button></article>`).join("");
+  grid.innerHTML=visible.map((item,index)=>`<article class="book-card" data-book-id="${escapeHtml(item.id)}" data-source-type="${escapeHtml(item.source_type||'book')}"><details class="book-actions"><summary title="书籍操作" aria-label="书籍操作"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4" r="1.6"></circle><circle cx="10" cy="10" r="1.6"></circle><circle cx="10" cy="16" r="1.6"></circle></svg></summary><div class="book-actions-menu"><button data-delete-book="${escapeHtml(item.id)}">删除书籍</button></div></details><img src="${encodeURI(item.cover_url)}" alt="${escapeHtml(item.title)}封面" width="160" height="220" loading="${index<8?'eager':'lazy'}" decoding="async" fetchpriority="${index<4?'high':'low'}"><div class="book-info"><span class="tag">LEVEL ${escapeHtml(item.level||"-")}</span><h3>${escapeHtml(item.title)}</h3><em>${escapeHtml(item.english_title||"")}</em><p>${escapeHtml(item.series)}</p><div class="progress"><i style="width:${bookProgress(item.id)}%"></i></div><small>${item.alignment.startsWith('whisper-')?'Whisper 词级点读':runtimeMode==='reader'?'词级点读':'本地点读'}</small></div><button class="round-play">▶</button></article>`).join("");
 }
 function populateVideoSeriesOptions(){
   const history=[...new Set(libraryBooks.map(item=>(item.series||"").trim()).filter(Boolean).filter(name=>!name.includes("牛津")))].sort((left,right)=>left.localeCompare(right,"zh-CN"));
@@ -396,12 +417,14 @@ function bindEvents() {
   $("#recordBtn").onclick = toggleRecording;
   $("#playRecordBtn").onclick = playRecordingReview;
   $("#audio").ontimeupdate = persistAudioProgress;
-  $("#audio").onplay = () => { $("#playBtn").textContent = "Ⅱ"; if(sentenceAutoPause&&active>=0&&mode!=="shadow")wordStopAt=book.sentences[active].end+.03;if(mode==="shadow"){if(shadowSentenceIndex<0)shadowSentenceIndex=active>=0?active:sentenceIndexAt($("#audio").currentTime);if(!shadowWaiting&&shadowSentenceIndex>=0)scheduleShadowSentenceStop(shadowSentenceIndex);}if(visualMode==="video"){syncVideoToAudio(true);$("#videoView").play().then(startVideoFrameSync).catch(()=>{});}trackListening(); startPlaybackSync(); };
+  $("#audio").onplay = () => { $("#playBtn").textContent = "Ⅱ"; if(sentenceAutoPause&&active>=0&&mode!=="shadow")wordStopAt=book.sentences[active].end+.03;if(mode==="shadow"){if(shadowSentenceIndex<0)shadowSentenceIndex=active>=0?active:sentenceIndexAt($("#audio").currentTime);if(!shadowWaiting&&shadowSentenceIndex>=0)scheduleShadowSentenceStop(shadowSentenceIndex);}if(visualMode==="video")playVideoView();trackListening(); startPlaybackSync(); };
   $("#audio").onpause = () => { $("#playBtn").textContent = "▶"; $("#videoView").pause();stopVideoFrameSync();stopPlaybackSync();syncVideoToAudio(true);syncPlaybackFrame(); };
   $("#audio").onseeked = () => {syncVideoToAudio(true);syncPlaybackFrame();};
   $("#videoView").onloadedmetadata=()=>{setVideoBaseRate();syncVideoToAudio(true);scheduleMediaStageSize();};
+  $("#videoView").onloadeddata=markVideoReady;$("#videoView").oncanplay=markVideoReady;
+  $("#videoView").onwaiting=handleVideoWaiting;$("#videoView").onstalled=handleVideoStalled;$("#videoView").onerror=handleVideoError;
   $("#pageImage").onload=scheduleMediaStageSize;
-  $("#videoView").onplaying=startVideoFrameSync;
+  $("#videoView").onplaying=()=>{markVideoReady();startVideoFrameSync();};
   $("#videoView").onpause=stopVideoFrameSync;
   window.addEventListener("resize",()=>{scheduleTopbarContentAlignment();scheduleMediaStageSize();});
   window.addEventListener("beforeunload", finishSession);
@@ -450,7 +473,7 @@ function bindEvents() {
   $("#videoEnglishTitle").oninput=syncVideoChineseTitle;
   $("#videoTitle").oninput=()=>{videoTitleManuallyEdited=true;};
   $("#videoSeriesHistory").onchange=event=>{if(event.target.value)$("#videoSeries").value=event.target.value;};
-  $("#framesViewBtn").onclick=()=>setVisualMode("frames");$("#videoViewBtn").onclick=()=>setVisualMode("video");
+  $("#videoHighBtn").onclick=()=>switchVideoQuality("high",false);$("#videoLowBtn").onclick=()=>switchVideoQuality("low",false);$("#videoRetryBtn").onclick=()=>switchVideoQuality(videoQuality,false,true);
   $("#closeStackLayoutBtn").onclick=event=>{event.currentTarget.blur();if(readerLayout!=="side"){readerLayout="side";applyReaderLayout();scheduleTopbarContentAlignment();showReaderToast("布局：画面左侧，文章右侧");}};
   document.addEventListener("keydown",handleReaderShortcut);
   document.addEventListener("pointerup",scheduleReaderShortcutFocus,true);
@@ -514,8 +537,58 @@ function setFocusMode(enabled){
   syncReaderPanels();syncReaderActionVisibility();scheduleTopbarContentAlignment();
 }
 function toggleFocusMode(){setFocusMode(!document.body.classList.contains("focus"));}
-function configureBookVisual(){const isVideo=bookHasVideo(),hasPages=book?.hasOriginalPages!==false&&!!book?.pageBase;readerLayout=recommendedReaderLayout();$("#pagePanel").classList.toggle("has-video",isVideo);$("#visualSwitch").classList.toggle("hidden",!isVideo);$("#visualTitle").textContent=isVideo?"视频画面":hasPages?"原书页":"无原书页面";stopVideoFrameSync();$("#videoView").src=isVideo?book.video:"";setVisualMode(isVideo?"video":"frames");applyReaderLayout();syncReaderPanels();scheduleTopbarContentAlignment();scheduleMediaStageSize();}
-function setVisualMode(mode){visualMode=mode;const isVideo=bookHasVideo();$("#pagePanel").dataset.visualMode=mode;$("#framesViewBtn").classList.toggle("active",mode==="frames");$("#videoViewBtn").classList.toggle("active",mode==="video");$("#pageImage").classList.toggle("hidden",mode==="video");$("#videoView").classList.toggle("hidden",mode!=="video");if(isVideo&&mode==="video"){const video=$("#videoView"),audio=$("#audio");setVideoBaseRate();syncVideoToAudio(true);if(!audio.paused)video.play().then(startVideoFrameSync).catch(()=>{});}else{stopVideoFrameSync();$("#videoView").pause();}scheduleMediaStageSize();}
+function videoVariant(quality){
+  const variant=book?.videoVariants?.[quality];
+  if(variant?.status==="ready"&&variant.url)return variant;
+  if(quality==="high"&&book?.video)return{label:"高清",url:book.video,status:"ready"};
+  return null;
+}
+function clearVideoLoadingTimers(){clearTimeout(videoBufferTimer);clearTimeout(videoDowngradeTimer);videoBufferTimer=videoDowngradeTimer=null;}
+function showVideoStatus(message,type="loading",retry=false){
+  clearTimeout(videoStatusTimer);const overlay=$("#videoStatusOverlay");$("#videoStatusText").textContent=message;overlay.classList.remove("hidden","is-error","is-notice");if(type==="error")overlay.classList.add("is-error");if(type==="notice")overlay.classList.add("is-notice");$("#videoRetryBtn").classList.toggle("hidden",!retry);
+  if(type==="notice")videoStatusTimer=setTimeout(()=>overlay.classList.add("hidden"),2200);
+}
+function hideVideoStatus(){clearTimeout(videoStatusTimer);$("#videoStatusOverlay").classList.add("hidden");$("#videoRetryBtn").classList.add("hidden");}
+function updateVideoQualityControls(){
+  const low=videoVariant("low"),hasLow=!!low;$("#videoQualitySwitch").classList.toggle("hidden",!bookHasVideo()||!hasLow);$("#videoLowBtn").disabled=!hasLow;$("#videoHighBtn").classList.toggle("active",videoQuality==="high");$("#videoLowBtn").classList.toggle("active",videoQuality==="low");
+}
+function switchVideoQuality(quality="high",automatic=false,force=false){
+  const variant=videoVariant(quality);if(!variant)return false;
+  const video=$("#videoView"),previousQuality=videoQuality,same=video.dataset.quality===quality&&video.currentSrc;
+  if(same&&!force){videoQuality=quality;updateVideoQualityControls();playVideoView();return true;}
+  videoQualitySwitchToken++;clearVideoLoadingTimers();videoQuality=quality;if(!automatic||previousQuality!==quality)videoRetryCount=0;if(!automatic)videoAutoDowngraded=false;updateVideoQualityControls();stopVideoFrameSync();video.pause();$("#pagePanel").classList.remove("video-ready");showVideoStatus(`正在加载${variant.label||(quality==="high"?"高清":"流畅")}视频`);
+  video.dataset.quality=quality;video.src=variant.url;video.load();scheduleMediaStageSize();return true;
+}
+function markVideoReady(){
+  if(visualMode!=="video"||!bookHasVideo())return;const video=$("#videoView");if(video.readyState<2)return;clearVideoLoadingTimers();$("#pagePanel").classList.add("video-ready");hideVideoStatus();videoRetryCount=0;setVideoBaseRate();syncVideoToAudio(true);scheduleMediaStageSize();if(!$("#audio").paused&&video.paused)video.play().then(startVideoFrameSync).catch(handleVideoError);
+}
+function playVideoView(){
+  if(!bookHasVideo()||visualMode!=="video")return;const video=$("#videoView"),audio=$("#audio"),variant=videoVariant(videoQuality)||videoVariant("high");if(!variant)return;
+  if(!video.currentSrc||video.dataset.quality!==videoQuality){switchVideoQuality(videoQuality,false);return;}
+  if(video.readyState<2){showVideoStatus(`正在加载${videoQuality==="high"?"高清":"流畅"}视频`);return;}
+  syncVideoToAudio(true);if(audio.paused){video.pause();markVideoReady();return;}video.play().then(startVideoFrameSync).catch(handleVideoError);
+}
+function handleVideoWaiting(){
+  if(visualMode!=="video")return;clearVideoLoadingTimers();videoBufferTimer=setTimeout(()=>showVideoStatus("视频正在缓冲"),500);
+  if(videoQuality==="high"&&videoVariant("low")&&!videoAutoDowngraded)videoDowngradeTimer=setTimeout(()=>{videoAutoDowngraded=true;showReaderToast("网络较慢，已切换到流畅视频");switchVideoQuality("low",true,true);},1800);
+}
+function handleVideoStalled(){
+  if(visualMode!=="video")return;handleVideoWaiting();clearTimeout(videoBufferTimer);videoBufferTimer=setTimeout(()=>{videoRetryCount++;if(videoRetryCount<=2){showVideoStatus(`视频连接中断，正在重试 ${videoRetryCount}/2`);switchVideoQuality(videoQuality,true,true);}else handleVideoFailure();},5000);
+}
+function handleVideoError(){if(visualMode==="video")handleVideoFailure();}
+function handleVideoFailure(){
+  clearVideoLoadingTimers();if(videoQuality==="high"&&videoVariant("low")){videoAutoDowngraded=true;showReaderToast("高清视频不可用，已切换到流畅视频");switchVideoQuality("low",true,true);return;}
+  if(videoRetryCount<2){videoRetryCount++;showVideoStatus(`视频加载失败，正在重试 ${videoRetryCount}/2`);switchVideoQuality(videoQuality,true,true);return;}
+  $("#videoView").pause();$("#pagePanel").classList.remove("video-ready");showVideoStatus("视频暂不可用，当前显示关键帧","error",true);showReaderToast("视频不可用，当前显示关键帧");
+}
+function configureBookVisual(){
+  const isVideo=bookHasVideo(),hasPages=book?.hasOriginalPages!==false&&!!book?.pageBase;readerLayout=recommendedReaderLayout();videoQuality=book?.videoDefaultQuality||"high";videoAutoDowngraded=false;videoRetryCount=0;clearVideoLoadingTimers();$("#pagePanel").classList.toggle("has-video",isVideo);$("#pagePanel").classList.remove("video-ready");$("#visualSwitch").classList.toggle("hidden",!isVideo);$("#visualTitle").textContent=isVideo?"视频画面":hasPages?"原书页":"无原书页面";stopVideoFrameSync();const video=$("#videoView");video.pause();video.removeAttribute("src");video.dataset.quality="";video.load();updateVideoQualityControls();setVisualMode(isVideo?"video":"frames");applyReaderLayout();syncReaderPanels();scheduleTopbarContentAlignment();scheduleMediaStageSize();
+}
+function setVisualMode(mode){
+  visualMode=mode;const isVideo=bookHasVideo();$("#pagePanel").dataset.visualMode=mode;$("#pageImage").classList.remove("hidden");$("#videoView").classList.toggle("hidden",mode!=="video");
+  if(isVideo&&mode==="video"){updateVideoQualityControls();if(!$("#videoView").currentSrc)switchVideoQuality(videoQuality,false);else playVideoView();}else{clearVideoLoadingTimers();hideVideoStatus();stopVideoFrameSync();$("#videoView").pause();$("#pagePanel").classList.remove("video-ready");}
+  scheduleMediaStageSize();
+}
 
 function activeMediaAspectRatio(){
   if(visualMode==="video"&&bookHasVideo()){const video=$("#videoView");if(video.videoWidth&&video.videoHeight)return video.videoWidth/video.videoHeight;}
@@ -992,11 +1065,11 @@ async function showWord(raw, sentence, wordElement) {
     if(requestId!==wordRequestId) return;
     const groups=(data.groups||[]).map(group=>`<div class="dict-group"><b>${escapeHtml(group.pos)}</b><p>${group.translations.map(escapeHtml).join("；")}</p></div>`).join("");
     $("#remoteDefinition").innerHTML=groups || `<p class="meaning">${formatText(definition.meaning)}</p><p>${formatText(definition.english)}</p>`;
-    $("#remoteDefinition").insertAdjacentHTML("beforeend",`<small class="api-source">释义来源：${escapeHtml(data.source||"Dioco")}</small>`);
+    $("#remoteDefinition").insertAdjacentHTML("beforeend",`<small class="api-source">释义来源：${escapeHtml(displaySource(data.source||"Dioco"))}</small>`);
     $("#remoteExamples").innerHTML=(data.examples||[]).length?`<small>EXAMPLES</small>${data.examples.map(item=>`<p>${escapeHtml(item)}</p>`).join("")}`:'<small>暂无例句</small>';
   }).catch(()=>{
     if(requestId!==wordRequestId) return;
-    $("#remoteDefinition").innerHTML=`<p class="meaning">${formatText(definition.meaning)}</p><p>${formatText(definition.english)}</p><small class="api-source">接口不可用，已使用本地词典</small>`;
+    $("#remoteDefinition").innerHTML=`<p class="meaning">${formatText(definition.meaning)}</p><p>${formatText(definition.english)}</p><small class="api-source">接口不可用，已使用${runtimeMode==="reader"?"内置词典":"本地词典"}</small>`;
     $("#remoteExamples").innerHTML='<small>例句接口暂不可用</small>';
   });
   fetch("/api/word-context",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({word:raw,contextSentence:sentence.text,expandedContext:expanded})}).then(async response=>{
@@ -1004,10 +1077,10 @@ async function showWord(raw, sentence, wordElement) {
     return response.json();
   }).then(data=>{
     if(requestId!==wordRequestId) return;
-    $("#remoteUsage").innerHTML=`${formatText(data.explanation||definition.usage)}<small class="api-source">语境来源：${escapeHtml(data.source||"Dioco Lexa")}</small>`;
+    $("#remoteUsage").innerHTML=`${formatText(data.explanation||definition.usage)}<small class="api-source">语境来源：${escapeHtml(displaySource(data.source||"Dioco Lexa"))}</small>`;
   }).catch(()=>{
     if(requestId!==wordRequestId) return;
-    $("#remoteUsage").innerHTML=`${formatText(definition.usage)}<small class="api-source">接口不可用，已使用本地语境规则</small>`;
+    $("#remoteUsage").innerHTML=`${formatText(definition.usage)}<small class="api-source">接口不可用，已使用${runtimeMode==="reader"?"语境规则":"本地语境规则"}</small>`;
   });
 }
 
@@ -1019,7 +1092,7 @@ function grammarAnalysisHtml(data,loadingExplanation=false){
   const clauses=(data.clauses||[]).map(item=>`<li><b>${escapeHtml(item.type)}</b><span>${escapeHtml(item.text)}</span>${item.marker?`<small>引导词：${escapeHtml(item.marker)}</small>`:""}</li>`).join("");
   const points=(data.grammarPoints||[]).map(item=>`<span>${escapeHtml(item)}</span>`).join("");
   const explanation=data.aiExplanation||data.explanation||"";
-  return `${wordPanelTabsHtml("grammar")}<div class="grammar-analysis"><small class="grammar-source">SENTENCE GRAMMAR · ${escapeHtml(data.source||"本地模型")}</small><h2>${escapeHtml(data.sentenceType||"句法分析")}</h2><div class="grammar-colored-sentence">${grammarTokenHtml(data.tokens)}</div><div class="grammar-legend"><span class="grammar-subject">主语</span><span class="grammar-predicate">谓语</span><span class="grammar-object">宾语/补语</span><span class="grammar-clause">从句</span></div><section><small>基本句型</small><b>${escapeHtml(data.pattern||"")}</b></section><div class="grammar-core"><p><small>主语</small>${escapeHtml(data.subject||"")}</p><p><small>谓语</small>${escapeHtml(data.predicate||"")}</p>${data.object?`<p><small>宾语 / 补语</small>${escapeHtml(data.object)}</p>`:""}</div>${clauses?`<section class="grammar-clauses"><small>从句结构</small><ul>${clauses}</ul></section>`:""}${points?`<section><small>语法重点</small><div class="grammar-points">${points}</div></section>`:""}<section class="grammar-explanation"><small>中文讲解</small><p id="grammarExplanation">${formatText(explanation)}</p>${loadingExplanation?'<i>正在结合句法结构生成更自然的中文讲解…</i>':''}</section><details class="grammar-tree"><summary>查看成分句法树</summary><pre>${escapeHtml(data.constituency||"")}</pre></details></div>`;
+  return `${wordPanelTabsHtml("grammar")}<div class="grammar-analysis"><small class="grammar-source">SENTENCE GRAMMAR · ${escapeHtml(displaySource(data.source||(runtimeMode==="reader"?"句法模型":"本地模型")))}</small><h2>${escapeHtml(data.sentenceType||"句法分析")}</h2><div class="grammar-colored-sentence">${grammarTokenHtml(data.tokens)}</div><div class="grammar-legend"><span class="grammar-subject">主语</span><span class="grammar-predicate">谓语</span><span class="grammar-object">宾语/补语</span><span class="grammar-clause">从句</span></div><section><small>基本句型</small><b>${escapeHtml(data.pattern||"")}</b></section><div class="grammar-core"><p><small>主语</small>${escapeHtml(data.subject||"")}</p><p><small>谓语</small>${escapeHtml(data.predicate||"")}</p>${data.object?`<p><small>宾语 / 补语</small>${escapeHtml(data.object)}</p>`:""}</div>${clauses?`<section class="grammar-clauses"><small>从句结构</small><ul>${clauses}</ul></section>`:""}${points?`<section><small>语法重点</small><div class="grammar-points">${points}</div></section>`:""}<section class="grammar-explanation"><small>中文讲解</small><p id="grammarExplanation">${formatText(explanation)}</p>${loadingExplanation?'<i>正在结合句法结构生成更自然的中文讲解…</i>':''}</section><details class="grammar-tree"><summary>查看成分句法树</summary><pre>${escapeHtml(data.constituency||"")}</pre></details></div>`;
 }
 async function showSentenceGrammar(sentence){
   selectedGrammarSentence=sentence;if(document.body.classList.contains("focus")){document.body.classList.add("focus-word-open");syncReaderPanels();}
@@ -1291,7 +1364,8 @@ function restoreProgress() { if(!book)return; const state=load(`${STORE.state}-$
 async function loadApiSettings() {
   try {
     const response=await fetch("/api/settings",{cache:"no-store"}); const data=await response.json();
-    if(data.runtimeMode==="reader"){$('[data-screen="import"]')?.classList.add("hidden");$("#import")?.classList.add("hidden");}
+    runtimeMode=data.runtimeMode||"full";applyRuntimePresentation();
+    if(runtimeMode==="reader"){$('[data-screen="import"]')?.classList.add("hidden");$("#import")?.classList.add("hidden");}
     $("#diocoEmail").value=data.userEmail||"";
     $("#tokenStatus").textContent=data.tokenConfigured?`令牌已配置：${data.tokenMask}`:"尚未配置令牌";
     shortcuts={previous:data.shortcutPrevious||"a",repeat:data.shortcutRepeat||"s",next:data.shortcutNext||"d",play:data.shortcutPlay||"space"};
@@ -1299,7 +1373,7 @@ async function loadApiSettings() {
     wordTipSeconds=+(data.wordTipSeconds||2);reviewPageSize=+(data.reviewPageSize||10);manualRepeatCount=+(data.manualRepeatCount||3);manualPauseSeconds=+(data.manualPauseSeconds||2);highlightLeadMs=Number.isFinite(+data.highlightLeadMs)?+data.highlightLeadMs:0;sentenceAutoPause=!!data.sentenceAutoPause;eyeComfort=readerIsVisible()&&!!data.eyeComfort;heatmapRange=data.heatmapRange||"year";if(data.eyeComfort&&!readerIsVisible())savePreference({eyeComfort:false});$("#wordTipSeconds").value=wordTipSeconds;$("#reviewPageSize").value=reviewPageSize;$("#manualRepeatCount").value=manualRepeatCount;$("#manualPauseSeconds").value=manualPauseSeconds;$("#highlightLeadMs").value=highlightLeadMs;applyEyeComfort();
     for(const [name,key] of Object.entries(shortcuts)){const input=$(`#shortcut${name[0].toUpperCase()+name.slice(1)}`);if(input){input.value=keyLabel(key);input.dataset.key=key;}}
     updateShortcutHint();
-  } catch { $("#tokenStatus").textContent="无法读取本地设置"; }
+  } catch { $("#tokenStatus").textContent=runtimeMode==="reader"?"无法读取设置":"无法读取本地设置"; }
 }
 async function saveApiSettings(event) {
   event.preventDefault(); const button=event.submitter; button.disabled=true; $("#tokenStatus").textContent="正在保存…";
