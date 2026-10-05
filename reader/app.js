@@ -47,6 +47,8 @@ let wordRequestId = 0;
 let playbackFrameId = null;
 let videoFrameCallbackId = null;
 let mediaStageResizeFrame = null;
+let seekPreviewFrame = null;
+let seekPreviewPointerX = 0;
 let wordElementsBySentence = [];
 let sentenceElementsByIndex=[];
 let annotationIndex=new Map();
@@ -407,6 +409,10 @@ function bindEvents() {
   $("#prevBtn").onclick = () => playSentence(Math.max(0, active - 1));
   $("#nextBtn").onclick = () => playSentence(Math.min(book.sentences.length - 1, active + 1));
   $("#seek").oninput = event => { resetWordHoverSession(); $("#audio").currentTime = event.target.value / 1000 * book.duration; syncVideoToAudio(true);syncPlaybackFrame(); };
+  $("#seek").addEventListener("pointerenter",showSeekSentencePreview);
+  $("#seek").addEventListener("pointermove",showSeekSentencePreview);
+  $("#seek").addEventListener("pointerleave",hideSeekSentencePreview);
+  $("#seek").addEventListener("pointercancel",hideSeekSentencePreview);
   const rates = [.75, 1, 1.25, 1.5]; let rateIndex = 1;
   $("#speedBtn").onclick = () => { rateIndex = (rateIndex + 1) % rates.length; $("#audio").playbackRate = rates[rateIndex];setVideoBaseRate();syncVideoToAudio(false);$("#speedBtn").textContent = rates[rateIndex] + "×"; };
   $("#sidebarToggle").onclick=()=>setSidebarCollapsed(true);
@@ -823,7 +829,7 @@ function showScreen(id) {
   $(".book-heading").style.display = reading ? "block" : "none";
   $(".top-actions").style.display = reading ? "flex" : "none";
   $("#backBtn").style.visibility = reading ? "visible" : "hidden";
-  if (!reading) { resetWordHoverSession();setFocusMode(false);if(eyeComfort){eyeComfort=false;savePreference({eyeComfort:false});}applyEyeComfort();$("#audio").pause();clearTimeout(shadowTimer); }
+  if (!reading) { hideSeekSentencePreview();resetWordHoverSession();setFocusMode(false);if(eyeComfort){eyeComfort=false;savePreference({eyeComfort:false});}applyEyeComfort();$("#audio").pause();clearTimeout(shadowTimer); }
   else {syncReaderPanels();applyEyeComfort();}
   syncReaderActionVisibility();scheduleTopbarContentAlignment();
   if(id!=="vocab")stopManualDictation();
@@ -1007,6 +1013,43 @@ function paintSentence(index,scroll=false){
 }
 function lastStartedIndex(items,time,getStart){let low=0,high=items.length-1,result=-1;while(low<=high){const middle=(low+high)>>1;if(getStart(items[middle])<=time){result=middle;low=middle+1;}else high=middle-1;}return result;}
 function sentenceIndexAt(time){return book?.sentences?.length?lastStartedIndex(book.sentences,time,item=>item.start):-1;}
+function sentenceIndexForPreview(time){
+  const sentences=book?.sentences||[];
+  if(!sentences.length)return -1;
+  const index=sentenceIndexAt(time);
+  if(index<0)return 0;
+  const current=sentences[index],next=sentences[index+1];
+  if(!next)return index;
+  const currentEnd=Number.isFinite(+current.end)?+current.end:+current.start;
+  const nextStart=Number.isFinite(+next.start)?+next.start:currentEnd;
+  if(time>currentEnd&&nextStart>currentEnd&&time>=(currentEnd+nextStart)/2)return index+1;
+  return index;
+}
+function showSeekSentencePreview(event){
+  if(!book?.sentences?.length||!Number.isFinite(+book.duration)||+book.duration<=0)return;
+  seekPreviewPointerX=event.clientX;
+  if(seekPreviewFrame!==null)return;
+  seekPreviewFrame=requestAnimationFrame(()=>{
+    seekPreviewFrame=null;
+    const seek=$("#seek"),preview=$("#seekSentencePreview"),rect=seek.getBoundingClientRect();
+    if(rect.width<=0)return;
+    const ratio=Math.max(0,Math.min(1,(seekPreviewPointerX-rect.left)/rect.width));
+    const time=ratio*(+book.duration),index=sentenceIndexForPreview(time),sentence=book.sentences[index];
+    if(!sentence)return hideSeekSentencePreview();
+    $("#seekPreviewTime").textContent=`${fmt(time)} · 第 ${index+1} 句`;
+    $("#seekPreviewText").textContent=sentence.text||"";
+    preview.classList.remove("hidden");preview.setAttribute("aria-hidden","false");
+    const left=Math.min(innerWidth-preview.offsetWidth-12,Math.max(12,seekPreviewPointerX-preview.offsetWidth/2));
+    const top=Math.max(12,rect.top-preview.offsetHeight-10);
+    preview.style.left=`${left}px`;preview.style.top=`${top}px`;
+  });
+}
+function hideSeekSentencePreview(){
+  if(seekPreviewFrame!==null){cancelAnimationFrame(seekPreviewFrame);seekPreviewFrame=null;}
+  const preview=$("#seekSentencePreview");
+  if(!preview)return;
+  preview.classList.add("hidden");preview.setAttribute("aria-hidden","true");
+}
 function wordElementAt(sentenceIndex,time){
   const sentence=book?.sentences?.[sentenceIndex],words=sentence?.words||[],elements=wordElementsBySentence[sentenceIndex]||[];
   if(!words.length||time<words[0].start)return null;

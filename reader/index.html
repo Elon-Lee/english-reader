@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20261005-6">
+  <link rel="stylesheet" href="styles.css?v=20261005-7">
 </head>
 <body class="runtime-pending">
   <aside class="sidebar">
@@ -178,6 +178,10 @@
     <span id="shortcutHint" class="shortcut-hint">A 上一句 · S 复读 · D 下一句 · 空格暂停</span>
     <audio id="audio" preload="metadata"></audio><audio id="recording"></audio>
   </footer>
+  <div id="seekSentencePreview" class="seek-sentence-preview hidden" role="tooltip" aria-hidden="true">
+    <small id="seekPreviewTime"></small>
+    <p id="seekPreviewText"></p>
+  </div>
   <div id="wordHoverMeaning" class="word-hover-meaning hidden" role="tooltip"></div>
   <dialog id="deleteBookDialog" class="delete-book-dialog">
     <form method="dialog">
@@ -214,6 +218,6 @@
       <div class="delete-dialog-actions"><button value="cancel">取消</button><button id="confirmUninstallNode" type="button" disabled>确认卸载</button></div>
     </form>
   </dialog>
-  <script src="app.js?v=20261005-6"></script>
+  <script src="app.js?v=20261005-7"></script>
 </body>
 </html>
