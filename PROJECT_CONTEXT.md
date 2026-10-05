@@ -956,3 +956,28 @@ tools/deployment/ssh_expect.exp
 deployment/systemd/shiyue-reader.service
 deployment/docker/Dockerfile
 ```
+
+## 低带宽远程节点优化（2026-10-05）
+
+不使用CDN时，当前远程Reader采用分层优化：
+
+- 首页只加载`/api/library`和轻量设置；完整词典、生词、学习记录、导入目录、部署配置均按页面进入时加载，不再自动打开书架第一本书。
+- 书架前8张封面优先加载，其余使用`loading=lazy`与`decoding=async`。导入时从原书第一页生成`.reader/cover-320.jpg`；现有36张封面从约4.9MiB降到约0.40MiB，平均约11.2KiB。
+- 大型书籍使用`/api/books/<id>/manifest`和`/api/books/<id>/chunks/<n>`。manifest保留全书轻量句子索引，词级时间轴每80句一个分块；浏览器初始加载当前位置前后分块并在播放接近边界时预取。
+- Python API与静态文本支持gzip；GET响应支持ETag和304。书架元数据、书籍manifest、时间轴分块、图片和媒体使用分级Cache-Control。
+- 视频导入生成`.reader/video-muted.mp4`：移除重复音轨并写入faststart索引；独立MP3继续作为点读主音频。
+- 保持现有离线运行镜像兼容，不增加Nginx依赖。Python Reader直接使用`socket.sendfile`发送静态大文件，并提供Range、gzip、ETag、304和分级缓存；客户端中断媒体请求时不再输出异常堆栈。
+- 这些服务端优化只涉及代码，保存节点配置后执行“升级程序”即可生效，不需要重新上传运行镜像或同步内容。
+
+本机实测：
+
+```text
+首页HTML gzip                  8.0 KiB
+app.js gzip                   41.4 KiB
+styles.css gzip               18.7 KiB
+/api/library gzip              2.5 KiB
+《简·爱》manifest gzip       118.0 KiB
+《简·爱》每80句分块 gzip      17.2 KiB
+```
+
+首屏不再请求约2.17MiB完整词典、约4MiB第一本书JSON、导入目录或部署配置。当前策略不生成低码率音频副本，因为重新编码可能引入编码器延迟并破坏已校准的词级时间轴；如后续需要低码率音频，应在CTC之前生成并以该文件完成最终对齐。

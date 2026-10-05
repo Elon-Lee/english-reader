@@ -2,7 +2,9 @@
 """Static reader server plus a local-only Whisper endpoint for shadowing."""
 import json
 import base64
+import gzip
 import hashlib
+import io
 import mimetypes
 import os
 import re
@@ -24,7 +26,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from library_db import BOOKS_ROOT, active_import_jobs, add_daily, annotate_word, canonical_youtube_series, create_job, delete_book, delete_import_jobs, dictionary, get_book, get_job, get_sentence_grammar, get_settings as db_get_settings, import_duplicates, imported_books, learning_days, library, mark_import_jobs_cancelling, now, pending_import_jobs, save_sentence_grammar, save_vocab, scan_catalog, set_settings, touch_book, update_job, update_vocab, vocabulary_list
+from library_db import BOOKS_ROOT, active_import_jobs, add_daily, annotate_word, canonical_youtube_series, create_job, delete_book, delete_import_jobs, dictionary, get_book, get_book_chunk, get_book_manifest, get_job, get_sentence_grammar, get_settings as db_get_settings, import_duplicates, imported_books, learning_days, library, mark_import_jobs_cancelling, now, pending_import_jobs, save_sentence_grammar, save_vocab, scan_catalog, set_settings, touch_book, update_job, update_vocab, vocabulary_list
 from deployment import manager as deployment_manager
 from youtube_subtitles import has_translated_english_track,select_chinese_track,select_native_english_track
 
@@ -177,10 +179,10 @@ class Handler(SimpleHTTPRequestHandler):
                 except ValueError:self.reply({"error":"invalid job"},400);return
                 result=deployment_manager.job_info(job_id,offset);self.reply(result or {"error":"job not found"},200 if result else 404);return
             self.send_error(404);return
-        if route.path == "/api/library": self.reply({"books":library()}); return
+        if route.path == "/api/library": self.reply({"books":library()},cache_control="private, max-age=15, stale-while-revalidate=120"); return
         if route.path == "/api/vocabulary": self.reply({"items":vocabulary_list()}); return
         if route.path == "/api/learning/days": self.reply({"days":learning_days(365)}); return
-        if route.path == "/api/local-dictionary": self.reply(dictionary()); return
+        if route.path == "/api/local-dictionary": self.reply(dictionary(),cache_control="private, max-age=3600"); return
         if route.path == "/api/import/catalog": self.reply({"series":scan_catalog()}); return
         if route.path == "/api/import/cover": self.import_cover(parse_qs(route.query)); return
         if route.path == "/api/import/jobs": self.reply({"jobs":active_import_jobs(),"pendingJobs":pending_import_jobs()}); return
@@ -189,8 +191,14 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError: job=None
             self.reply(job or {"error":"job not found"},200 if job else 404); return
         if route.path.startswith("/api/books/"):
-            book_id=unquote(route.path.split("/api/books/",1)[1]); result=get_book(book_id)
-            self.reply(result or {"error":"book not found"},200 if result else 404); return
+            value=unquote(route.path.split("/api/books/",1)[1]);parts=value.split("/");book_id=parts[0]
+            cache_control="no-store"
+            if len(parts)==2 and parts[1]=="manifest":result=get_book_manifest(book_id);cache_control="private, max-age=60, stale-while-revalidate=300"
+            elif len(parts)==3 and parts[1]=="chunks":
+                try:result=get_book_chunk(book_id,int(parts[2]));cache_control="private, max-age=3600, stale-while-revalidate=86400"
+                except ValueError:result=None
+            else:result=get_book(book_id)
+            self.reply(result or {"error":"book not found"},200 if result else 404,cache_control=cache_control); return
         if route.path == "/api/settings": self.get_settings(); return
         if route.path == "/api/word-hover": self.word_hover(parse_qs(route.query)); return
         if route.path == "/api/word-dictionary": self.word_dictionary(parse_qs(route.query)); return
@@ -199,7 +207,22 @@ class Handler(SimpleHTTPRequestHandler):
             self.serve_books_file(route.path); return
         range_header=self.headers.get("Range")
         if range_header and self.serve_range(range_header): return
+        if self.serve_reader_asset(route):return
         super().do_GET()
+    def serve_reader_asset(self,route):
+        relative=unquote(route.path).lstrip("/") or "index.html";path=(READER/relative).resolve()
+        try:path.relative_to(READER.resolve())
+        except ValueError:self.send_error(403);return True
+        if not path.is_file():return False
+        stat=path.stat();etag=f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+        if self.headers.get("If-None-Match")==etag:
+            self.send_response(304);self.send_header("ETag",etag);self.send_header("Cache-Control","public, max-age=31536000, immutable" if route.query and path.suffix in {".js",".css"} else "no-cache");self.end_headers();return True
+        data=path.read_bytes();content_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream";compressible=path.suffix.lower() in {".html",".js",".css",".json",".svg",".txt"}
+        encoded=compressible and "gzip" in self.headers.get("Accept-Encoding","").lower() and len(data)>1024
+        if encoded:data=gzip.compress(data,compresslevel=6)
+        self.send_response(200);self.send_header("Content-Type",content_type);self.send_header("Content-Length",str(len(data)));self.send_header("ETag",etag);self.send_header("Cache-Control","public, max-age=31536000, immutable" if route.query and path.suffix in {".js",".css"} else "no-cache")
+        if encoded:self.send_header("Content-Encoding","gzip");self.send_header("Vary","Accept-Encoding")
+        self.end_headers();self.wfile.write(data);return True
     def serve_range(self,range_header):
         relative=unquote(urlsplit(self.path).path).lstrip("/")
         path=(READER/relative).resolve()
@@ -228,7 +251,7 @@ class Handler(SimpleHTTPRequestHandler):
                 chunk=source.read(min(256*1024,remaining))
                 if not chunk: break
                 try: self.wfile.write(chunk)
-                except BrokenPipeError: break
+                except (BrokenPipeError,ConnectionResetError): break
                 remaining-=len(chunk)
         return True
     def do_POST(self):
@@ -451,13 +474,14 @@ class Handler(SimpleHTTPRequestHandler):
         try: path.relative_to(BOOKS_ROOT.resolve())
         except ValueError: self.send_error(403); return
         if not path.is_file(): self.send_error(404); return
+        stat=path.stat();etag=f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+        if self.headers.get("If-None-Match")==etag and not self.headers.get("Range"):
+            self.send_response(304);self.send_header("ETag",etag);self.send_header("Cache-Control",self.book_cache_control(path));self.end_headers();return
         range_header=self.headers.get("Range")
         if range_header: self.send_path_range(path,range_header); return
-        size=path.stat().st_size; self.send_response(200); self.send_header("Content-Type",mimetypes.guess_type(path.name)[0] or "application/octet-stream")
-        self.send_header("Content-Length",str(size)); self.send_header("Accept-Ranges","bytes"); self.end_headers()
-        with path.open("rb") as source:
-            try: shutil.copyfileobj(source,self.wfile)
-            except BrokenPipeError: pass
+        size=stat.st_size; self.send_response(200); self.send_header("Content-Type",mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+        self.send_header("Content-Length",str(size)); self.send_header("Accept-Ranges","bytes");self.send_header("ETag",etag);self.send_header("Cache-Control",self.book_cache_control(path)); self.end_headers()
+        self.send_file_content(path,0,size)
     def send_path_range(self,path,range_header):
         match=re.fullmatch(r"bytes=(\d*)-(\d*)",range_header.strip()); size=path.stat().st_size
         if not match: self.send_error(416); return
@@ -466,16 +490,28 @@ class Handler(SimpleHTTPRequestHandler):
         else: length=min(int(last),size); start=size-length; end=size-1
         if start<0 or start>=size or end<start:
             self.send_response(416); self.send_header("Content-Range",f"bytes */{size}"); self.end_headers(); return
-        length=end-start+1; self.send_response(206); self.send_header("Content-Type",mimetypes.guess_type(path.name)[0] or "application/octet-stream")
-        self.send_header("Accept-Ranges","bytes"); self.send_header("Content-Range",f"bytes {start}-{end}/{size}"); self.send_header("Content-Length",str(length)); self.end_headers()
-        with path.open("rb") as source:
-            source.seek(start); remaining=length
-            while remaining:
-                chunk=source.read(min(256*1024,remaining))
-                if not chunk: break
-                try: self.wfile.write(chunk)
-                except BrokenPipeError: break
-                remaining-=len(chunk)
+        length=end-start+1;stat=path.stat();etag=f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'; self.send_response(206); self.send_header("Content-Type",mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+        self.send_header("Accept-Ranges","bytes"); self.send_header("Content-Range",f"bytes {start}-{end}/{size}"); self.send_header("Content-Length",str(length));self.send_header("ETag",etag);self.send_header("Cache-Control",self.book_cache_control(path)); self.end_headers()
+        self.send_file_content(path,start,length)
+    def send_file_content(self,path,start,length):
+        try:
+            with path.open("rb") as source:
+                sent=self.connection.sendfile(source,offset=start,count=length)
+                if sent is None:return
+        except (AttributeError,OSError,BrokenPipeError,ConnectionResetError):
+            try:
+                with path.open("rb") as source:
+                    source.seek(start);remaining=length
+                    while remaining:
+                        chunk=source.read(min(256*1024,remaining))
+                        if not chunk:break
+                        self.wfile.write(chunk);remaining-=len(chunk)
+            except (BrokenPipeError,ConnectionResetError,OSError):pass
+    def book_cache_control(self,path):
+        suffix=path.suffix.lower()
+        if suffix in {".jpg",".jpeg",".png",".webp",".svg"}:return "public, max-age=604800, stale-while-revalidate=86400"
+        if suffix in {".mp3",".mp4",".m4a",".ogg",".wav"}:return "public, max-age=86400, stale-while-revalidate=3600"
+        return "public, max-age=3600"
     def get_settings(self):
         config=private_config(); token=config.get("diocoToken","")
         shortcuts=db_get_settings({"shortcutPrevious":"a","shortcutRepeat":"s","shortcutNext":"d","shortcutPlay":"space","shelfView":"tile","currentSeries":"","readerLayout":"side","wordTipSeconds":2,"reviewPageSize":10,"manualRepeatCount":3,"manualPauseSeconds":2,"highlightLeadMs":0,"eyeComfort":False,"heatmapRange":"year","sentenceAutoPause":False})
@@ -674,9 +710,14 @@ class Handler(SimpleHTTPRequestHandler):
                     if generation:result["aiExplanation"]=generation;result["explanationSource"]="Dioco Lexa + Stanza";result["explanationVersion"]=explanation_version;save_sentence_grammar(book_id,sentence_id,text,{key:value for key,value in result.items() if key not in {"bookId","sentenceId","model","updatedAt"}},result.get("model","stanza-en"))
             except Exception:pass
         self.reply(result)
-    def reply(self,data,status=200):
-        body=json.dumps(data,ensure_ascii=False).encode()
-        self.send_response(status); self.send_header("Content-Type","application/json; charset=utf-8")
+    def reply(self,data,status=200,cache_control="no-store"):
+        body=json.dumps(data,ensure_ascii=False,separators=(",",":")).encode();etag='"'+hashlib.sha256(body).hexdigest()[:24]+'"'
+        if self.command=="GET" and self.headers.get("If-None-Match")==etag:
+            self.send_response(304);self.send_header("ETag",etag);self.send_header("Cache-Control",cache_control);self.end_headers();return
+        encoded="gzip" in self.headers.get("Accept-Encoding","").lower() and len(body)>1024
+        if encoded:body=gzip.compress(body,compresslevel=6)
+        self.send_response(status); self.send_header("Content-Type","application/json; charset=utf-8");self.send_header("Cache-Control",cache_control);self.send_header("ETag",etag)
+        if encoded:self.send_header("Content-Encoding","gzip");self.send_header("Vary","Accept-Encoding")
         self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
     def deployment_allowed(self):
         address=self.client_address[0]

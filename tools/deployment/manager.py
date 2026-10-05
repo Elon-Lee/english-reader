@@ -420,16 +420,21 @@ def export_content(job,revision):
     for row in books:
         data=json.loads(row["data_json"])
         paths=[]
+        cover=row.get("cover_url","")
+        if cover.startswith("/books/"):paths.append(books_root/unquote(cover[len('/books/'):]))
         for key in ("audio","video"):
             url=data.get(key,"")
             if url.startswith("/books/"):paths.append(books_root/unquote(url[len('/books/'):]))
         base=data.get("pageBase","")
         if base.startswith("/books/"):
             directory=books_root/unquote(base[len('/books/'):]);paths.extend(directory.glob("page-*.jpg")) if directory.is_dir() else None
+        seen=set()
         for source in paths:
             entry=content_file_entry(source,books_root)
             if not entry:continue
-            relative,actual=entry;destination=stage/relative;destination.parent.mkdir(parents=True,exist_ok=True);destination.symlink_to(actual);files.append({"path":str(relative),"size":actual.stat().st_size,"mtime":actual.stat().st_mtime_ns})
+            relative,actual=entry
+            if str(relative) in seen:continue
+            seen.add(str(relative));destination=stage/relative;destination.parent.mkdir(parents=True,exist_ok=True);destination.symlink_to(actual);files.append({"path":str(relative),"size":actual.stat().st_size,"mtime":actual.stat().st_mtime_ns})
     payload={"revision":revision,"books":books,"book_artifacts":artifacts,"dictionary_entries":dictionary,"sentence_grammar":grammar}
     bundle=STATE/f"{revision}.json.gz"
     with gzip.open(bundle,"wt",encoding="utf-8") as output:json.dump(payload,output,ensure_ascii=False)

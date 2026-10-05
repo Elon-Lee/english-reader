@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import json
 import hashlib
+import math
 import re
 import sqlite3
 import shutil
+import subprocess
+import threading
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote
@@ -13,6 +17,8 @@ ROOT=Path(__file__).resolve().parents[1]
 BOOKS_ROOT=ROOT/"books"
 LOCAL_ROOT=ROOT/".local"
 DB_PATH=LOCAL_ROOT/"library.sqlite3"
+BOOK_CHUNK_SIZE=80
+BOOK_DATA_CACHE=OrderedDict();BOOK_DATA_CACHE_LOCK=threading.RLock();BOOK_DATA_CACHE_LIMIT=4
 
 def now(): return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
@@ -32,6 +38,11 @@ def connect():
     db=sqlite3.connect(DB_PATH,timeout=30)
     db.row_factory=sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA synchronous=NORMAL")
+    db.execute("PRAGMA cache_size=-32768")
+    db.execute("PRAGMA mmap_size=268435456")
+    db.execute("PRAGMA temp_store=MEMORY")
+    db.execute("PRAGMA foreign_keys=ON")
     db.executescript("""
     CREATE TABLE IF NOT EXISTS books (
       id TEXT PRIMARY KEY, title TEXT NOT NULL, english_title TEXT DEFAULT '',
@@ -177,8 +188,22 @@ def import_duplicates(title,series="",source_type="",external_id=""):
         if same_external or same_title:matches.append({"id":row["id"],"title":row["title"],"source_path":row["source_path"]})
     return matches
 
+def optimize_cover_url(cover_url):
+    if not isinstance(cover_url,str) or not cover_url.startswith("/books/") or cover_url.lower().endswith((".svg","cover-320.jpg")):return cover_url
+    source=(BOOKS_ROOT/unquote(cover_url[len("/books/"):])).resolve()
+    try:source.relative_to(BOOKS_ROOT.resolve())
+    except ValueError:return cover_url
+    if not source.is_file():return cover_url
+    target=(source.parent.parent/"cover-320.jpg") if source.parent.name=="pages" else source.with_name(source.stem+"-cover-320.jpg")
+    try:
+        if not target.exists() or target.stat().st_mtime_ns<source.stat().st_mtime_ns:
+            target.parent.mkdir(parents=True,exist_ok=True)
+            subprocess.run(["ffmpeg","-y","-v","error","-i",str(source),"-vf","scale=320:-2:force_original_aspect_ratio=decrease","-frames:v","1","-q:v","6",str(target)],check=True,timeout=60)
+        return "/books/"+str(target.relative_to(BOOKS_ROOT))
+    except (OSError,subprocess.SubprocessError):return cover_url
+
 def upsert_book(book,quality,source_path,series,page_base_url,cover_url):
-    stamp=now(); db=connect()
+    cover_url=optimize_cover_url(cover_url);stamp=now(); db=connect()
     db.execute("""INSERT INTO books(id,title,english_title,series,level,source_path,status,cover_url,page_base_url,audio_url,pdf_url,duration,alignment,data_json,quality_json,created_at,updated_at)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET title=excluded.title,english_title=excluded.english_title,series=excluded.series,level=excluded.level,
@@ -295,10 +320,41 @@ def annotate_word(book_id,sentence_id,word_index,corrected_word=None,note=None):
 
 def get_book(book_id):
     db=connect(); row=db.execute("SELECT * FROM books WHERE id=?",(book_id,)).fetchone()
-    annotations=[dict(item) for item in db.execute("SELECT * FROM word_annotations WHERE book_id=?",(book_id,)).fetchall()]; db.close()
+    annotations=[dict(item) for item in db.execute("SELECT * FROM word_annotations WHERE book_id=?",(book_id,)).fetchall()]
+    vocabulary=[dict(item) for item in db.execute("SELECT * FROM vocabulary WHERE book_id=? ORDER BY updated_at DESC",(book_id,)).fetchall()]; db.close()
     if not row: return None
-    result=dict(row); result["book"]=json.loads(result.pop("data_json")); result["quality"]=json.loads(result.pop("quality_json") or "{}"); result["annotations"]=annotations
+    result=dict(row);raw=result.pop("data_json");result["book"]=cached_book_data(book_id,result["updated_at"],raw); result["quality"]=json.loads(result.pop("quality_json") or "{}"); result["annotations"]=annotations;result["vocabulary"]=vocabulary
     return result
+
+def cached_book_data(book_id,updated_at,raw):
+    key=(str(book_id),str(updated_at or ""))
+    with BOOK_DATA_CACHE_LOCK:
+        found=BOOK_DATA_CACHE.get(key)
+        if found is not None:BOOK_DATA_CACHE.move_to_end(key);return found
+    parsed=json.loads(raw)
+    with BOOK_DATA_CACHE_LOCK:
+        BOOK_DATA_CACHE[key]=parsed;BOOK_DATA_CACHE.move_to_end(key)
+        while len(BOOK_DATA_CACHE)>BOOK_DATA_CACHE_LIMIT:BOOK_DATA_CACHE.popitem(last=False)
+    return parsed
+
+def get_book_manifest(book_id):
+    result=get_book(book_id)
+    if not result:return None
+    source=result["book"];sentences=[]
+    for sentence in source.get("sentences",[]):
+        shell={key:value for key,value in sentence.items() if key!="words"};shell["wordCount"]=len(sentence.get("words",[]));sentences.append(shell)
+    result["book"]={**source,"sentences":sentences,"chunkSize":BOOK_CHUNK_SIZE,"sentenceCount":len(sentences),"chunkCount":math.ceil(len(sentences)/BOOK_CHUNK_SIZE)}
+    return result
+
+def get_book_chunk(book_id,chunk_index):
+    try:chunk_index=max(0,int(chunk_index))
+    except (TypeError,ValueError):return None
+    db=connect();row=db.execute("SELECT data_json,updated_at FROM books WHERE id=?",(book_id,)).fetchone();db.close()
+    if not row:return None
+    sentences=cached_book_data(book_id,row["updated_at"],row["data_json"]).get("sentences",[]);start=chunk_index*BOOK_CHUNK_SIZE
+    if start>=len(sentences):return None
+    end=min(len(sentences),start+BOOK_CHUNK_SIZE)
+    return {"bookId":book_id,"chunkIndex":chunk_index,"chunkSize":BOOK_CHUNK_SIZE,"start":start,"end":end,"sentences":sentences[start:end]}
 
 def normalize_confirmation_title(value):
     """Ignore every Unicode whitespace character when confirming a destructive delete."""

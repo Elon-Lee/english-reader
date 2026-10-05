@@ -51,6 +51,7 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
     if video:
         progress(18,"生成视频关键帧");run(["ffmpeg","-y","-v","error","-i",video,"-vf","fps=1/15,scale=960:-2","-q:v","3",pages/"page-%03d.jpg"])
         if not any(pages.glob("*.jpg")):run(["ffmpeg","-y","-v","error","-ss","0","-i",video,"-frames:v","1","-vf","scale=960:-2",pages/"page-001.jpg"])
+        optimized_video=generated/"video-muted.mp4";run(["ffmpeg","-y","-v","error","-i",video,"-map","0:v:0","-c:v","copy","-an","-movflags","+faststart",optimized_video])
     else:progress(18,"音频读物无需生成画面")
 
     strategy=metadata.get("subtitleStrategy","auto");subtitle=None;translation_subtitle=None;subtitle_type="whisper"
@@ -79,7 +80,7 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
         with log.open("w") as output:
             run([WHISPER,"-m",MODEL,"-f",audio,"-l","en","-t",WHISPER_THREADS,"-p","2","-ng","-dtw","base.en","-ml","1","-sow","-ojf","-of",prefix,"-np"],stdout=subprocess.DEVNULL,stderr=output)
     progress(72,"构建音频正文与词级时间轴" if audio_only else "构建视频正文与词级时间轴")
-    page_base="/books/"+str(pages.relative_to(BOOKS_ROOT)) if video else "";audio_url="/books/"+str(audio.relative_to(BOOKS_ROOT));video_url="/books/"+str(video.relative_to(BOOKS_ROOT)) if video else ""
+    page_base="/books/"+str(pages.relative_to(BOOKS_ROOT)) if video else "";audio_url="/books/"+str(audio.relative_to(BOOKS_ROOT));video_url="/books/"+str(optimized_video.relative_to(BOOKS_ROOT)) if video else ""
     book_file=generated/"book.json"
     command=[sys.executable,ROOT/"tools/build_video_book.py","--audio",audio,"--output",book_file,"--id",book_id,
       "--title",metadata["title"],"--english-title",metadata.get("englishTitle",""),"--level",metadata.get("level",""),"--audio-url",audio_url,
