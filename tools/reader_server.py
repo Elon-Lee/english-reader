@@ -166,9 +166,12 @@ class Handler(SimpleHTTPRequestHandler):
         if route.path == "/api/health": self.reply({"status":"ok","runtimeMode":RUNTIME_MODE,"books":len(library()),"time":now()}); return
         if route.path.startswith("/api/deployment/"):
             if not self.deployment_allowed():return
-            if route.path == "/api/deployment/config": self.reply({"target":deployment_manager.public_target(deployment_manager.get_target()),"jobs":deployment_manager.recent_jobs(),"status":deployment_manager.dashboard_status()});return
-            if route.path == "/api/deployment/releases": self.reply({"releases":deployment_manager.remote_releases()});return
-            if route.path == "/api/deployment/content-releases": self.reply({"releases":deployment_manager.remote_content_releases()});return
+            query=parse_qs(route.query)
+            try:target_id=int((query.get("targetId") or [0])[0])
+            except (TypeError,ValueError):target_id=0
+            if route.path == "/api/deployment/config": self.reply({"targets":deployment_manager.list_targets(),"jobs":deployment_manager.recent_jobs(limit=20),"status":deployment_manager.dashboard_status(target_id or None)});return
+            if route.path == "/api/deployment/releases": self.reply({"releases":deployment_manager.remote_releases(target_id) if target_id else []});return
+            if route.path == "/api/deployment/content-releases": self.reply({"releases":deployment_manager.remote_content_releases(target_id) if target_id else []});return
             if route.path.startswith("/api/deployment/jobs/"):
                 try:job_id=int(route.path.rsplit("/",1)[1]);offset=int((parse_qs(route.query).get("offset") or [0])[0])
                 except ValueError:self.reply({"error":"invalid job"},400);return
@@ -234,20 +237,24 @@ class Handler(SimpleHTTPRequestHandler):
             try:item=self.json_body()
             except Exception:self.reply({"error":"invalid json"},400);return
             try:
+                target_id=int(item.get("targetId") or item.get("id") or 0)
                 if self.path == "/api/deployment/config":self.reply({"target":deployment_manager.save_target(item,str(item.get("password","")).strip())});return
-                if self.path == "/api/deployment/test":self.reply({"jobId":deployment_manager.start_test()},202);return
-                if self.path == "/api/deployment/deploy":self.reply({"jobId":deployment_manager.start_deploy()},202);return
-                if self.path == "/api/deployment/upgrade":self.reply({"jobId":deployment_manager.start_upgrade()},202);return
-                if self.path == "/api/deployment/sync":self.reply({"jobId":deployment_manager.start_sync()},202);return
+                if not target_id:self.reply({"error":"请选择远程节点"},400);return
+                if self.path == "/api/deployment/test":self.reply({"jobId":deployment_manager.start_test(target_id)},202);return
+                if self.path == "/api/deployment/deploy":self.reply({"jobId":deployment_manager.start_deploy(target_id)},202);return
+                if self.path == "/api/deployment/upgrade":self.reply({"jobId":deployment_manager.start_upgrade(target_id)},202);return
+                if self.path == "/api/deployment/sync":self.reply({"jobId":deployment_manager.start_sync(target_id)},202);return
+                if self.path == "/api/deployment/uninstall":self.reply({"jobId":deployment_manager.start_uninstall(target_id,str(item.get("confirmName","")).strip())},202);return
+                if self.path == "/api/deployment/delete-config":self.reply({"result":deployment_manager.delete_target_config(target_id)});return
                 if self.path == "/api/deployment/content-rollback":
                     release=str(item.get("releaseId","")).strip()
                     if not release.startswith("content-"):self.reply({"error":"invalid content release"},400);return
-                    self.reply({"jobId":deployment_manager.start_content_rollback(release)},202);return
-                if self.path == "/api/deployment/cleanup":self.reply({"jobId":deployment_manager.start_cleanup(item.get("retentionDays",30))},202);return
+                    self.reply({"jobId":deployment_manager.start_content_rollback(target_id,release)},202);return
+                if self.path == "/api/deployment/cleanup":self.reply({"jobId":deployment_manager.start_cleanup(target_id,item.get("retentionDays",30))},202);return
                 if self.path == "/api/deployment/rollback":
                     release=str(item.get("releaseId","")).strip()
                     if not release.startswith("code-"):self.reply({"error":"invalid release"},400);return
-                    self.reply({"jobId":deployment_manager.start_rollback(release)},202);return
+                    self.reply({"jobId":deployment_manager.start_rollback(target_id,release)},202);return
             except Exception as exc:self.reply({"error":str(exc)},400);return
             self.send_error(404);return
         if RUNTIME_MODE=="reader" and self.path.startswith("/api/import"):

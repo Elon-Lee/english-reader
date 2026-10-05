@@ -10,13 +10,15 @@ class DockerInstallScriptTests(unittest.TestCase):
         for command in (
             "yum install -y yum-utils",
             "yum-config-manager --add-repo http://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo",
-            "yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo",
+            "yum clean all",
             "yum makecache fast",
-            "yum install -y docker-ce docker-ce-cli containerd.io",
-            "systemctl start docker",
-            "systemctl enable docker",
+            "install -y docker-ce docker-ce-cli containerd.io",
+            "systemctl enable --now docker",
+            "Docker CE安装尝试 $attempt/3",
         ):
             self.assertIn(command,source)
+        self.assertNotIn("yum-config-manager --add-repo https://download.docker.com",source)
+        self.assertIn('while [ "$attempt" -le 3 ]',source)
 
     def test_deploy_flow_calls_docker_initialization_before_runtime(self):
         source=inspect.getsource(manager.start_deploy)

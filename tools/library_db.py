@@ -79,15 +79,16 @@ def connect():
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS deployment_targets (
-      id INTEGER PRIMARY KEY CHECK(id=1), name TEXT NOT NULL DEFAULT '远程服务器', host TEXT NOT NULL,
+      id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL DEFAULT '远程服务器', host TEXT NOT NULL,
       port INTEGER NOT NULL DEFAULT 22, username TEXT NOT NULL DEFAULT 'root', remote_root TEXT NOT NULL DEFAULT '/srv/shiyue',
       service_port INTEGER NOT NULL DEFAULT 8765, install_recording INTEGER NOT NULL DEFAULT 1,
+      use_https INTEGER NOT NULL DEFAULT 1,
       host_fingerprint TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS deployment_jobs (
       id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, status TEXT NOT NULL, progress INTEGER NOT NULL DEFAULT 0,
       step TEXT DEFAULT '', release_id TEXT DEFAULT '', log_path TEXT NOT NULL, error TEXT DEFAULT '',
-      result_json TEXT DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      result_json TEXT DEFAULT '{}', target_id INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS deployment_releases (
       release_id TEXT PRIMARY KEY, target_id INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL,
@@ -103,6 +104,28 @@ def connect():
     if "kind" not in job_columns: db.execute("ALTER TABLE import_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'books'")
     if "batch_id" not in job_columns: db.execute("ALTER TABLE import_jobs ADD COLUMN batch_id TEXT NOT NULL DEFAULT ''")
     if "pid" not in job_columns: db.execute("ALTER TABLE import_jobs ADD COLUMN pid INTEGER")
+    target_sql=(db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='deployment_targets'").fetchone() or [""])[0] or ""
+    if "CHECK(id=1)" in target_sql.replace(" ",""):
+        db.executescript("""
+        ALTER TABLE deployment_targets RENAME TO deployment_targets_single;
+        CREATE TABLE deployment_targets (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL DEFAULT '远程服务器', host TEXT NOT NULL,
+          port INTEGER NOT NULL DEFAULT 22, username TEXT NOT NULL DEFAULT 'root', remote_root TEXT NOT NULL DEFAULT '/srv/shiyue',
+          service_port INTEGER NOT NULL DEFAULT 8765, install_recording INTEGER NOT NULL DEFAULT 1,
+          use_https INTEGER NOT NULL DEFAULT 1,
+          host_fingerprint TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        INSERT INTO deployment_targets(id,name,host,port,username,remote_root,service_port,install_recording,host_fingerprint,created_at,updated_at)
+          SELECT id,name,host,port,username,remote_root,service_port,install_recording,host_fingerprint,created_at,updated_at FROM deployment_targets_single;
+        DROP TABLE deployment_targets_single;
+        """)
+    target_columns={row[1] for row in db.execute("PRAGMA table_info(deployment_targets)")}
+    if "use_https" not in target_columns:db.execute("ALTER TABLE deployment_targets ADD COLUMN use_https INTEGER NOT NULL DEFAULT 1")
+    deployment_job_columns={row[1] for row in db.execute("PRAGMA table_info(deployment_jobs)")}
+    if "target_id" not in deployment_job_columns:db.execute("ALTER TABLE deployment_jobs ADD COLUMN target_id INTEGER")
+    db.execute("UPDATE deployment_jobs SET target_id=1 WHERE target_id IS NULL AND EXISTS(SELECT 1 FROM deployment_targets WHERE id=1)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_deployment_jobs_target ON deployment_jobs(target_id,id DESC)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_deployment_releases_target ON deployment_releases(target_id,deployed_at DESC)")
     db.commit()
     return db
 

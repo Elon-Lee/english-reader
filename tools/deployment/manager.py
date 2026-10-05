@@ -22,9 +22,12 @@ def connect():
 
 def keychain_service(target):return f"shiyue-deploy:{target['username']}@{target['host']}:{target['port']}"
 def save_password(target,password):
-    MEMORY_PASSWORDS[target["id"]]=password
     if shutil.which("security"):
-        subprocess.run(["security","add-generic-password","-U","-a",target["username"],"-s",keychain_service(target),"-w"],input=password+"\n",text=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        try:
+            result=subprocess.run(["security","add-generic-password","-U","-a",target["username"],"-s",keychain_service(target),"-w",password],text=True,capture_output=True,timeout=15)
+        except subprocess.TimeoutExpired as exc:raise ValueError("保存SSH密码到macOS钥匙串超时") from exc
+        if result.returncode!=0:raise ValueError("无法保存SSH密码到macOS钥匙串："+(result.stderr.strip() or "security命令失败"))
+    MEMORY_PASSWORDS[target["id"]]=password
 def load_password(target):
     if target["id"] in MEMORY_PASSWORDS:return MEMORY_PASSWORDS[target["id"]]
     if shutil.which("security"):
@@ -32,24 +35,63 @@ def load_password(target):
         if result.returncode==0:return result.stdout.strip()
     return ""
 
-def get_target():
-    db=connect();row=db.execute("SELECT * FROM deployment_targets WHERE id=1").fetchone();db.close();return dict(row) if row else None
+def get_target(target_id):
+    try:target_id=int(target_id)
+    except (TypeError,ValueError):return None
+    db=connect();row=db.execute("SELECT * FROM deployment_targets WHERE id=?",(target_id,)).fetchone();db.close();return dict(row) if row else None
+def list_targets():
+    db=connect();rows=[dict(row) for row in db.execute("SELECT * FROM deployment_targets ORDER BY updated_at DESC,id")]
+    latest={}
+    for row in db.execute("SELECT * FROM deployment_jobs WHERE target_id IS NOT NULL AND kind NOT IN ('release_list','content_release_list') ORDER BY id DESC"):
+        latest.setdefault(row["target_id"],dict(row))
+    db.close();result=[]
+    for row in rows:
+        item=public_target(row);job=latest.get(row["id"])
+        item["latestJob"]={key:job.get(key) for key in ("id","kind","status","progress","step","error","updated_at")} if job else None
+        result.append(item)
+    return result
 def save_target(data,password=""):
     host=str(data.get("host","")).strip();username=str(data.get("username","root")).strip() or "root"
     if not host:raise ValueError("请输入SSH地址")
     port=max(1,min(65535,int(data.get("port",22))));remote_root=str(data.get("remoteRoot","/srv/shiyue")).strip() or "/srv/shiyue"
-    service_port=max(1,min(65535,int(data.get("servicePort",8765))));stamp=now();db=connect()
-    db.execute("INSERT INTO deployment_targets(id,name,host,port,username,remote_root,service_port,install_recording,created_at,updated_at) VALUES(1,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,host=excluded.host,port=excluded.port,username=excluded.username,remote_root=excluded.remote_root,service_port=excluded.service_port,install_recording=excluded.install_recording,updated_at=excluded.updated_at",
-      (str(data.get("name","远程服务器")),host,port,username,remote_root,service_port,1 if data.get("installRecording",True) else 0,stamp,stamp));db.commit();row=dict(db.execute("SELECT * FROM deployment_targets WHERE id=1").fetchone());db.close()
-    if password:save_password(row,password)
+    if remote_root in {"","/","/root","/home","/srv"}:raise ValueError("远程目录范围过大，请使用类似 /srv/shiyue 的独立目录")
+    service_port=max(1,min(65535,int(data.get("servicePort",8765))));stamp=now();db=connect();target_id=data.get("id") or data.get("targetId")
+    if target_id:
+        target_id=int(target_id)
+        if not db.execute("SELECT 1 FROM deployment_targets WHERE id=?",(target_id,)).fetchone():db.close();raise ValueError("远程节点不存在")
+        db.execute("UPDATE deployment_targets SET name=?,host=?,port=?,username=?,remote_root=?,service_port=?,install_recording=?,use_https=?,updated_at=? WHERE id=?",(str(data.get("name","远程服务器")).strip() or "远程服务器",host,port,username,remote_root,service_port,1 if data.get("installRecording",True) else 0,1 if data.get("useHttps",True) else 0,stamp,target_id))
+    else:
+        existing=db.execute("SELECT id FROM deployment_targets WHERE host=? AND port=? AND username=? AND remote_root=? ORDER BY id LIMIT 1",(host,port,username,remote_root)).fetchone()
+        if existing:
+            target_id=existing[0];db.execute("UPDATE deployment_targets SET name=?,service_port=?,install_recording=?,use_https=?,updated_at=? WHERE id=?",(str(data.get("name","远程服务器")).strip() or "远程服务器",service_port,1 if data.get("installRecording",True) else 0,1 if data.get("useHttps",True) else 0,stamp,target_id))
+        else:
+            cur=db.execute("INSERT INTO deployment_targets(name,host,port,username,remote_root,service_port,install_recording,use_https,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",(str(data.get("name","远程服务器")).strip() or "远程服务器",host,port,username,remote_root,service_port,1 if data.get("installRecording",True) else 0,1 if data.get("useHttps",True) else 0,stamp,stamp));target_id=cur.lastrowid
+    row=dict(db.execute("SELECT * FROM deployment_targets WHERE id=?",(target_id,)).fetchone())
+    try:
+        if password:save_password(row,password)
+        db.commit()
+    except Exception:
+        db.rollback();db.close();raise
+    db.close()
     return public_target(row)
+def delete_target_config(target_id):
+    target=get_target(target_id)
+    if not target:raise ValueError("远程节点不存在")
+    db=connect();active=db.execute("SELECT 1 FROM deployment_jobs WHERE target_id=? AND status IN ('queued','running')",(target["id"],)).fetchone()
+    if active:db.close();raise ValueError("该节点仍有任务运行，不能删除配置")
+    db.execute("DELETE FROM deployment_releases WHERE target_id=?",(target["id"],));db.execute("DELETE FROM deployment_jobs WHERE target_id=?",(target["id"],));db.execute("DELETE FROM deployment_targets WHERE id=?",(target["id"],));db.commit();db.close()
+    MEMORY_PASSWORDS.pop(target["id"],None)
+    for path in (KEYS/f"target-{target['id']}-ed25519",KEYS/f"target-{target['id']}-ed25519.pub"):
+        path.unlink(missing_ok=True)
+    if shutil.which("security"):subprocess.run(["security","delete-generic-password","-a",target["username"],"-s",keychain_service(target)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    return {"id":target["id"],"name":target["name"],"deleted":True}
 def public_target(row):
     if not row:return None
     result=dict(row);key=KEYS/f"target-{row['id']}-ed25519";result["passwordConfigured"]=bool(load_password(row) or key.exists());result["keyConfigured"]=key.exists();result.pop("created_at",None);return result
 
 class Job:
-    def __init__(self,kind):
-        LOGS.mkdir(parents=True,exist_ok=True);stamp=now();db=connect();cur=db.execute("INSERT INTO deployment_jobs(kind,status,progress,step,log_path,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",(kind,"queued",0,"等待开始","",stamp,stamp));self.id=cur.lastrowid;self.log=LOGS/f"{self.id}.log";db.execute("UPDATE deployment_jobs SET log_path=? WHERE id=?",(str(self.log),self.id));db.commit();db.close();self.write(f"任务 #{self.id} · {kind} · {stamp}")
+    def __init__(self,kind,target_id=None):
+        LOGS.mkdir(parents=True,exist_ok=True);stamp=now();db=connect();cur=db.execute("INSERT INTO deployment_jobs(kind,status,progress,step,log_path,target_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",(kind,"queued",0,"等待开始","",target_id,stamp,stamp));self.id=cur.lastrowid;self.target_id=target_id;self.log=LOGS/f"{self.id}.log";db.execute("UPDATE deployment_jobs SET log_path=? WHERE id=?",(str(self.log),self.id));db.commit();db.close();self.write(f"任务 #{self.id} · {kind} · 节点 {target_id or '-'} · {stamp}")
     def update(self,progress,step,status="running",**extra):
         fields={"progress":int(progress),"step":step,"status":status,"updated_at":now(),**extra};db=connect();db.execute("UPDATE deployment_jobs SET "+",".join(f"{key}=?" for key in fields)+" WHERE id=?",[*fields.values(),self.id]);db.commit();db.close();self.write(f"[{progress:3}%] {step}")
     def write(self,text):
@@ -182,7 +224,7 @@ def build_code_package(job,release):
     digest=hashlib.sha256(target.read_bytes()).hexdigest();job.write(f"代码包：{target.name} · {target.stat().st_size/1024/1024:.1f} MiB · sha256={digest}");return target,digest
 
 def ensure_remote_docker(job,remote):
-    probe=remote.ssh("if command -v docker >/dev/null 2>&1; then (docker info >/dev/null 2>&1 || (command -v systemctl >/dev/null 2>&1 && systemctl start docker >/dev/null 2>&1) || service docker start >/dev/null 2>&1 || true); docker info >/dev/null 2>&1 && echo SHIYUE_DOCKER_READY; fi")
+    probe=remote.ssh("if command -v docker >/dev/null 2>&1; then (docker info >/dev/null 2>&1 || (command -v systemctl >/dev/null 2>&1 && systemctl enable --now docker >/dev/null 2>&1) || service docker start >/dev/null 2>&1 || true); docker info >/dev/null 2>&1 && echo SHIYUE_DOCKER_READY; fi")
     if "SHIYUE_DOCKER_READY" in probe:
         job.write("远程Docker已安装且运行正常");return
     job.update(9,"远程安装Docker")
@@ -193,12 +235,34 @@ if [ "$(id -u)" -ne 0 ]; then
   as_root=sudo
 fi
 if command -v yum >/dev/null 2>&1; then
-  echo '检测到yum，按Docker CE仓库安装流程执行'
+  echo '检测到yum，使用阿里云Docker CE仓库安装'
   $as_root yum install -y yum-utils
+  $as_root rm -f /etc/yum.repos.d/docker-ce.repo
   $as_root yum-config-manager --add-repo http://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo
-  $as_root yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+  if ! $as_root grep -Eq 'mirrors\\.aliyun\\.com/docker-ce' /etc/yum.repos.d/docker-ce.repo; then
+    echo '阿里云Docker CE仓库配置写入失败' >&2
+    exit 3
+  fi
+  $as_root yum clean all
   $as_root yum makecache fast || $as_root yum makecache
-  $as_root yum install -y docker-ce docker-ce-cli containerd.io
+  installed=0
+  attempt=1
+  while [ "$attempt" -le 3 ]; do
+    echo "Docker CE安装尝试 $attempt/3"
+    if $as_root yum --setopt=retries=5 --setopt=timeout=60 install -y docker-ce docker-ce-cli containerd.io; then
+      installed=1
+      break
+    fi
+    echo "Docker CE第 $attempt 次安装失败，清理缓存后重试" >&2
+    $as_root yum clean packages || true
+    $as_root rm -rf /var/cache/yum/*/docker-ce-* /var/cache/yum/*/*/packages/docker-* /var/cache/yum/*/*/packages/containerd.io-* 2>/dev/null || true
+    $as_root yum makecache fast || $as_root yum makecache
+    attempt=$((attempt+1))
+  done
+  if [ "$installed" -ne 1 ]; then
+    echo 'Docker CE通过阿里云仓库连续3次安装失败，请检查服务器到mirrors.aliyun.com的网络' >&2
+    exit 4
+  fi
 elif command -v curl >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com | sh
 elif command -v wget >/dev/null 2>&1; then
@@ -212,12 +276,15 @@ else
   exit 2
 fi
 if command -v systemctl >/dev/null 2>&1; then
-  $as_root systemctl start docker
-  $as_root systemctl enable docker
+  $as_root systemctl enable --now docker
 else
   $as_root service docker start
 fi
-docker info >/dev/null
+if ! docker info >/dev/null 2>&1; then
+  echo 'Docker已安装，但daemon启动或连接失败' >&2
+  if command -v systemctl >/dev/null 2>&1; then $as_root systemctl status docker --no-pager -l >&2 || true; fi
+  exit 5
+fi
 docker --version
 """
     remote.ssh(script);job.write("远程Docker安装完成")
@@ -293,14 +360,15 @@ def ensure_remote_tls(job,remote,target):
     certificate.parent.mkdir(parents=True,exist_ok=True);remote.scp_from(f"{root}/shared/https/rootCA.pem",certificate);return certificate
 
 def docker_run_command(target,image=RUNTIME_IMAGE):
-    root=shlex.quote(target["remote_root"]);port=int(target["service_port"]);recording=bool(target["install_recording"])
+    root=shlex.quote(target["remote_root"]);port=int(target["service_port"]);recording=bool(target["install_recording"]);use_https=bool(target.get("use_https",1))
     options=["docker run -d --name shiyue-reader --restart unless-stopped","--network host","-e READER_HOST=0.0.0.0",f"-e READER_PORT={port}","-e SHIYUE_RUNTIME_MODE=reader",
       f"-v {root}/current/reader:/app/reader:ro",f"-v {root}/current/tools:/app/tools:ro",f"-v {root}/shared/books:/app/books",f"-v {root}/shared/.local:/app/.local",f"-v {root}/shared/cache:/app/.cache",f"-v {root}/shared/config/dioco.local.json:/app/.dioco.local.json"]
-    if recording:options += [f"-v {root}/shared/https:/certs:ro",f"-v {root}/shared/whisper/ggml-base.en.bin:/opt/shiyue/models/ggml-base.en.bin:ro","-e READER_TLS_CERT=/certs/server-cert.pem","-e READER_TLS_KEY=/certs/server-key.pem"]
+    if recording:options += [f"-v {root}/shared/whisper/ggml-base.en.bin:/opt/shiyue/models/ggml-base.en.bin:ro"]
+    if use_https:options += [f"-v {root}/shared/https:/certs:ro","-e READER_TLS_CERT=/certs/server-cert.pem","-e READER_TLS_KEY=/certs/server-key.pem"]
     options.append(shlex.quote(image));return " \\\n  ".join(options)
 
 def health_check_command(target):
-    scheme="https" if target["install_recording"] else "http";port=int(target["service_port"])
+    scheme="https" if target.get("use_https",1) else "http";port=int(target["service_port"])
     code=f"import json,ssl,urllib.request; u='{scheme}://127.0.0.1:{port}/api/health'; c=ssl._create_unverified_context() if u.startswith('https') else None; print(urllib.request.urlopen(u,context=c,timeout=20).read().decode())"
     return f"docker exec shiyue-reader python3 -c {shlex.quote(code)}"
 
@@ -379,21 +447,21 @@ def sync_content(job,remote,target,progress=None):
     script=f"set -e; cp {shlex.quote(root)}/shared/.local/library.sqlite3 {shlex.quote(root)}/backups/databases/{revision}.sqlite3 2>/dev/null || true; docker exec shiyue-reader python3 /app/tools/deployment/remote_apply.py /app/.local/{bundle.name} /app/.local/library.sqlite3; cp /tmp/{manifest.name} {shlex.quote(root)}/manifests/current-content.json; cp /tmp/{manifest.name} {shlex.quote(root)}/manifests/history/{revision}.json; cp {shlex.quote(remote_bundle)} {shlex.quote(root)}/manifests/history/{revision}.json.gz; docker restart shiyue-reader >/dev/null; sleep 3; {health}; rm -f {shlex.quote(remote_bundle)} /tmp/{manifest.name}"
     output=remote.ssh(script);return {"contentRevision":revision,"health":output,"media":sync_result}
 
-def run_task(kind,worker):
-    job=Job(kind)
+def run_task(kind,worker,target_id):
+    target_id=int(target_id);job=Job(kind,target_id)
     def target():
         if not TASK_LOCK.acquire(blocking=False):job.fail("已有部署或同步任务正在运行");return
         try:
-            job.update(1,"读取远程配置");config=get_target()
+            job.update(1,"读取远程配置");config=get_target(target_id)
             if not config:raise ValueError("请先保存远程服务器配置")
             remote=Remote(config,job);remote.ensure_key();worker(job,remote,config)
         except Exception as exc:job.fail(exc)
         finally:TASK_LOCK.release()
     threading.Thread(target=target,daemon=True).start();return job.id
 
-def start_test():
-    return run_task("connection_test",lambda job,remote,target:(job.update(30,"连接SSH"),remote.ssh("uname -a && id && df -h /"),job.complete({"connected":True},"连接正常")))
-def start_deploy():
+def start_test(target_id):
+    return run_task("connection_test",lambda job,remote,target:(job.update(30,"连接SSH"),remote.ssh("uname -a && id && df -h /"),job.complete({"connected":True,"targetId":target["id"]},"连接正常")),target_id)
+def start_deploy(target_id):
     def worker(job,remote,target):
         release=new_release_id("code");job.update(4,"检查远程Linux架构",release_id=release);download_arch,oci_arch=remote_arch(remote);job.write(f"远程架构：{download_arch}")
         ensure_remote_docker(job,remote);runtime=ensure_remote_runtime(job,remote,oci_arch)
@@ -406,12 +474,13 @@ def start_deploy():
             output=remote.ssh(f"command -v sha256sum >/dev/null 2>&1 && test -f {shlex.quote(remote_model)} && sha256sum {shlex.quote(remote_model)} | cut -d' ' -f1 || true").strip().splitlines();remote_hash=output[-1] if output else ""
             if remote_hash!=local_hash:job.update(37,"上传服务器端录音模型（约141MiB）");remote.scp(model,remote_model)
             else:job.write("远程录音模型已存在且校验一致，跳过上传")
-            certificate=ensure_remote_tls(job,remote,target);job.write(f"其他设备使用录音前请安装根证书：{certificate}")
+        if target.get("use_https",1):
+            certificate=ensure_remote_tls(job,remote,target);job.write(f"HTTPS根证书：{certificate}")
         job.update(50,"激活代码版本并启动运行容器");health=remote.ssh(bootstrap_script(target,release,package.name))
         content=sync_content(job,remote,target,{"scan":58,"prepare":62,"generate":65,"package":68,"upload":72,"apply":80,"database":86,"merge":91})
-        job.update(97,"最终健康检查");final_health=remote.ssh(health_check_command(target));db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=1 AND status='active'");db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,1,"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close();job.complete({"releaseId":release,"health":final_health,"initialHealth":health,"contentRevision":content["contentRevision"],"media":content["media"],"runtimeArchive":str(runtime),"rootCertificate":str(certificate) if certificate else ""},"一键完整部署完成")
-    return run_task("code_deploy",worker)
-def start_upgrade():
+        job.update(97,"最终健康检查");final_health=remote.ssh(health_check_command(target));db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close();job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"initialHealth":health,"contentRevision":content["contentRevision"],"media":content["media"],"runtimeArchive":str(runtime),"rootCertificate":str(certificate) if certificate else ""},"一键完整部署完成")
+    return run_task("code_deploy",worker,target_id)
+def start_upgrade(target_id):
     def worker(job,remote,target):
         release=new_release_id("code");job.update(8,"检查远程运行环境",release_id=release)
         output=remote.ssh(f"set -e; docker info >/dev/null; docker image inspect {shlex.quote(RUNTIME_IMAGE)} >/dev/null; test -d {shlex.quote(target['remote_root'])}/shared/.local; echo SHIYUE_UPGRADE_READY")
@@ -420,13 +489,13 @@ def start_upgrade():
         job.update(42,"上传修改后的程序代码");remote.scp(package,f"/tmp/{package.name}")
         job.update(65,"切换程序版本");health=remote.ssh(bootstrap_script(target,release,package.name))
         job.update(92,"验证升级结果");final_health=remote.ssh(health_check_command(target))
-        db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=1 AND status='active'");db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,1,"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close()
-        job.complete({"releaseId":release,"health":final_health,"initialHealth":health,"codeBytes":package.stat().st_size},"程序升级完成")
-    return run_task("program_upgrade",worker)
-def start_sync():
+        db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close()
+        job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"initialHealth":health,"codeBytes":package.stat().st_size},"程序升级完成")
+    return run_task("program_upgrade",worker,target_id)
+def start_sync(target_id):
     def worker(job,remote,target):
         result=sync_content(job,remote,target);job.complete(result,"点读资源同步完成")
-    return run_task("resource_sync",worker)
+    return run_task("resource_sync",worker,target_id)
 def content_rollback_run_command(target,release,operation,restore=False):
     root=target["remote_root"];arguments=["python3","/app/tools/deployment/content_rollback.py","--operation",operation,"--books","/app/books","--manifests","/state/manifests","--backups","/state/backups","--database","/app/.local/library.sqlite3"]
     if restore:arguments.append("--restore")
@@ -435,7 +504,7 @@ def content_rollback_run_command(target,release,operation,restore=False):
     return (" \\"+"\n  ").join(options)
     return " \\\n+  ".join(options)
 
-def start_content_rollback(release):
+def start_content_rollback(target_id,release):
     def worker(job,remote,target):
         if not re.fullmatch(r"content-\d{8}-\d{6}-[A-Za-z0-9]+",release or ""):raise ValueError("无效的内容版本")
         root=target["remote_root"];operation=new_release_id("content-rollback");job.update(12,f"检查内容快照 {release}",release_id=release)
@@ -458,9 +527,9 @@ if ! {health}; then
 fi
 """
         output=remote.ssh(script);job.complete({"contentRevision":release,"operation":operation,"health":output},"内容回滚完成")
-    return run_task("content_rollback",worker)
+    return run_task("content_rollback",worker,target_id)
 
-def start_cleanup(retention_days=30):
+def start_cleanup(target_id,retention_days=30):
     days=max(1,min(3650,int(retention_days or 30)));cutoff=datetime.now()-timedelta(days=days);stamp=cutoff.strftime("%Y%m%d-%H%M%S")
     def worker(job,remote,target):
         root=target["remote_root"];job.update(20,f"扫描{days}天前的代码和内容版本")
@@ -507,15 +576,42 @@ echo "当前内容:$current_content"
             for path in staging.iterdir():
                 if path.is_dir() and path.stat().st_mtime<threshold:shutil.rmtree(path,ignore_errors=True);removed_local+=1
         job.complete({"retentionDays":days,"remote":output,"localArtifactsRemoved":removed_local},"过期版本清理完成")
-    return run_task("version_cleanup",worker)
+    return run_task("version_cleanup",worker,target_id)
 
-def start_rollback(release):
+def start_rollback(target_id,release):
     def worker(job,remote,target):
         if not re.fullmatch(r"code-[A-Za-z0-9-]+",release or ""):raise ValueError("无效的回滚版本")
         root=target["remote_root"];job.update(20,f"检查代码版本 {release}");run=docker_run_command(target);health_command=health_check_command(target)
         script=f"set -e; test -d {shlex.quote(root)}/releases/{shlex.quote(release)}; previous_release=$(readlink -f {shlex.quote(root)}/current 2>/dev/null || true); docker rm -f shiyue-reader >/dev/null 2>&1 || true; ln -sfn {shlex.quote(root)}/releases/{shlex.quote(release)} {shlex.quote(root)}/current; {run}; healthy=0; for attempt in $(seq 1 15); do if {health_command}; then healthy=1; break; fi; sleep 1; done; [ \"$healthy\" -eq 1 ] || {{ docker logs --tail 150 shiyue-reader || true; docker rm -f shiyue-reader; if [ -n \"$previous_release\" ]; then ln -sfn \"$previous_release\" {shlex.quote(root)}/current; {run}; fi; exit 1; }}"
-        health=remote.ssh(script);db=connect();db.execute("UPDATE deployment_releases SET status=CASE WHEN release_id=? THEN 'active' ELSE 'available' END WHERE target_id=1",(release,));db.commit();db.close();job.complete({"releaseId":release,"health":health},"代码回滚完成")
-    return run_task("code_rollback",worker)
+        health=remote.ssh(script);db=connect();db.execute("UPDATE deployment_releases SET status=CASE WHEN release_id=? THEN 'active' ELSE 'available' END WHERE target_id=?",(release,target["id"]));db.commit();db.close();job.complete({"targetId":target["id"],"releaseId":release,"health":health},"代码回滚完成")
+    return run_task("code_rollback",worker,target_id)
+
+def start_uninstall(target_id,confirmation):
+    target=get_target(target_id)
+    if not target:raise ValueError("远程节点不存在")
+    if str(confirmation).strip()!=str(target["name"]).strip():raise ValueError("节点名称确认不匹配")
+    root=str(target["remote_root"]).strip()
+    if root in {"","/","/root","/home","/srv"} or len(Path(root).parts)<3:raise ValueError("远程目录范围过大，拒绝卸载")
+    def worker(job,remote,target):
+        job.update(20,"停止并删除拾页容器")
+        quoted=shlex.quote(root)
+        script=f"""set -e
+if command -v systemctl >/dev/null 2>&1; then systemctl disable --now shiyue-reader >/dev/null 2>&1 || true; fi
+docker rm -f shiyue-reader >/dev/null 2>&1 || true
+if [ -d {quoted} ]; then rm -rf -- {quoted}; fi
+docker images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' 2>/dev/null | while read image; do
+  case "$image" in
+    shiyue-reader:*|shiyue-reader-runtime:*) docker image rm "$image" >/dev/null 2>&1 || true ;;
+  esac
+done
+test ! -e {quoted}
+echo SHIYUE_UNINSTALLED
+"""
+        output=remote.ssh(script)
+        if "SHIYUE_UNINSTALLED" not in output:raise ValueError("远程卸载未完成")
+        db=connect();db.execute("UPDATE deployment_releases SET status='uninstalled' WHERE target_id=?",(target["id"],));db.commit();db.close()
+        job.complete({"targetId":target["id"],"remoteRoot":root,"dockerPreserved":True},"远程拾页已卸载")
+    return run_task("remote_uninstall",worker,target_id)
 
 def job_info(job_id,offset=0):
     db=connect();row=db.execute("SELECT * FROM deployment_jobs WHERE id=?",(job_id,)).fetchone();db.close()
@@ -524,29 +620,33 @@ def job_info(job_id,offset=0):
     try:result["result"]=json.loads(result.pop("result_json"))
     except Exception:result["result"]={}
     return result
-def recent_jobs(limit=20):
-    db=connect();rows=[dict(row) for row in db.execute("SELECT id,kind,status,progress,step,error,release_id,created_at,updated_at FROM deployment_jobs ORDER BY id DESC LIMIT ?",(limit,))];db.close();return rows
-def dashboard_status():
+def recent_jobs(target_id=None,limit=20):
+    db=connect()
+    if target_id is None:rows=db.execute("SELECT id,target_id,kind,status,progress,step,error,release_id,created_at,updated_at FROM deployment_jobs WHERE kind NOT IN ('release_list','content_release_list') ORDER BY id DESC LIMIT ?",(limit,)).fetchall()
+    else:rows=db.execute("SELECT id,target_id,kind,status,progress,step,error,release_id,created_at,updated_at FROM deployment_jobs WHERE target_id=? AND kind NOT IN ('release_list','content_release_list') ORDER BY id DESC LIMIT ?",(int(target_id),limit)).fetchall()
+    result=[dict(row) for row in rows];db.close();return result
+def dashboard_status(target_id=None):
     db=connect();books=db.execute("SELECT COUNT(*) FROM books WHERE status='ready'").fetchone()[0]
-    code=db.execute("SELECT result_json FROM deployment_jobs WHERE kind IN ('code_deploy','program_upgrade') AND status='complete' ORDER BY id DESC LIMIT 1").fetchone()
-    content=db.execute("SELECT result_json FROM deployment_jobs WHERE kind IN ('resource_sync','code_deploy','content_rollback') AND status='complete' ORDER BY id DESC LIMIT 1").fetchone();db.close()
+    clause=" AND target_id=?" if target_id is not None else "";params=(int(target_id),) if target_id is not None else ()
+    code=db.execute(f"SELECT result_json FROM deployment_jobs WHERE kind IN ('code_deploy','program_upgrade') AND status='complete'{clause} ORDER BY id DESC LIMIT 1",params).fetchone()
+    content=db.execute(f"SELECT result_json FROM deployment_jobs WHERE kind IN ('resource_sync','code_deploy','content_rollback') AND status='complete'{clause} ORDER BY id DESC LIMIT 1",params).fetchone();db.close()
     def value(row,key):
         if not row:return ""
         try:return json.loads(row[0]).get(key,"")
         except Exception:return ""
     return {"codeVersion":value(code,"releaseId"),"contentVersion":value(content,"contentRevision"),"localBooks":books,"localRuntime":"约1.3 GiB"}
-def remote_releases():
-    target=get_target()
+def remote_releases(target_id):
+    target=get_target(target_id)
     if not target:return []
-    job=Job("release_list")
+    job=Job("release_list",target["id"])
     try:
         root=shlex.quote(target["remote_root"]);remote=Remote(target,job);output=remote.ssh(f"current=$(basename \"$(readlink -f {root}/current 2>/dev/null || true)\"); find {root}/releases -mindepth 1 -maxdepth 1 -type d -name 'code-*' -printf '%f\\n' 2>/dev/null | sort -r | while read b; do [ \"$b\" = \"$current\" ] && echo \"$b|current\" || echo \"$b|available\"; done");job.complete()
         return [{"releaseId":line.split("|",1)[0],"status":line.split("|",1)[1]} for line in output.splitlines() if line.startswith("code-") and "|" in line]
     except Exception as exc:job.fail(exc);return []
-def remote_content_releases():
-    target=get_target()
+def remote_content_releases(target_id):
+    target=get_target(target_id)
     if not target:return []
-    job=Job("content_release_list")
+    job=Job("content_release_list",target["id"])
     try:
         root=shlex.quote(target["remote_root"]);remote=Remote(target,job);output=remote.ssh(f"current=$(sed -n 's/.*\"revision\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' {root}/manifests/current-content.json 2>/dev/null | head -1); for bundle in {root}/manifests/history/content-*.json.gz; do [ -f \"$bundle\" ] || continue; b=$(basename \"$bundle\" .json.gz); if [ \"$b\" = \"$current\" ]; then echo \"$b|current\"; elif [[ \"$b\" < \"$current\" ]]; then echo \"$b|available\"; fi; done | sort -r");job.complete()
         return [{"releaseId":line.split("|",1)[0],"status":line.split("|",1)[1]} for line in output.splitlines() if line.startswith("content-") and "|" in line]

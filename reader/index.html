@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>拾页 · 英语点读</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20261003-7">
+  <link rel="stylesheet" href="styles.css?v=20261005-1">
 </head>
 <body>
   <aside class="sidebar">
@@ -113,20 +113,35 @@
       </section>
       <section id="settingsDeploymentPanel" class="settings-tab-panel hidden" role="tabpanel" aria-labelledby="settingsDeploymentTab" data-settings-panel="deployment">
        <section class="panel deployment-panel">
-        <div class="deployment-head"><div><small>REMOTE READER NODE</small><h2>远程部署与点读资源同步</h2><p>一键部署会安装或检查Docker，并从本机上传运行镜像、代码、模型和全部点读成品；原始书籍与本地制作环境不会上传。</p></div><span id="deploymentConnection" class="deployment-status">未配置</span></div>
+        <div class="deployment-head"><div><small>REMOTE READER NODES</small><h2>远程节点管理</h2><p>可保存多个Linux阅读节点。每个节点独立部署、同步、回滚和卸载；原始书籍与本地制作环境不会上传。</p></div><button id="newDeploymentNode" type="button">＋ 新增节点</button></div>
+        <div class="deployment-top-grid">
+        <section class="deployment-node-pane"><div class="deployment-compact-head"><b>节点列表</b><small>点击切换</small></div><div id="deploymentNodeList" class="deployment-node-list"><div class="empty-state">正在读取远程节点…</div></div></section>
+        <section class="deployment-section deployment-config-section">
+        <div class="deployment-section-head"><div><small>CONNECTION</small><b>节点连接配置</b><p>修改当前选中节点的SSH连接与运行参数。</p></div><span id="deploymentConnection" class="deployment-status">未选择节点</span></div>
         <form id="deploymentForm" class="deployment-form">
+          <input id="deployTargetId" type="hidden">
+          <label>节点名称<input id="deployName" placeholder="例如：北京阅读节点" required></label>
           <label>SSH地址<input id="deployHost" placeholder="服务器IP或域名" required></label>
           <label>SSH端口<input id="deployPort" type="number" min="1" max="65535" value="22" required></label>
           <label>账号<input id="deployUser" value="root" required></label>
           <label>密码<input id="deployPassword" type="password" autocomplete="new-password" placeholder="留空表示使用钥匙串密码"></label>
           <label>远程目录<input id="deployRoot" value="/srv/shiyue" required></label>
           <label>服务端口<input id="deployServicePort" type="number" min="1" max="65535" value="8765" required></label>
+          <label>访问协议<select id="deployProtocol"><option value="https">HTTPS（支持远程麦克风）</option><option value="http">HTTP</option></select></label>
           <label class="deployment-check"><input id="deployRecording" type="checkbox" checked> 安装服务器端录音Whisper</label>
-          <div class="deployment-config-actions"><button type="submit">保存配置</button><button id="testDeployment" type="button">测试连接</button></div>
+          <div class="deployment-config-actions"><button id="saveDeploymentNode" type="submit">保存节点</button><button id="testDeployment" type="button">测试连接</button><button id="cancelDeploymentEdit" type="button" class="hidden">取消新增</button></div>
         </form>
+        </section>
+        </div>
+        <div class="deployment-management-grid">
+        <section class="deployment-section deployment-operation-section">
+        <div class="deployment-section-head"><div><small>OPERATIONS</small><b>部署与同步</b><p>完整部署用于新服务器；日常更新按程序和数据分别执行。</p></div></div>
         <div class="deployment-summary"><span>程序版本 <b id="remoteCodeVersion">-</b></span><span>内容版本 <b id="remoteContentVersion">-</b></span><span>点读资源 <b id="runtimeResourceSummary">待扫描</b></span></div>
-        <div class="deployment-primary-actions"><button id="deployCodeBtn" type="button">一键完整部署</button><button id="upgradeCodeBtn" type="button">升级程序</button><button id="syncResourcesBtn" type="button">同步数据</button></div>
+        <div class="deployment-primary-actions"><button id="deployCodeBtn" type="button"><b>一键完整部署</b><small>新节点初始化</small></button><button id="upgradeCodeBtn" type="button"><b>升级程序</b><small>只更新代码</small></button><button id="syncResourcesBtn" type="button"><b>同步数据</b><small>只同步点读内容</small></button></div>
+        </section>
         <section class="deployment-version-management"><div class="deployment-version-head"><div><small>VERSION MANAGEMENT</small><b>版本管理</b></div><label>过期版本保留<input id="versionRetentionDays" type="number" min="1" max="3650" value="30">天</label><button id="cleanupVersionsBtn" type="button">清理过期版本</button></div><div class="deployment-version-grid"><div class="deployment-version-row"><span><b>代码版本</b><small>回滚页面与后台程序，不改变书籍数据</small></span><select id="rollbackRelease"><option value="">选择历史代码版本</option></select><button id="rollbackCodeBtn" type="button" disabled>回滚代码</button></div><div class="deployment-version-row"><span><b>内容版本</b><small>回滚正文、时间轴和媒体，保留学习数据</small></span><select id="rollbackContentRelease"><option value="">选择历史内容版本</option></select><button id="rollbackContentBtn" type="button" disabled>回滚内容</button></div></div></section>
+        </div>
+        <section class="deployment-danger-zone"><div><small>DANGER ZONE</small><b>危险操作</b><p>卸载会删除远程拾页服务和资源；删除配置只影响本机记录。</p></div><div><button id="uninstallNodeBtn" class="danger" type="button">一键卸载远程服务</button><button id="deleteNodeConfigBtn" class="danger-outline" type="button">删除本地节点配置</button></div></section>
         <div id="deploymentProgress" class="deployment-progress hidden"><div><b id="deploymentStep">等待开始</b><span id="deploymentPercent">0%</span></div><progress id="deploymentBar" max="100" value="0"></progress></div>
         <div class="deployment-monitor-grid">
           <div class="deployment-monitor-card"><div class="deployment-log-head"><b>实时日志</b><button id="clearDeploymentLog" type="button">清空显示</button></div><pre id="deploymentLog" class="deployment-log">尚未运行部署任务。</pre></div>
@@ -190,6 +205,15 @@
       <div class="cancel-import-dialog-actions"><button value="cancel">继续当前任务</button><button id="confirmCancelImports" type="button">中断并删除</button></div>
     </form>
   </dialog>
-  <script src="app.js?v=20261003-7"></script>
+  <dialog id="uninstallNodeDialog" class="delete-book-dialog">
+    <form method="dialog">
+      <div class="delete-dialog-head"><div><small>REMOTE UNINSTALL</small><h2>卸载节点“<span id="uninstallNodeName"></span>”？</h2></div><button value="cancel" aria-label="关闭">×</button></div>
+      <div class="delete-warning"><b>将删除远程拾页服务和全部点读内容</b><p>会停止并删除 shiyue-reader 容器，永久删除该节点配置的远程目录、代码版本、内容数据库、媒体、模型、证书和备份。Docker本身不会卸载。本地书库不受影响。</p></div>
+      <label>输入节点名称确认卸载<input id="uninstallNodeConfirm" autocomplete="off"></label>
+      <p id="uninstallNodeError" class="delete-error"></p>
+      <div class="delete-dialog-actions"><button value="cancel">取消</button><button id="confirmUninstallNode" type="button" disabled>确认卸载</button></div>
+    </form>
+  </dialog>
+  <script src="app.js?v=20261005-1"></script>
 </body>
 </html>
