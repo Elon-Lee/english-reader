@@ -14,6 +14,7 @@ EXPECT=ROOT/"tools/deployment/ssh_expect.exp"
 RUNTIME=STATE/"runtime";TLS=STATE/"tls"
 RUNTIME_IMAGE="shiyue-reader-runtime:20260930-1"
 TASK_LOCK=threading.Lock();MEMORY_PASSWORDS={}
+PRIVATE_CONFIG=ROOT/".dioco.local.json"
 
 def now():return datetime.now().astimezone().isoformat(timespec="seconds")
 def connect():
@@ -372,6 +373,68 @@ def health_check_command(target):
     code=f"import json,ssl,urllib.request; u='{scheme}://127.0.0.1:{port}/api/health'; c=ssl._create_unverified_context() if u.startswith('https') else None; print(urllib.request.urlopen(u,context=c,timeout=20).read().decode())"
     return f"docker exec shiyue-reader python3 -c {shlex.quote(code)}"
 
+def local_dioco_config():
+    if not PRIVATE_CONFIG.exists():return None
+    try:data=json.loads(PRIVATE_CONFIG.read_text(encoding="utf-8"))
+    except (OSError,json.JSONDecodeError):return None
+    email=str(data.get("userEmail","")).strip();token=str(data.get("diocoToken","")).strip()
+    if not email or "@" not in email or not token:return None
+    return {"userEmail":email,"diocoToken":token}
+
+def sync_remote_private_config(job,remote,target):
+    """Fill an unconfigured reader node from the local secret without logging it.
+
+    A token edited directly on the remote reader is preserved. This makes deploy,
+    program upgrade and content sync safe to repeat across independently managed
+    nodes while still repairing older nodes whose deployment created an empty {}.
+    """
+    local=local_dioco_config();root=target["remote_root"]
+    destination=f"{root}/shared/config/dioco.local.json"
+    configured=remote.ssh(
+        f"test -f {shlex.quote(destination)} && "
+        f"grep -Eq '\"userEmail\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' {shlex.quote(destination)} && "
+        f"grep -Eq '\"diocoToken\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' {shlex.quote(destination)} && "
+        "echo SHIYUE_DIOCO_CONFIGURED || true"
+    )
+    if "SHIYUE_DIOCO_CONFIGURED" in configured:
+        job.write("远程词典服务凭据已配置，保留远程配置")
+        return {"configured":True,"uploaded":False,"source":"remote"}
+    if not local:
+        job.write("本机未配置Dioco凭据；远程可在系统设置中单独配置")
+        return {"configured":False,"uploaded":False,"source":"none"}
+    with tempfile.TemporaryDirectory(prefix="shiyue-private-config-") as tmp:
+        staged=Path(tmp)/"dioco.local.json"
+        staged.write_text(json.dumps(local,ensure_ascii=False,indent=2),encoding="utf-8");os.chmod(staged,0o600)
+        remote.ssh(f"mkdir -p {shlex.quote(root)}/shared/config")
+        remote_path=f"/tmp/shiyue-dioco-{target['id']}.json"
+        remote.scp(staged,remote_path)
+        remote.ssh(f"install -m 600 {shlex.quote(remote_path)} {shlex.quote(destination)} && rm -f {shlex.quote(remote_path)}")
+    job.write("已安全同步词典与语境服务凭据（日志不包含账号和令牌）")
+    return {"configured":True,"uploaded":True,"source":"local"}
+
+def remote_dioco_check(job,remote,target):
+    scheme="https" if target.get("use_https",1) else "http";port=int(target["service_port"])
+    code=f'''import json,ssl,urllib.request
+base="{scheme}://127.0.0.1:{port}"
+context=ssl._create_unverified_context() if base.startswith("https") else None
+try:
+    settings=json.loads(urllib.request.urlopen(base+"/api/settings",context=context,timeout=15).read())
+    if not settings.get("tokenConfigured"):
+        print("SHIYUE_DIOCO_MISSING")
+    else:
+        payload=json.dumps({{"word":"incredible","contextSentence":"This is incredible.","expandedContext":"This is incredible."}}).encode()
+        request=urllib.request.Request(base+"/api/word-context",data=payload,headers={{"Content-Type":"application/json"}},method="POST")
+        result=json.loads(urllib.request.urlopen(request,context=context,timeout=45).read())
+        print("SHIYUE_DIOCO_READY" if result.get("explanation") else "SHIYUE_DIOCO_EMPTY")
+except Exception as exc:
+    print("SHIYUE_DIOCO_ERROR:"+str(exc)[:180])'''
+    output=remote.ssh(f"docker exec shiyue-reader python3 -c {shlex.quote(code)}")
+    ready="SHIYUE_DIOCO_READY" in output
+    if ready:job.write("远程词典与语境接口验证通过")
+    elif "SHIYUE_DIOCO_MISSING" in output:job.write("警告：远程尚未配置Dioco凭据，请在系统设置保存")
+    else:job.write("警告：远程在线语境接口验证失败，请检查服务器外网访问")
+    return ready
+
 def bootstrap_script(target,release,package_name):
     root=shlex.quote(target["remote_root"]);run=docker_run_command(target);health=health_check_command(target)
     return f"""set -euo pipefail
@@ -484,9 +547,11 @@ def start_deploy(target_id):
             else:job.write("远程录音模型已存在且校验一致，跳过上传")
         if target.get("use_https",1):
             certificate=ensure_remote_tls(job,remote,target);job.write(f"HTTPS根证书：{certificate}")
+        job.update(47,"同步远程词典服务配置");dioco=sync_remote_private_config(job,remote,target)
         job.update(50,"激活代码版本并启动运行容器");health=remote.ssh(bootstrap_script(target,release,package.name))
         content=sync_content(job,remote,target,{"scan":58,"prepare":62,"generate":65,"package":68,"upload":72,"apply":80,"database":86,"merge":91})
-        job.update(97,"最终健康检查");final_health=remote.ssh(health_check_command(target));db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close();job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"initialHealth":health,"contentRevision":content["contentRevision"],"media":content["media"],"runtimeArchive":str(runtime),"rootCertificate":str(certificate) if certificate else ""},"一键完整部署完成")
+        job.update(96,"验证远程词典与语境接口");dioco_ready=remote_dioco_check(job,remote,target)
+        job.update(97,"最终健康检查");final_health=remote.ssh(health_check_command(target));db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close();job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"initialHealth":health,"contentRevision":content["contentRevision"],"media":content["media"],"runtimeArchive":str(runtime),"rootCertificate":str(certificate) if certificate else "","diocoConfigured":dioco["configured"],"diocoReady":dioco_ready},"一键完整部署完成")
     return run_task("code_deploy",worker,target_id)
 def start_upgrade(target_id):
     def worker(job,remote,target):
@@ -495,14 +560,18 @@ def start_upgrade(target_id):
         if "SHIYUE_UPGRADE_READY" not in output:raise ValueError("远程尚未完成初始化，请先执行一键完整部署")
         job.update(25,"生成程序版本包");package,digest=build_code_package(job,release)
         job.update(42,"上传修改后的程序代码");remote.scp(package,f"/tmp/{package.name}")
+        job.update(58,"同步远程词典服务配置");dioco=sync_remote_private_config(job,remote,target)
         job.update(65,"切换程序版本");health=remote.ssh(bootstrap_script(target,release,package.name))
+        job.update(88,"验证远程词典与语境接口");dioco_ready=remote_dioco_check(job,remote,target)
         job.update(92,"验证升级结果");final_health=remote.ssh(health_check_command(target))
         db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close()
-        job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"initialHealth":health,"codeBytes":package.stat().st_size},"程序升级完成")
+        job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"initialHealth":health,"codeBytes":package.stat().st_size,"diocoConfigured":dioco["configured"],"diocoReady":dioco_ready},"程序升级完成")
     return run_task("program_upgrade",worker,target_id)
 def start_sync(target_id):
     def worker(job,remote,target):
-        result=sync_content(job,remote,target);job.complete(result,"点读资源同步完成")
+        job.update(3,"检查远程词典服务配置");dioco=sync_remote_private_config(job,remote,target)
+        result=sync_content(job,remote,target);job.update(96,"验证远程词典与语境接口");dioco_ready=remote_dioco_check(job,remote,target)
+        job.complete({**result,"diocoConfigured":dioco["configured"],"diocoReady":dioco_ready},"点读资源同步完成")
     return run_task("resource_sync",worker,target_id)
 def content_rollback_run_command(target,release,operation,restore=False):
     root=target["remote_root"];arguments=["python3","/app/tools/deployment/content_rollback.py","--operation",operation,"--books","/app/books","--manifests","/state/manifests","--backups","/state/backups","--database","/app/.local/library.sqlite3"]

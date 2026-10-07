@@ -49,6 +49,8 @@ let videoFrameCallbackId = null;
 let mediaStageResizeFrame = null;
 let seekPreviewFrame = null;
 let seekPreviewPointerX = 0;
+let seekPreviewDragging = false;
+let pendingSeekTime = null;
 let wordElementsBySentence = [];
 let sentenceElementsByIndex=[];
 let annotationIndex=new Map();
@@ -117,6 +119,7 @@ let learningDaysLoaded=false;
 let importCatalogLoaded=false;
 let importTrackingRestored=false;
 let deploymentConfigLoaded=false;
+const compactTouchQuery=matchMedia("(max-width: 1023px) and (hover: none) and (pointer: coarse)");
 
 const STORE = {
   state: "shiyue-reader-state-v2",
@@ -173,6 +176,12 @@ function displaySource(value){
   const source=String(value||"");if(runtimeMode!=="reader")return source;
   return source.replace("Stanza 本地句法模型","Stanza 句法模型").replace("本地 ECDICT + Stanza","内置词典与句法").replace("本地词典","内置词典").replace("本地语境规则","语境规则").replace("本地模型","句法模型");
 }
+function onlineServiceFallback(error,kind,fallback){
+  const detail=String(error?.message||"");
+  if(/credentials|token|令牌|邮箱/i.test(detail))return `当前服务未配置Dioco邮箱或令牌，请在系统设置中保存后重试；已使用${fallback}`;
+  if(/timed out|timeout|urlopen|network|502|连接|访问/i.test(detail))return `服务器暂时无法访问在线${kind}接口；已使用${fallback}`;
+  return `${kind}接口暂不可用；已使用${fallback}`;
+}
 function applyRuntimePresentation(){
   const remote=runtimeMode==="reader";document.body.dataset.runtimeMode=runtimeMode;document.body.classList.remove("runtime-pending");
   $("#brandModeLabel").textContent=remote?"WEB READER":"LOCAL READER";
@@ -219,11 +228,12 @@ function sentenceHtml(sentence) {
 }
 
 async function init() {
+  syncResponsiveState();
   bindEvents();
   const [libraryData]=await Promise.all([fetch("/api/library",{cache:"no-cache"}).then(r=>r.json()),loadApiSettings()]);
   libraryBooks=libraryData.books||[];
   populateVideoSeriesOptions();
-  setupSeriesSelector(); renderLibrary();
+  setupSeriesSelector(); renderLibrary(); showScreen("shelf");
 }
 
 async function ensureVocabularyLoaded(){
@@ -364,7 +374,7 @@ function bindEvents() {
     const card=event.target.closest("[data-book-id]");if(!card)return;await loadBook(card.dataset.bookId);openReader();
   };
   $("#backBtn").onclick = () => showScreen("shelf");
-  $$(".nav").forEach(button => button.onclick = () => showScreen(button.dataset.screen));
+  $$(".nav").forEach(button => button.onclick = () => {closeMobileSidebar();showScreen(button.dataset.screen);});
   $$(".mode-switch button").forEach(button => button.onclick = () => setMode(button.dataset.mode));
   $("#sentences").addEventListener("click", event => {
     const windowButton=event.target.closest("[data-window-center]");
@@ -408,15 +418,27 @@ function bindEvents() {
   $("#playBtn").onclick = () => { resetWordHoverSession(); clearTimeout(audioStopTimer); if ($("#audio").paused) { wordStopAt=null; $("#audio").play(); } else $("#audio").pause(); };
   $("#prevBtn").onclick = () => playSentence(Math.max(0, active - 1));
   $("#nextBtn").onclick = () => playSentence(Math.min(book.sentences.length - 1, active + 1));
-  $("#seek").oninput = event => { resetWordHoverSession(); $("#audio").currentTime = event.target.value / 1000 * book.duration; syncVideoToAudio(true);syncPlaybackFrame(); };
+  $("#seek").oninput = event => {
+    if(!book?.duration)return;
+    const time=event.target.value/1000*book.duration;
+    if(isCompactTouchLayout()){
+      pendingSeekTime=time;$("#currentTime").textContent=fmt(time);return;
+    }
+    commitSeekTime(time);
+  };
+  $("#seek").onchange = event => {if(isCompactTouchLayout()&&book?.duration&&pendingSeekTime!==null){commitSeekTime(event.target.value/1000*book.duration);pendingSeekTime=null;}};
+  $("#seek").addEventListener("pointerdown",event=>{if(!isCompactTouchLayout())return;seekPreviewDragging=true;try{event.currentTarget.setPointerCapture(event.pointerId);}catch{}showSeekSentencePreview(event);});
   $("#seek").addEventListener("pointerenter",showSeekSentencePreview);
   $("#seek").addEventListener("pointermove",showSeekSentencePreview);
-  $("#seek").addEventListener("pointerleave",hideSeekSentencePreview);
-  $("#seek").addEventListener("pointercancel",hideSeekSentencePreview);
+  $("#seek").addEventListener("pointerup",event=>{if(!isCompactTouchLayout())return;const time=pendingSeekTime??seekTimeFromPointer(event);commitSeekTime(time);seekPreviewDragging=false;pendingSeekTime=null;hideSeekSentencePreview();});
+  $("#seek").addEventListener("pointerleave",()=>{if(!seekPreviewDragging)hideSeekSentencePreview();});
+  $("#seek").addEventListener("pointercancel",()=>{seekPreviewDragging=false;pendingSeekTime=null;hideSeekSentencePreview();});
   const rates = [.75, 1, 1.25, 1.5]; let rateIndex = 1;
   $("#speedBtn").onclick = () => { rateIndex = (rateIndex + 1) % rates.length; $("#audio").playbackRate = rates[rateIndex];setVideoBaseRate();syncVideoToAudio(false);$("#speedBtn").textContent = rates[rateIndex] + "×"; };
-  $("#sidebarToggle").onclick=()=>setSidebarCollapsed(true);
-  $("#sidebarReveal").onclick=()=>setSidebarCollapsed(false);
+  $("#sidebarToggle").onclick=()=>isResponsiveNavLayout()?closeMobileSidebar():setSidebarCollapsed(true);
+  $("#sidebarReveal").onclick=()=>isResponsiveNavLayout()?setMobileSidebarOpen(true):setSidebarCollapsed(false);
+  $("#sidebarBackdrop").onclick=closeMobileSidebar;
+  $("#mobilePanelBackdrop").onclick=closeMobileDetailPanels;
   $("#readerLayoutBtn").onclick=toggleReaderLayout;
   $("#focusBtn").onclick = toggleFocusMode;
   $("#eyeComfortBtn").onclick = toggleEyeComfort;
@@ -432,7 +454,9 @@ function bindEvents() {
   $("#pageImage").onload=scheduleMediaStageSize;
   $("#videoView").onplaying=()=>{markVideoReady();startVideoFrameSync();};
   $("#videoView").onpause=stopVideoFrameSync;
-  window.addEventListener("resize",()=>{scheduleTopbarContentAlignment();scheduleMediaStageSize();});
+  window.addEventListener("resize",()=>{syncResponsiveState();scheduleTopbarContentAlignment();scheduleMediaStageSize();});
+  if(compactTouchQuery.addEventListener)compactTouchQuery.addEventListener("change",syncResponsiveState);
+  else compactTouchQuery.addListener?.(syncResponsiveState);
   window.addEventListener("beforeunload", finishSession);
   $("#settingsTabs").onclick=event=>{const tab=event.target.closest("[data-settings-tab]");if(tab)setSettingsTab(tab.dataset.settingsTab);};
   $("#settingsTabs").onkeydown=event=>{if(!["ArrowLeft","ArrowRight","Home","End"].includes(event.key))return;event.preventDefault();const tabs=$$("#settingsTabs [data-settings-tab]:not(.hidden)"),current=Math.max(0,tabs.indexOf(document.activeElement));let next=event.key==="Home"?0:event.key==="End"?tabs.length-1:event.key==="ArrowRight"?(current+1)%tabs.length:(current-1+tabs.length)%tabs.length;tabs[next]?.focus();setSettingsTab(tabs[next].dataset.settingsTab);};
@@ -489,6 +513,7 @@ function bindEvents() {
   document.addEventListener("click",handleContextToggle);
   $("#statsContent").onclick=event=>{const button=event.target.closest("[data-heatmap-range]");if(button)setHeatmapRange(button.dataset.heatmapRange);};
   $("#reviewContent").onclick=handleReviewClick;
+  $("#reviewWordPanel").onclick=handleReviewClick;
   $("#deleteBookConfirmInput").oninput=validateDeleteBookConfirmation;
   $("#confirmDeleteBook").onclick=confirmDeleteBook;
   $("#deleteBookDialog").addEventListener("close",resetDeleteBookDialog);
@@ -519,6 +544,34 @@ async function confirmDeleteBook(){
 
 function bookHasVideo(){return !!book?.video;}
 function bookHasVisual(){return !!(bookHasVideo()||(book?.hasOriginalPages!==false&&book?.pageBase));}
+function isResponsiveNavLayout(){return innerWidth<=1023;}
+function isCompactTouchLayout(){return compactTouchQuery.matches;}
+function setMobileSidebarOpen(open){
+  if(!isResponsiveNavLayout())open=false;
+  document.body.classList.toggle("mobile-nav-open",open);
+  $("#sidebarBackdrop")?.classList.toggle("hidden",!open);
+  $("#sidebarReveal")?.setAttribute("aria-expanded",String(open));
+}
+function closeMobileSidebar(){setMobileSidebarOpen(false);}
+function openMobileDetailPanel(kind){
+  if(!isCompactTouchLayout())return;
+  document.body.classList.toggle("mobile-word-open",kind==="word");
+  document.body.classList.toggle("mobile-review-open",kind==="review");
+  $("#mobilePanelBackdrop")?.classList.remove("hidden");
+}
+function closeMobileDetailPanels(resume=true){
+  const wasWordOpen=document.body.classList.contains("mobile-word-open");
+  document.body.classList.remove("mobile-word-open","mobile-review-open");
+  $("#mobilePanelBackdrop")?.classList.add("hidden");
+  if(resume&&wasWordOpen&&(pausedForWord||clickedWordPausedMain))scheduleWordResume();
+}
+function syncResponsiveState(){
+  const compact=isCompactTouchLayout();
+  document.body.classList.toggle("compact-touch",compact);
+  if(!isResponsiveNavLayout())closeMobileSidebar();
+  if(!compact)closeMobileDetailPanels(false);
+  if(compact)hideWordHoverMeaning();
+}
 function syncReaderPanels(){const focused=document.body.classList.contains("focus"),focusWordOpen=document.body.classList.contains("focus-word-open");$("#pagePanel").classList.toggle("hidden",focused||!bookHasVisual());$("#wordPanel").classList.toggle("hidden",focused&&!focusWordOpen);}
 function readerIsVisible(){return !$("#reader").classList.contains("hidden");}
 function syncReaderActionVisibility(){const reading=readerIsVisible();$("#focusBtn").classList.toggle("hidden",!reading);$("#eyeComfortBtn").classList.toggle("hidden",!reading);$("#readerLayoutBtn").classList.toggle("hidden",!reading||!bookHasVisual());}
@@ -641,6 +694,7 @@ function showWordHoverMeaning(element,entries){
   tip.classList.remove("hidden");positionWordHoverMeaning(element);
 }
 function scheduleWordHoverMeaning(element){
+  if(isCompactTouchLayout())return;
   clearTimeout(wordHoverMeaningTimer);const word=element.textContent.trim();if(!word)return;
   wordHoverMeaningElement=element;const requestId=++wordHoverMeaningRequestId,key=word.toLowerCase();
   wordHoverMeaningTimer=setTimeout(async()=>{
@@ -719,6 +773,7 @@ function resumeBookAfterWordHover(){
   });
 }
 function handleWordPointerOver(event){
+  if(isCompactTouchLayout())return;
   const word=wordTarget(event.target),from=wordTarget(event.relatedTarget);
   if(!word||from===word)return;
   hideWordHoverMeaning();scheduleWordHoverMeaning(word);
@@ -736,6 +791,7 @@ function handleWordPointerOver(event){
   }
 }
 function handleWordPointerOut(event){
+  if(isCompactTouchLayout())return;
   const word=wordTarget(event.target),to=wordTarget(event.relatedTarget);
   if(word&&to!==word)hideWordHoverMeaning();
   if(!word||to===word||to)return;
@@ -743,7 +799,7 @@ function handleWordPointerOut(event){
   scheduleWordResume();
 }
 function handleWordPanelAction(event){
-  if(event.target.closest("[data-close-focus-panel]")){document.body.classList.remove("focus-word-open");syncReaderPanels();return;}
+  if(event.target.closest("[data-close-focus-panel]")){closeMobileDetailPanels();document.body.classList.remove("focus-word-open");syncReaderPanels();return;}
   const tab=event.target.closest("[data-word-panel-tab]")?.dataset.wordPanelTab;
   if(tab==="grammar"&&selectedGrammarSentence){showSentenceGrammar(selectedGrammarSentence);return;}
   if(tab==="word"&&selectedWordContext){const item=selectedWordContext;showWord(item.word,item.sentence,item.element);return;}
@@ -820,11 +876,15 @@ function syncSettingsTabVisibility(){
 }
 
 function showScreen(id) {
+  closeMobileSidebar();closeMobileDetailPanels(false);
   $$(".screen").forEach(screen => screen.classList.toggle("hidden", screen.id !== id));
   $$(".nav").forEach(nav => nav.classList.toggle("active", nav.dataset.screen === id));
   const reading = id === "reader";
+  document.body.classList.toggle("screen-reader",reading);
+  document.body.classList.toggle("screen-shelf",id === "shelf");
+  document.body.classList.toggle("screen-dashboard",["stats","vocab","import","settings"].includes(id));
   $(".topbar").classList.toggle("non-reader",!reading);
-  $(".topbar").setAttribute("aria-hidden",String(!reading&&!document.body.classList.contains("sidebar-collapsed")));
+  $(".topbar").setAttribute("aria-hidden",String(!reading&&!isResponsiveNavLayout()&&!document.body.classList.contains("sidebar-collapsed")));
   $("#player").classList.toggle("hidden", !reading);
   $(".book-heading").style.display = reading ? "block" : "none";
   $(".top-actions").style.display = reading ? "flex" : "none";
@@ -1025,8 +1085,21 @@ function sentenceIndexForPreview(time){
   if(time>currentEnd&&nextStart>currentEnd&&time>=(currentEnd+nextStart)/2)return index+1;
   return index;
 }
+function seekTimeFromPointer(event){
+  const seek=$("#seek"),rect=seek.getBoundingClientRect();
+  if(!book?.duration||rect.width<=0)return 0;
+  return Math.max(0,Math.min(1,(event.clientX-rect.left)/rect.width))*book.duration;
+}
+function commitSeekTime(time){
+  if(!book?.duration||!Number.isFinite(time))return;
+  resetWordHoverSession();
+  const safeTime=Math.max(0,Math.min(book.duration,time));
+  $("#audio").currentTime=safeTime;$("#seek").value=safeTime/book.duration*1000;$("#currentTime").textContent=fmt(safeTime);
+  syncVideoToAudio(true);syncPlaybackFrame();
+}
 function showSeekSentencePreview(event){
   if(!book?.sentences?.length||!Number.isFinite(+book.duration)||+book.duration<=0)return;
+  if(isCompactTouchLayout()&&!seekPreviewDragging)return;
   seekPreviewPointerX=event.clientX;
   if(seekPreviewFrame!==null)return;
   seekPreviewFrame=requestAnimationFrame(()=>{
@@ -1077,6 +1150,7 @@ function getDefinition(raw, sentence) {
 }
 
 async function showWord(raw, sentence, wordElement) {
+  openMobileDetailPanel("word");
   if(document.body.classList.contains("focus")){document.body.classList.add("focus-word-open");syncReaderPanels();}
   selectedGrammarSentence=sentence;
   const definition = getDefinition(raw, sentence);
@@ -1110,9 +1184,9 @@ async function showWord(raw, sentence, wordElement) {
     $("#remoteDefinition").innerHTML=groups || `<p class="meaning">${formatText(definition.meaning)}</p><p>${formatText(definition.english)}</p>`;
     $("#remoteDefinition").insertAdjacentHTML("beforeend",`<small class="api-source">释义来源：${escapeHtml(displaySource(data.source||"Dioco"))}</small>`);
     $("#remoteExamples").innerHTML=(data.examples||[]).length?`<small>EXAMPLES</small>${data.examples.map(item=>`<p>${escapeHtml(item)}</p>`).join("")}`:'<small>暂无例句</small>';
-  }).catch(()=>{
+  }).catch(error=>{
     if(requestId!==wordRequestId) return;
-    $("#remoteDefinition").innerHTML=`<p class="meaning">${formatText(definition.meaning)}</p><p>${formatText(definition.english)}</p><small class="api-source">接口不可用，已使用${runtimeMode==="reader"?"内置词典":"本地词典"}</small>`;
+    $("#remoteDefinition").innerHTML=`<p class="meaning">${formatText(definition.meaning)}</p><p>${formatText(definition.english)}</p><small class="api-source">${escapeHtml(onlineServiceFallback(error,"词典",runtimeMode==="reader"?"内置词典":"本地词典"))}</small>`;
     $("#remoteExamples").innerHTML='<small>例句接口暂不可用</small>';
   });
   fetch("/api/word-context",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({word:raw,contextSentence:sentence.text,expandedContext:expanded})}).then(async response=>{
@@ -1121,9 +1195,10 @@ async function showWord(raw, sentence, wordElement) {
   }).then(data=>{
     if(requestId!==wordRequestId) return;
     $("#remoteUsage").innerHTML=`${formatText(data.explanation||definition.usage)}<small class="api-source">语境来源：${escapeHtml(displaySource(data.source||"Dioco Lexa"))}</small>`;
-  }).catch(()=>{
+  }).catch(error=>{
     if(requestId!==wordRequestId) return;
-    $("#remoteUsage").innerHTML=`${formatText(definition.usage)}<small class="api-source">接口不可用，已使用${runtimeMode==="reader"?"语境规则":"本地语境规则"}</small>`;
+    const fallback=runtimeMode==="reader"?"语境规则":"本地语境规则";
+    $("#remoteUsage").innerHTML=`${formatText(definition.usage)}<small class="api-source">${escapeHtml(onlineServiceFallback(error,"语境",fallback))}</small>`;
   });
 }
 
@@ -1138,6 +1213,7 @@ function grammarAnalysisHtml(data,loadingExplanation=false){
   return `${wordPanelTabsHtml("grammar")}<div class="grammar-analysis"><small class="grammar-source">SENTENCE GRAMMAR · ${escapeHtml(displaySource(data.source||(runtimeMode==="reader"?"句法模型":"本地模型")))}</small><h2>${escapeHtml(data.sentenceType||"句法分析")}</h2><div class="grammar-colored-sentence">${grammarTokenHtml(data.tokens)}</div><div class="grammar-legend"><span class="grammar-subject">主语</span><span class="grammar-predicate">谓语</span><span class="grammar-object">宾语/补语</span><span class="grammar-clause">从句</span></div><section><small>基本句型</small><b>${escapeHtml(data.pattern||"")}</b></section><div class="grammar-core"><p><small>主语</small>${escapeHtml(data.subject||"")}</p><p><small>谓语</small>${escapeHtml(data.predicate||"")}</p>${data.object?`<p><small>宾语 / 补语</small>${escapeHtml(data.object)}</p>`:""}</div>${clauses?`<section class="grammar-clauses"><small>从句结构</small><ul>${clauses}</ul></section>`:""}${points?`<section><small>语法重点</small><div class="grammar-points">${points}</div></section>`:""}<section class="grammar-explanation"><small>中文讲解</small><p id="grammarExplanation">${formatText(explanation)}</p>${loadingExplanation?'<i>正在结合句法结构生成更自然的中文讲解…</i>':''}</section><details class="grammar-tree"><summary>查看成分句法树</summary><pre>${escapeHtml(data.constituency||"")}</pre></details></div>`;
 }
 async function showSentenceGrammar(sentence){
+  openMobileDetailPanel("word");
   selectedGrammarSentence=sentence;if(document.body.classList.contains("focus")){document.body.classList.add("focus-word-open");syncReaderPanels();}
   const requestId=++grammarRequestId;$("#wordPanel").innerHTML=`${wordPanelTabsHtml("grammar")}<div class="grammar-analysis"><span class="loading-line">正在读取本地句法分析…</span></div>`;
   try{
@@ -1281,6 +1357,7 @@ function handleManualAction(action){if(action==='start'){startManualDictation();
 function updateManualDictationView(){const status=$("#manualStatus");if(!status)return;let message=`点击开始，共 ${manualDictation.items.length} 个词`;if(manualDictation.complete)message=`听写完成，已揭示 ${manualDictation.items.length} 个单词`;else if(manualDictation.index>=0){if(!manualDictation.running)message=`已暂停 · 第 ${manualDictation.index+1}/${manualDictation.items.length} 个`;else if(manualDictation.stage==='speaking')message=`第 ${manualDictation.index+1}/${manualDictation.items.length} 个 · 正在朗读第 ${Math.min(manualRepeatCount,manualDictation.repeatIndex+1)}/${manualRepeatCount} 遍`;else if(manualDictation.stage==='pause')message=`第 ${manualDictation.index+1} 个完成 · 停顿 ${manualPauseSeconds} 秒`;else message=`第 ${manualDictation.index+1}/${manualDictation.items.length} 个`;}status.textContent=message;const start=$("#manualStart"),pause=$("#manualPause");if(start)start.textContent=manualDictation.complete?'重新开始':manualDictation.index<0?'开始':'重新开始';if(pause){pause.disabled=manualDictation.index<0||manualDictation.complete;pause.textContent=manualDictation.running?'暂停':'继续';}$$('.manual-word').forEach((element,index)=>{const played=manualDictation.played.has(index),current=index===manualDictation.index&&!manualDictation.complete,text=element.querySelector('.manual-word-text');element.classList.toggle('played',played);element.classList.toggle('current',current);element.classList.toggle('revealed',manualDictation.complete);text.textContent=manualDictation.complete?manualDictation.items[index].word:played?'████████':'待听写';});}
 function flashManualWord(index){const element=$(`.manual-word[data-manual-index="${index}"]`);if(!element)return;element.classList.remove('replay-flash');void element.offsetWidth;element.classList.add('replay-flash');}
 function handleReviewClick(event){
+  if(event.target.closest('[data-close-mobile-panel]')){closeMobileDetailPanels(false);return;}
   const filter=event.target.closest('[data-review-filter]');if(filter){stopManualDictation();reviewFilter=filter.dataset.reviewFilter;reviewPage=1;renderReview();return;}
   const modeButton=event.target.closest('[data-review-mode]');if(modeButton){stopManualDictation();reviewMode=modeButton.dataset.reviewMode;reviewPage=1;renderReview();return;}
   const pageButton=event.target.closest('[data-review-page]');if(pageButton){changeReviewPage(pageButton.dataset.reviewPage);return;}
@@ -1292,8 +1369,9 @@ function handleReviewClick(event){
   const manualInfoSpeak=event.target.closest('.manual-info-speaker');if(manualInfoSpeak){playWordTts(manualInfoSpeak.dataset.word);}
 }
 async function showReviewWordInfo(entry){
+  openMobileDetailPanel("review");
   const panel=$("#reviewWordPanel"),requestId=++wordRequestId,bookInfo=libraryBooks.find(item=>item.id===entry.book_id);
-  panel.innerHTML=`<div class="manual-info-card"><button class="manual-info-speaker" data-word="${escapeHtml(entry.word)}">♪</button><span class="phonetic">${formatText(entry.phonetic)}</span><h3>${escapeHtml(entry.word)}</h3><p class="manual-info-meaning">${formatText(entry.meaning)}</p><div id="manualRemoteDefinition"><span class="loading-line">正在加载完整释义…</span></div>${contextBlockHtml(bookInfo?.title||'当前句子',escapeHtml(entry.context),entry.context)}<div id="manualRemoteUsage" class="usage-note"><span class="loading-line">正在分析当前句中的用法…</span></div><div id="manualRemoteExamples" class="dict-examples"><span class="loading-line">正在加载例句…</span></div>${entry.note?`<div class="saved-word-note"><small>我的备注</small><p>${escapeHtml(entry.note)}</p></div>`:''}</div>`;
+  panel.innerHTML=`<button class="mobile-sheet-close" type="button" data-close-mobile-panel aria-label="关闭释义">×</button><div class="manual-info-card"><button class="manual-info-speaker" data-word="${escapeHtml(entry.word)}">♪</button><span class="phonetic">${formatText(entry.phonetic)}</span><h3>${escapeHtml(entry.word)}</h3><p class="manual-info-meaning">${formatText(entry.meaning)}</p><div id="manualRemoteDefinition"><span class="loading-line">正在加载完整释义…</span></div>${contextBlockHtml(bookInfo?.title||'当前句子',escapeHtml(entry.context),entry.context)}<div id="manualRemoteUsage" class="usage-note"><span class="loading-line">正在分析当前句中的用法…</span></div><div id="manualRemoteExamples" class="dict-examples"><span class="loading-line">正在加载例句…</span></div>${entry.note?`<div class="saved-word-note"><small>我的备注</small><p>${escapeHtml(entry.note)}</p></div>`:''}</div>`;
   fetch(`/api/word-dictionary?word=${encodeURIComponent(entry.word)}`,{cache:'no-store'}).then(async response=>response.ok?response.json():Promise.reject()).then(data=>{if(requestId!==wordRequestId)return;const groups=(data.groups||[]).map(group=>`<div class="dict-group"><b>${escapeHtml(group.pos)}</b><p>${group.translations.map(escapeHtml).join('；')}</p></div>`).join('');$("#manualRemoteDefinition").innerHTML=groups||`<p>${formatText(entry.meaning)}</p>`;$("#manualRemoteExamples").innerHTML=(data.examples||[]).length?`<small>EXAMPLES</small>${data.examples.map(example=>`<p>${escapeHtml(example)}</p>`).join('')}`:'<small>暂无例句</small>';}).catch(()=>{if(requestId===wordRequestId){$("#manualRemoteDefinition").innerHTML=`<p>${formatText(entry.meaning)}</p>`;$("#manualRemoteExamples").innerHTML='';}});
   fetch('/api/word-context',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({word:entry.word,contextSentence:entry.context,expandedContext:entry.context})}).then(async response=>response.ok?response.json():Promise.reject()).then(data=>{if(requestId===wordRequestId)$("#manualRemoteUsage").innerHTML=formatText(data.explanation||'结合当前句理解该词的具体用法。');}).catch(()=>{if(requestId===wordRequestId)$("#manualRemoteUsage").textContent='结合当前句理解该词的具体用法。';});
 }

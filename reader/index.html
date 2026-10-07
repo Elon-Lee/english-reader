@@ -2,12 +2,13 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>拾页 · 英语点读</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20261005-7">
+  <link rel="stylesheet" href="styles.css?v=20261005-9">
+  <link rel="stylesheet" href="responsive.css?v=20261005-2">
 </head>
-<body class="runtime-pending">
+<body class="runtime-pending screen-shelf">
   <aside class="sidebar">
     <div class="brand"><img class="brand-mark" src="shiyue-mark.svg" alt="拾页图标"><div><b>拾页</b><small id="brandModeLabel">ENGLISH READER</small></div><button id="sidebarToggle" class="sidebar-toggle" type="button" title="隐藏菜单栏" aria-label="隐藏菜单栏"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4" r="1.6"></circle><circle cx="10" cy="10" r="1.6"></circle><circle cx="10" cy="16" r="1.6"></circle></svg></button></div>
     <nav>
@@ -23,6 +24,8 @@
       <button id="seriesMoreBtn" class="series-more hidden" type="button" aria-expanded="false">更多书系</button>
     </section>
   </aside>
+  <button id="sidebarBackdrop" class="mobile-backdrop sidebar-backdrop hidden" type="button" aria-label="关闭菜单"></button>
+  <button id="mobilePanelBackdrop" class="mobile-backdrop panel-backdrop hidden" type="button" aria-label="关闭详情面板"></button>
 
   <main>
     <header class="topbar non-reader" aria-hidden="true">
@@ -218,6 +221,6 @@
       <div class="delete-dialog-actions"><button value="cancel">取消</button><button id="confirmUninstallNode" type="button" disabled>确认卸载</button></div>
     </form>
   </dialog>
-  <script src="app.js?v=20261005-7"></script>
+  <script src="app.js?v=20261006-1"></script>
 </body>
 </html>
