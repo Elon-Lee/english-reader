@@ -5,11 +5,14 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
+from urllib.error import HTTPError,URLError
+from urllib.request import Request,urlopen
 
 from import_video_worker import import_video
 from library_db import BOOKS_ROOT, ROOT, update_job
-from youtube_subtitles import has_translated_english_track,select_chinese_track,select_native_english_track
+from youtube_subtitles import has_translated_english_track,json3_to_srt,preferred_json3_entry,select_chinese_track,select_native_english_track
 
 YTDLP=ROOT/".local/bin/yt-dlp"
 NODE=Path(shutil.which("node") or "/usr/local/bin/node")
@@ -32,11 +35,32 @@ def probe_info(url):
     output=subprocess.check_output([str(YTDLP),"--js-runtimes",f"node:{NODE}","--dump-single-json","--no-playlist","--skip-download",url],text=True,stderr=subprocess.STDOUT,timeout=120)
     return json.loads(output)
 
+def download_translated_caption(track,target,log,attempts=3):
+    entry=preferred_json3_entry(track)
+    if not entry:return None
+    error=""
+    for attempt in range(attempts):
+        if attempt:time.sleep((2,6,15)[min(attempt-1,2)])
+        try:
+            request=Request(entry["url"],headers={"User-Agent":"Mozilla/5.0","Accept":"application/json,text/plain,*/*","Referer":"https://www.youtube.com/"})
+            with urlopen(request,timeout=35) as response:raw=response.read()
+            srt=json3_to_srt(raw)
+            if srt.count(" --> ")<3:raise ValueError("translated caption response contains too few cues")
+            target.write_text(srt,encoding="utf-8")
+            with log.open("a") as output:output.write(f"[shiyue] Direct translated caption download succeeded: {srt.count(' --> ')} cues\n")
+            return target
+        except (HTTPError,URLError,TimeoutError,ValueError,json.JSONDecodeError) as exc:
+            error=f"{type(exc).__name__}: {exc}"
+            with log.open("a") as output:output.write(f"[shiyue] Direct translated caption attempt {attempt+1}/{attempts} failed: {error}\n")
+    return None
+
 def download_caption_track(url,destination,log,job_id,track,prefix,label):
     if not track:return None
     for stale in destination.glob(f"{prefix}.*.srt"):stale.unlink()
     target=destination/("subtitles.en.srt" if prefix=="english" else "subtitles.zh-CN.srt");target.unlink(missing_ok=True)
     update_job(job_id,progress=4,step=f"下载 YouTube {label}")
+    if track.get("translated"):
+        return download_translated_caption(track,target,log)
     flag="--write-subs" if track["source"]=="manual" else "--write-auto-subs"
     command=[YTDLP,"--js-runtimes",f"node:{NODE}","--no-playlist","--skip-download",flag,"--sub-langs",track["code"],"--sub-format","srt","--convert-subs","srt","-o",str(destination/f"{prefix}.%(ext)s"),url]
     code,_=run_ytdlp(command,log,job_id);subtitle=next(iter(sorted(destination.glob(f"{prefix}.*.srt"))),None)
@@ -51,6 +75,13 @@ def download_bilingual_subtitles(url,destination,log,job_id,info):
     chinese_label=("人工中文字幕" if chinese_track and chinese_track["source"]=="manual" else "原生自动中文字幕" if chinese_track and chinese_track["source"]=="automatic" else "自动翻译中文字幕")
     english=download_caption_track(url,destination,log,job_id,english_track,"english",english_label)
     chinese=download_caption_track(url,destination,log,job_id,chinese_track,"chinese",chinese_label)
+    if chinese_track and chinese_track.get("translated") and not chinese:
+        with log.open("a") as output:output.write("[shiyue] Refreshing YouTube caption URLs after translated subtitle failure\n")
+        try:
+            refreshed=probe_info(url);refreshed_track=select_chinese_track(refreshed)
+            if refreshed_track:chinese_track=refreshed_track;chinese=download_caption_track(url,destination,log,job_id,chinese_track,"chinese",chinese_label)
+        except Exception as exc:
+            with log.open("a") as output:output.write(f"[shiyue] Caption URL refresh failed: {type(exc).__name__}: {exc}\n")
     return english,english_track,chinese,chinese_track
 
 def main():
@@ -78,7 +109,7 @@ def main():
             converted=destination/"source.mp4"; subprocess.run(["ffmpeg","-y","-v","error","-i",video,"-c","copy",converted],check=True); video.unlink()
         metadata={"title":title,"englishTitle":request.get("englishTitle",title),"series":series,"level":request.get("level",""),"sourceType":"youtube",
           "subtitleStrategy":"auto","youtubeSubtitleSource":subtitle_source,"youtubeSubtitleTrack":subtitle_track["code"] if subtitle_track else "","youtubeSubtitleLanguage":"en" if subtitle_track else "","youtubeSubtitleTranslated":False,
-          "youtubeChineseSubtitleSource":chinese_track["source"] if chinese_subtitle and chinese_track else "none","youtubeChineseSubtitleTrack":chinese_track["code"] if chinese_track else "","youtubeChineseSubtitleLanguage":"zh-CN" if chinese_track else "","youtubeChineseSubtitleTranslated":bool(chinese_track and chinese_track.get("translated")),
+          "youtubeChineseSubtitleAvailable":bool(chinese_track),"youtubeChineseSubtitleDownloaded":bool(chinese_subtitle),"youtubeChineseSubtitleSource":chinese_track["source"] if chinese_subtitle and chinese_track else ("download-failed" if chinese_track else "none"),"youtubeChineseSubtitleTrack":chinese_track["code"] if chinese_track else "","youtubeChineseSubtitleLanguage":"zh-CN" if chinese_track else "","youtubeChineseSubtitleTranslated":bool(chinese_track and chinese_track.get("translated")),
           "translatedEnglishRejected":has_translated_english_track(info),"sourceUrl":url,"youtubeId":video_id,"channel":request.get("channel","")}
         (destination/".video-import.json").write_text(json.dumps(metadata,ensure_ascii=False,indent=2))
         update_job(job_id,source_path=relative,progress=25,step="YouTube 下载完成，开始视频处理")

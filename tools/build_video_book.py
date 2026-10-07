@@ -47,6 +47,22 @@ def original_cue_book(entries):
     return sentences,{"method":"youtube-original-caption-cues","inputCues":len(entries),"sentences":len(sentences),"words":sum(len(item["words"]) for item in sentences),"originalCueBoundariesPreserved":True}
 
 def attach_chinese(sentences,entries):
+    for sentence in sentences:
+        sentence.pop("translation",None);sentence.pop("translationSource",None)
+    original_cues=[sentence for sentence in sentences if "cueStart" in sentence]
+    if original_cues:
+        available=set(range(len(entries)));matched=0
+        # YouTube translations are generated from the same rolling caption cues.
+        # Match exact original cue starts first so overlapping display windows do
+        # not concatenate the previous and next translations into one sentence.
+        for sentence in sentences:
+            start=float(sentence.get("cueStart",sentence.get("start",0)));end=float(sentence.get("cueEnd",sentence.get("end",start)))
+            exact=[index for index in available if abs(float(entries[index]["start"])-start)<=.08]
+            if not exact:continue
+            index=min(exact,key=lambda item:(abs(float(entries[item]["start"])-start),abs(float(entries[item]["end"])-end)))
+            text=re.sub(r"\s+"," ",entries[index]["text"]).strip()
+            if text:sentence["translation"]=text;sentence["translationSource"]="youtube-caption";matched+=1;available.remove(index)
+        return {"method":"youtube-original-cue-start","cues":len(entries),"matchedSentences":matched,"coverage":round(matched/max(1,len(sentences)),4)}
     matched=0
     for sentence in sentences:
         start=float(sentence["start"]);end=float(sentence["end"]);ranked=[]

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Select native English YouTube captions and reject auto-translated tracks."""
+"""Select and convert native/translated YouTube caption tracks."""
+import json
+import re
 from urllib.parse import parse_qs,urlsplit
 
 def track_url_language(entry):
@@ -74,3 +76,29 @@ def select_chinese_track(info):
     if candidates:
         _,code,entries=min(candidates,key=lambda item:item[0]);return {"source":"translated","code":code,"language":"zh-CN","translated":True,"entries":entries}
     return None
+
+def preferred_json3_entry(track,source_language="en"):
+    if not track:return None
+    entries=track.get("entries") or []
+    matching=[entry for entry in entries if str(entry.get("ext","")).casefold()=="json3" and track_url_language(entry)[0].casefold().startswith(source_language.casefold())]
+    if matching:return matching[0]
+    return next((entry for entry in entries if str(entry.get("ext","")).casefold()=="json3"),None)
+
+def srt_timestamp(seconds):
+    millis=max(0,round(float(seconds)*1000));hours,millis=divmod(millis,3600000);minutes,millis=divmod(millis,60000);secs,millis=divmod(millis,1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+def json3_to_srt(payload):
+    if isinstance(payload,(str,bytes)):payload=json.loads(payload)
+    cues=[]
+    for event in payload.get("events",[]):
+        text="".join(str(segment.get("utf8","") or "") for segment in event.get("segs",[]))
+        text=re.sub(r"\s+"," ",text.replace("\u200b","").replace("\n"," ")).strip()
+        if not text:continue
+        start=max(0,float(event.get("tStartMs",0) or 0)/1000)
+        duration=max(.08,float(event.get("dDurationMs",0) or 0)/1000)
+        cues.append({"start":start,"end":start+duration,"text":text})
+    blocks=[]
+    for index,cue in enumerate(cues,1):
+        blocks.append(f"{index}\n{srt_timestamp(cue['start'])} --> {srt_timestamp(cue['end'])}\n{cue['text']}")
+    return "\n\n".join(blocks)+( "\n" if blocks else "")
