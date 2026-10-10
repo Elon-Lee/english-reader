@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.shiyue.saas-backup</string>
+  <key>ProgramArguments</key><array>
+    <string>/Users/x/Documents/english/.local/saas-venv/bin/python</string>
+    <string>/Users/x/Documents/english/tools/saas_backup.py</string>
+    <string>--database-url</string><string>postgresql://127.0.0.1:55432/shiyue_saas_local</string>
+    <string>--media-root</string><string>/Users/x/Documents/english/books</string>
+    <string>--output-root</string><string>/Users/x/Documents/english/.local/saas-backups</string>
+  </array>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>30</integer></dict>
+  <key>StandardOutPath</key><string>/Users/x/Documents/english/.local/saas-backups/launchd.log</string>
+  <key>StandardErrorPath</key><string>/Users/x/Documents/english/.local/saas-backups/launchd-error.log</string>
+</dict></plist>

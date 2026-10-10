@@ -5,17 +5,40 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>拾页 · 英语点读</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=20261005-9">
-  <link rel="stylesheet" href="responsive.css?v=20261005-2">
+  <link rel="stylesheet" href="styles.css?v=20261011-1">
+  <link rel="stylesheet" href="responsive.css?v=20261011-1">
 </head>
 <body class="runtime-pending screen-shelf">
+  <section id="saasAuth" class="saas-auth hidden" aria-live="polite">
+    <div class="saas-auth-card">
+      <img class="saas-auth-mark" src="shiyue-mark.svg" alt="拾页">
+      <small>SHIYUE MEMBERS</small>
+      <h1>登录拾页</h1>
+      <p>使用邀请账号进入书城、私人学习空间和会员中心。</p>
+      <form id="saasLoginForm" class="saas-auth-form">
+        <label>邮箱<input id="saasLoginEmail" type="email" autocomplete="email" required></label>
+        <label>密码<input id="saasLoginPassword" type="password" autocomplete="current-password" required></label>
+        <button type="submit">登录</button>
+      </form>
+      <details class="saas-register"><summary>有邀请码？创建账号</summary><form id="saasRegisterForm" class="saas-auth-form"><label>邀请码<input id="saasInviteCode" autocomplete="off" required></label><label>邮箱<input id="saasRegisterEmail" type="email" autocomplete="email" required></label><label>密码（至少10位）<input id="saasRegisterPassword" type="password" autocomplete="new-password" minlength="10" required></label><button type="submit">注册并发送验证邮件</button></form></details>
+      <form id="saasForgotForm" class="saas-forgot"><label>忘记密码？<input id="saasForgotEmail" type="email" autocomplete="email" placeholder="输入邮箱"></label><button type="submit">发送重置邮件</button></form>
+      <p id="saasAuthMessage" class="saas-auth-message"></p>
+      <p class="saas-legal-links"><a href="/terms" target="_blank" rel="noopener">用户协议</a> · <a href="/privacy" target="_blank" rel="noopener">隐私政策</a> · <a href="/content-policy" target="_blank" rel="noopener">内容声明</a></p>
+    </div>
+  </section>
   <aside class="sidebar">
     <div class="brand"><img class="brand-mark" src="shiyue-mark.svg" alt="拾页图标"><div><b>拾页</b><small id="brandModeLabel">ENGLISH READER</small></div><button id="sidebarToggle" class="sidebar-toggle" type="button" title="隐藏菜单栏" aria-label="隐藏菜单栏"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4" r="1.6"></circle><circle cx="10" cy="10" r="1.6"></circle><circle cx="10" cy="16" r="1.6"></circle></svg></button></div>
     <nav>
       <button class="nav active" data-screen="shelf">⌂ <span>我的书架</span></button>
-      <button class="nav" data-screen="stats">◎ <span>学习记录</span></button>
-      <button class="nav" data-screen="vocab">☆ <span>生词复习</span><i id="dueBadge" class="badge hidden">0</i></button>
+      <button class="nav" data-screen="stats" data-saas-only="true">◎ <span>学习记录</span></button>
+      <button class="nav" data-screen="vocab" data-saas-only="true">☆ <span>生词复习</span><i id="dueBadge" class="badge hidden">0</i></button>
       <button class="nav" data-screen="import">＋ <span>导入书籍</span></button>
+      <button id="catalogNav" class="nav hidden" data-screen="catalog" data-saas-only="true">⌂ <span>首页·书城</span></button>
+      <button id="saasLibraryNav" class="nav hidden" data-screen="my-library" data-saas-only="true">▦ <span>我的书架</span></button>
+      <button id="workspaceNav" class="nav hidden" data-screen="workspace" data-saas-only="true">▤ <span>学习空间</span></button>
+      <button id="rewardsNav" class="nav hidden" data-screen="rewards" data-saas-only="true">✦ <span>成长奖励</span></button>
+      <button id="membershipNav" class="nav hidden" data-screen="membership" data-saas-only="true">◇ <span>会员中心</span></button>
+      <button id="adminNav" class="nav hidden" data-screen="admin" data-saas-only="true" data-admin-only="true">▣ <span>运营后台</span></button>
       <button class="nav" data-screen="settings">⚙ <span>系统设置</span></button>
     </nav>
     <section id="seriesChannels" class="series-channels" aria-label="书系频道">
@@ -30,7 +53,7 @@
   <main>
     <header class="topbar non-reader" aria-hidden="true">
       <div class="topbar-inner">
-        <div class="topbar-left"><button id="sidebarReveal" class="sidebar-reveal" type="button" title="显示菜单栏" aria-label="显示菜单栏"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4" r="1.6"></circle><circle cx="10" cy="10" r="1.6"></circle><circle cx="10" cy="16" r="1.6"></circle></svg></button><button class="back" id="backBtn">← 书架</button></div>
+        <div class="topbar-left"><button id="sidebarReveal" class="sidebar-reveal" type="button" title="显示菜单栏" aria-label="显示菜单栏"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="4" r="1.6"></circle><circle cx="10" cy="10" r="1.6"></circle><circle cx="10" cy="16" r="1.6"></circle></svg><span id="mobileScreenLabel" class="mobile-screen-label">导航</span></button><button class="back" id="backBtn">← 书架</button></div>
         <div class="book-heading"><small>0级 · STARTERS</small><strong>生存游戏 <i>Survive!</i></strong></div>
         <div class="top-actions"><button id="readerLayoutBtn" class="reader-layout-btn reader-only-action hidden" type="button" title="切换为上下布局" aria-label="切换阅读布局" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect class="layout-visual" x="2" y="3" width="7" height="18" rx="2"></rect><rect class="layout-story" x="11" y="3" width="7" height="18" rx="2"></rect><rect class="layout-dict" x="20" y="3" width="2" height="18" rx="1"></rect></svg></button><button id="eyeComfortBtn" class="eye-comfort-btn reader-only-action hidden" aria-pressed="false">◐ 护眼</button><button id="focusBtn" class="reader-only-action hidden" aria-pressed="false">专注模式</button></div>
       </div>
@@ -41,6 +64,66 @@
       <div class="shelf-title"><div><h2 id="shelfSeriesTitle">我的书架</h2><p id="shelfSeriesSubtitle">按书系浏览已导入书籍</p></div><div class="shelf-tools"><span id="shelfCount">0 本</span><div class="view-switch"><button id="tileViewBtn" class="active" title="平铺">▦</button><button id="listViewBtn" title="列表">☷</button></div></div></div>
       <div id="libraryGrid" class="library-grid"><div id="libraryLoadingText" class="empty-state">正在读取书架…</div></div>
       <div class="tip"><span>✦</span><div><b>推荐学习路径</b><p>先用泛听了解故事，再用精读点词，最后进入跟读模式模仿原音。</p></div></div>
+    </section>
+
+    <section id="catalog" class="screen dashboard catalog-screen hidden">
+      <div class="page-title"><small>OFFICIAL LIBRARY</small><h1>首页·书城</h1><p>只展示已审核并确认可发布的官方读物。</p></div>
+      <form id="catalogSearchForm" class="catalog-search panel"><input id="catalogQuery" type="search" placeholder="搜索中文标题、英文标题、作者或书系"><select id="catalogSeries"><option value="">全部书系</option></select><select id="catalogLevel"><option value="">全部难度</option></select><select id="catalogType"><option value="">全部资源类型</option><option value="book">读物</option><option value="audio">MP3</option><option value="video">视频</option><option value="youtube">YouTube</option></select><button type="submit">搜索</button></form>
+      <div class="catalog-layout catalog-layout-list-only"><div id="catalogBookList" class="catalog-book-list"></div></div>
+    </section>
+    <section id="my-library" class="screen dashboard catalog-screen hidden">
+      <div class="page-title"><small>MY OFFICIAL LIBRARY</small><h1>我的书架</h1><p>这里仅显示你收藏的官方读物；私人导入内容将在多租户工作区切换后归入此处。</p></div>
+      <div id="myLibraryList" class="catalog-book-list my-library-list"></div>
+    </section>
+    <section id="workspace" class="screen dashboard catalog-screen workspace-screen hidden">
+      <div class="page-title"><small>LEARNING SPACE</small><h1>学习空间</h1><p>仅显示你拥有的私人读物、关联媒体和已迁移学习数据。</p></div>
+      <section id="workspaceContinue" class="workspace-continue panel hidden" aria-label="继续学习"></section>
+      <div class="workspace-section-head"><div><small>MY PRIVATE BOOKS</small><h2>我的私人读物</h2></div><span id="workspaceBookCount">正在读取…</span></div>
+      <div class="workspace-toolbar"><label class="workspace-search"><span class="sr-only">搜索私人读物</span><input id="workspaceQuery" type="search" placeholder="搜索标题、书系或英文标题"></label><label class="workspace-sort"><span class="sr-only">排序方式</span><select id="workspaceSort"><option value="recent">最近阅读</option><option value="progress">阅读进度</option><option value="title">标题</option><option value="added">最近导入</option></select></label></div>
+      <div id="workspaceBookList" class="catalog-book-list my-library-list"></div>
+      <p id="workspaceNotice" class="membership-notice"></p>
+      <details id="workspaceImportTools" class="workspace-import-tools panel"><summary><span><small>IMPORT TOOLS</small><b>导入新内容</b></span><em>TXT、PDF、MP3、视频、YouTube</em></summary><div class="workspace-import-tools-body">
+        <form id="workspaceTextImportForm" class="panel workspace-import-form"><div><small>POSTGRESQL NATIVE IMPORT</small><h2>导入 TXT / Markdown / PDF / MP3 / 视频</h2><p>PDF 使用本机 OCR，MP3 和视频使用本机 Whisper；视频还会生成受保护音频与封面。不会经过旧 SQLite 导入器。</p></div><label>文件<input id="workspaceTextImportFile" type="file" accept="text/plain,text/markdown,application/pdf,audio/mpeg,video/mp4,video/quicktime,video/x-m4v,video/x-matroska,video/webm,.txt,.md,.pdf,.mp3,.mp4,.mov,.m4v,.mkv,.webm" required></label><label>标题（可选）<input id="workspaceTextImportTitle" placeholder="默认使用文件名"></label><button type="submit">上传并导入</button></form>
+        <form id="workspaceYoutubeImportForm" class="panel workspace-import-form"><div><small>POSTGRESQL NATIVE YOUTUBE IMPORT</small><h2>导入 YouTube 学习内容</h2><p>下载最高 720p 视频和可用的原生英文、中文字幕，再复用视频 Whisper 处理器。内容保持私人，不会自动进入官方书城。</p></div><label>YouTube 地址<input id="workspaceYoutubeImportUrl" type="url" placeholder="https://www.youtube.com/watch?v=..." required></label><label>标题（可选）<input id="workspaceYoutubeImportTitle" placeholder="默认使用视频标题"></label><button type="submit">下载并导入</button></form>
+        <section class="panel workspace-task-panel"><div class="workspace-task-head"><div><small>PRIVATE IMPORT TASKS</small><h2>导入任务</h2></div><button id="workspaceTaskRefresh" type="button">刷新</button></div><div id="workspaceTaskList"></div><p id="workspaceTaskNotice" class="membership-notice">文档、MP3、本地视频和 YouTube 都使用 PostgreSQL 私人任务；失败或取消会释放预占额度。</p></section>
+      </div></details>
+    </section>
+    <section id="workspace-reader" class="screen dashboard catalog-screen catalog-reader-screen hidden">
+      <button id="workspaceReaderBack" class="catalog-reader-back" type="button">← 返回学习空间</button>
+      <div class="page-title"><small id="workspaceReaderMeta">PRIVATE READER</small><h1 id="workspaceReaderTitle">正在打开私人读物</h1><p id="workspaceReaderNotice"></p></div>
+      <div class="workspace-reader-learning-layout"><article id="workspaceReaderContent" class="catalog-reader-content panel"></article><aside id="workspaceWordPanel" class="panel workspace-word-panel"><div class="word-empty"><span>Aa</span><h3>点击正文单词</h3><p>可保存私人释义、语境和备注；数据只写入当前账号的 PostgreSQL 工作区。</p></div></aside></div>
+    </section>
+    <section id="catalog-reader" class="screen dashboard catalog-screen catalog-reader-screen hidden">
+      <button id="catalogReaderBack" class="catalog-reader-back" type="button">← 返回书城</button>
+      <div class="page-title"><small id="catalogReaderMeta">OFFICIAL READER</small><h1 id="catalogReaderTitle">正在打开读物</h1><p id="catalogReaderNotice"></p></div>
+      <article id="catalogReaderContent" class="catalog-reader-content panel"></article>
+    </section>
+
+    <section id="rewards" class="screen dashboard rewards-screen hidden">
+      <div class="page-title"><small>GROWTH & REWARDS</small><h1>成长奖励</h1><p>签到、有效阅读和复习都会积累成长值；每月最多获得 100 点。</p></div>
+      <section id="rewardStatus" class="reward-status panel"></section>
+      <section class="panel reward-catalog"><div class="reward-section-head"><div><small>REDEEM</small><h2>兑换奖励</h2></div><button id="rewardsRefresh" type="button">刷新</button></div><div id="rewardCatalogList" class="reward-catalog-list"></div></section>
+      <section class="panel reward-ledger"><div class="reward-section-head"><div><small>RECENT ACTIVITY</small><h2>成长记录</h2></div></div><div id="rewardLedgerList"></div></section>
+      <p id="rewardNotice" class="membership-notice"></p>
+    </section>
+
+    <section id="admin" class="screen dashboard admin-screen hidden">
+      <div class="page-title"><small>ADMIN OPERATIONS</small><h1>运营后台</h1><p>用户、邀请码、套餐、额度、书城审核和运营审计。密码与平台密钥不会在此展示。</p></div>
+      <nav id="adminTabs" class="admin-tabs" aria-label="运营后台分类"><button class="active" data-admin-tab="overview">概览与用户</button><button data-admin-tab="membership">会员与额度</button><button data-admin-tab="catalog">书城审核</button><button data-admin-tab="media">媒体资产</button><button data-admin-tab="audit">审计与导出</button></nav>
+      <p id="adminActionNotice" class="admin-action-notice" aria-live="polite">请选择功能分类进行操作。</p>
+      <div id="adminDashboard" class="admin-dashboard" data-admin-pane="overview"></div>
+      <section class="panel admin-panel" data-admin-pane="overview"><div class="admin-section-head"><div><small>USERS</small><h2>用户与设备</h2></div><button id="adminRefresh" type="button">刷新</button></div><input id="adminUserSearch" class="admin-search" type="search" placeholder="搜索邮箱、昵称或用户 ID"><div id="adminUserList" class="admin-user-list"></div></section>
+      <div class="admin-two-column" data-admin-pane="membership">
+        <form id="adminInvitationForm" class="panel admin-form"><div class="admin-section-head"><div><small>INVITATION CHANNEL</small><h2>创建渠道邀请码</h2></div></div><label>邀请码<input id="adminInvitationCode" required placeholder="例如 WECHAT2026"></label><label>渠道<input id="adminInvitationChannel" placeholder="例如 wechat"></label><label>最大使用次数<input id="adminInvitationUses" type="number" min="1" value="1" required></label><label>备注<input id="adminInvitationNote" placeholder="活动说明"></label><button type="submit">创建邀请码</button></form>
+        <form id="adminQuotaForm" class="panel admin-form"><div class="admin-section-head"><div><small>QUOTA ADJUSTMENT</small><h2>调整用户额度</h2></div></div><label>用户 ID<input id="adminQuotaUserId" required></label><label>权益<select id="adminQuotaFeature"><option value="ai_context_generations">AI 语境</option><option value="ai_grammar_generations">句法分析</option><option value="official_unlocks">官方解锁</option><option value="mp3_imports">MP3 导入</option></select></label><label>调整数量（正数补发，负数扣减）<input id="adminQuotaQuantity" type="number" required></label><label>原因<input id="adminQuotaReason" required></label><button type="submit">提交调整</button></form>
+      </div>
+      <div class="admin-two-column" data-admin-pane="membership">
+        <form id="adminOrderForm" class="panel admin-form"><div class="admin-section-head"><div><small>MANUAL ORDER</small><h2>人工开通套餐</h2></div></div><label>用户 ID<input id="adminOrderUserId" required></label><label>套餐<select id="adminOrderPlan"><option value="advanced-v1">进阶版</option><option value="pro-v1">Pro版</option></select></label><label>开始时间<input id="adminOrderStart" type="datetime-local" required></label><label>结束时间<input id="adminOrderEnd" type="datetime-local" required></label><label>金额（分）<input id="adminOrderAmount" type="number" min="0" value="0"></label><label>备注<input id="adminOrderNote"></label><button type="submit">人工开通</button></form>
+        <form id="adminAllowanceForm" class="panel admin-form"><div class="admin-section-head"><div><small>MEMBER INVITES</small><h2>发放邀请码额度</h2></div></div><label>用户 ID<input id="adminAllowanceUserId" required></label><label>数量<input id="adminAllowanceQuantity" type="number" min="1" value="1" required></label><label>原因<input id="adminAllowanceReason" required></label><button type="submit">发放额度</button></form>
+      </div>
+      <section class="panel admin-panel" data-admin-pane="catalog"><div class="admin-section-head"><div><small>CATALOG REVIEW</small><h2>官方书城审核</h2></div></div><form id="adminCatalogReviewForm" class="admin-review-form"><label>源内容 ID<input id="adminCatalogSourceId" required></label><label>版权<select id="adminCatalogRights"><option value="public_domain">公版</option><option value="licensed">已授权</option><option value="private">私人</option><option value="prohibited">禁止上架</option></select></label><label>发布状态<select id="adminCatalogPublication"><option value="draft">草稿</option><option value="published">发布</option><option value="archived">归档</option></select></label><button type="submit">保存审核</button></form><div id="adminCatalogSources" class="admin-source-list"></div></section>
+      <section class="panel admin-panel" data-admin-pane="audit"><div class="admin-section-head"><div><small>AUDIT & EXPORT</small><h2>管理操作审计</h2></div><button id="adminExport" type="button">导出经营 JSON</button></div><div id="adminAuditList" class="admin-audit-list"></div><p id="adminNotice" class="membership-notice"></p></section>
+      <section class="panel admin-panel" data-admin-pane="media"><div class="admin-section-head"><div><small>MEDIA INVENTORY</small><h2>媒体资产清单</h2></div><button id="adminMediaRefresh" type="button">刷新资产</button></div><div id="adminMediaList" class="admin-media-list"></div><div class="admin-media-pagination"><button id="adminMediaPrev" type="button">上一页</button><span id="adminMediaPage">第 1 页</span><button id="adminMediaNext" type="button">下一页</button></div></section>
     </section>
 
     <section id="stats" class="screen dashboard hidden"><div class="page-title"><small>LEARNING LOG</small><h1>学习记录</h1><p id="statsDescription">查看最近的阅读与复习情况。</p></div><div id="statsContent"></div></section>
@@ -84,16 +167,26 @@
       </form>
       <div id="importProgress" class="panel import-progress hidden"><div><b id="importStep">等待开始</b><span id="importPercent">0%</span></div><progress id="importBar" max="100" value="0"></progress><p id="importMessage"></p><div id="batchJobs" class="batch-jobs"></div></div>
     </section>
+    <section id="membership" class="screen dashboard membership-screen hidden">
+      <div class="page-title"><small>MEMBERSHIP CENTER</small><h1>会员中心</h1><p id="membershipSummary">正在读取当前套餐与额度。</p></div>
+      <div id="membershipPlan" class="membership-plan panel"></div>
+      <div id="membershipUsage" class="membership-usage"></div>
+      <section class="panel membership-orders"><div class="membership-orders-head"><div><small>MANUAL ORDERS</small><h2>人工开通记录</h2></div><button id="membershipRefresh" type="button">刷新</button></div><div id="membershipOrderList"></div></section>
+      <section class="panel account-lifecycle"><div><small>DATA & ACCOUNT</small><h2>数据与账号</h2><p>可导出账号数据；账号注销申请有 30 天撤销期。</p></div><div><button id="accountExport" type="button">导出我的数据</button><button id="accountDelete" class="danger-outline" type="button">申请注销账号</button><button id="accountCancelDeletion" class="hidden" type="button">撤销注销申请</button></div></section>
+      <p id="membershipNotice" class="membership-notice"></p>
+      <button id="saasLogout" class="membership-logout" type="button">退出登录</button>
+      <p class="saas-legal-links"><a href="/terms" target="_blank" rel="noopener">用户协议</a> · <a href="/privacy" target="_blank" rel="noopener">隐私政策</a> · <a href="/refunds" target="_blank" rel="noopener">退款规则</a> · <a href="/copyright" target="_blank" rel="noopener">版权投诉</a></p>
+    </section>
     <section id="settings" class="screen dashboard hidden">
       <div class="page-title settings-page-title"><small id="settingsModeLabel">READER SETTINGS</small><h1>系统设置</h1><p id="settingsDescription">管理账户、快捷键与阅读体验。</p></div>
       <div id="settingsTabs" class="settings-tabs" role="tablist" aria-label="系统设置分类">
         <button id="settingsGeneralTab" class="active" type="button" role="tab" aria-selected="true" aria-controls="settingsGeneralPanel" data-settings-tab="general"><span class="settings-tab-icon">Aa</span><span><b>通用设置</b><small>账户、快捷键与阅读体验</small></span></button>
-        <button id="settingsDeploymentTab" type="button" role="tab" aria-selected="false" aria-controls="settingsDeploymentPanel" data-settings-tab="deployment"><span class="settings-tab-icon">⇧</span><span><b>打包部署</b><small>远程发布、资源同步与回滚</small></span></button>
+        <button id="settingsDeploymentTab" type="button" role="tab" aria-selected="false" aria-controls="settingsDeploymentPanel" data-settings-tab="deployment" data-admin-only="true"><span class="settings-tab-icon">⇧</span><span><b>打包部署</b><small>远程发布、资源同步与回滚</small></span></button>
       </div>
       <section id="settingsGeneralPanel" class="settings-tab-panel" role="tabpanel" aria-labelledby="settingsGeneralTab" data-settings-panel="general">
         <form id="settingsForm" class="panel settings-form settings-general-form">
-          <div class="settings-section-head"><div><small>ACCOUNT & DICTIONARY</small><h2>账户与词典服务</h2></div><span id="tokenStatus">正在读取配置…</span></div>
-          <div class="settings-account-grid">
+          <div class="settings-section-head"><div><small id="settingsAccountEyebrow">ACCOUNT & DICTIONARY</small><h2 id="settingsAccountTitle">账户与词典服务</h2></div><span id="tokenStatus">正在读取配置…</span></div>
+          <div id="settingsAccountGrid" class="settings-account-grid">
             <label>账号邮箱<input id="diocoEmail" type="email" autocomplete="username" placeholder="name@example.com" required></label>
             <label>Dioco 令牌<input id="diocoToken" type="password" autocomplete="off" placeholder="留空表示保留现有令牌"></label>
           </div>
@@ -114,7 +207,7 @@
           <div class="settings-save-row"><p id="tokenPrivacyText" class="privacy-note">令牌由阅读服务安全保存，仅在调用词典服务时使用。</p><button type="submit">保存通用设置</button></div>
         </form>
       </section>
-      <section id="settingsDeploymentPanel" class="settings-tab-panel hidden" role="tabpanel" aria-labelledby="settingsDeploymentTab" data-settings-panel="deployment">
+      <section id="settingsDeploymentPanel" class="settings-tab-panel hidden" role="tabpanel" aria-labelledby="settingsDeploymentTab" data-settings-panel="deployment" data-admin-only="true">
        <section class="panel deployment-panel">
         <div class="deployment-head"><div><small>REMOTE READER NODES</small><h2>远程节点管理</h2><p>可保存多个Linux阅读节点。每个节点独立部署、同步、回滚和卸载；原始书籍与本地制作环境不会上传。</p></div><button id="newDeploymentNode" type="button">＋ 新增节点</button></div>
         <div class="deployment-top-grid">
@@ -156,7 +249,7 @@
     </section>
 
     <section id="reader" class="screen reader hidden" tabindex="-1">
-      <aside id="pagePanel" class="page-panel"><div id="mediaStage" class="media-stage" tabindex="0"><img id="pageImage" alt="原书扫描页"><video id="videoView" class="hidden" muted playsinline preload="none"></video><div id="videoStatusOverlay" class="video-status-overlay hidden"><i></i><b id="videoStatusText">正在准备视频</b><button id="videoRetryBtn" type="button" class="hidden">重试</button></div><div class="page-head"><b id="visualTitle">原书页</b><div class="visual-switch hidden" id="visualSwitch"><span id="videoQualitySwitch" class="video-quality-switch hidden"><button id="videoHighBtn" type="button" class="active">高清</button><button id="videoLowBtn" type="button">流畅</button></span><button id="closeStackLayoutBtn" class="visual-layout-close" type="button" title="切换为左右布局" aria-label="关闭上下布局，切换为左右布局">×</button></div></div><small id="pageLabel"></small></div></aside>
+      <aside id="pagePanel" class="page-panel"><div id="mediaStage" class="media-stage" tabindex="0"><img id="pageImage" alt="原书扫描页"><video id="videoView" class="hidden" muted playsinline preload="none"></video><div id="videoStatusOverlay" class="video-status-overlay hidden"><i></i><b id="videoStatusText">正在准备视频</b><button id="videoRetryBtn" type="button" class="hidden">重试</button></div><div id="imageStatusOverlay" class="video-status-overlay hidden is-error"><i></i><b id="imageStatusText">原书页面暂不可用</b><button id="imageRetryBtn" type="button" class="hidden">重试</button></div><div class="page-head"><b id="visualTitle">原书页</b><div class="visual-switch hidden" id="visualSwitch"><span id="videoQualitySwitch" class="video-quality-switch hidden"><button id="videoHighBtn" type="button" class="active">高清</button><button id="videoLowBtn" type="button">流畅</button></span><button id="closeStackLayoutBtn" class="visual-layout-close" type="button" title="切换为左右布局" aria-label="关闭上下布局，切换为左右布局">×</button></div></div><small id="pageLabel"></small></div></aside>
       <div class="story-panel">
         <div class="chapter">
           <span>INTERACTIVE STORY</span><h1>Survive!</h1>
@@ -195,6 +288,9 @@
       <div class="delete-dialog-actions"><button value="cancel">取消</button><button id="confirmDeleteBook" type="button" disabled>永久删除</button></div>
     </form>
   </dialog>
+  <dialog id="catalogDetailDialog" class="catalog-detail-dialog">
+    <form method="dialog" class="catalog-detail-dialog-shell"><button class="catalog-detail-close" value="close" aria-label="关闭读物详情">×</button><aside id="catalogDetail" class="catalog-detail"><div class="empty-state"><h3>正在读取读物</h3></div></aside></form>
+  </dialog>
   <dialog id="reimportDialog" class="reimport-dialog">
     <form method="dialog">
       <div class="reimport-dialog-head"><div><small>REIMPORT CONFIRMATION</small><h2>确认重复导入？</h2></div><button value="cancel" aria-label="关闭">×</button></div>
@@ -221,6 +317,6 @@
       <div class="delete-dialog-actions"><button value="cancel">取消</button><button id="confirmUninstallNode" type="button" disabled>确认卸载</button></div>
     </form>
   </dialog>
-  <script src="app.js?v=20261006-1"></script>
+  <script src="app.js?v=20261011-1"></script>
 </body>
 </html>

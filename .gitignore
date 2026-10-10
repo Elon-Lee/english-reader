@@ -1,4 +1,5 @@
 .dioco.local.json
+.env
 .cache/
 .local/
 books/.reader/

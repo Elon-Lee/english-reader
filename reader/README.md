@@ -10,6 +10,278 @@
 
 浏览器打开 `http://localhost:8765`。不要直接双击 `index.html`，浏览器会阻止读取本地 JSON。
 
+## SaaS 开发开关（阶段性）
+
+默认仍是现有单用户 SQLite 阅读器。`SHIYUE_SAAS_ENABLED=0` 时不需要 PostgreSQL，也不会改变书架、导入或本机部署流程。
+
+要准备 SaaS 开发环境，先复制根目录 [`.env.example`](../.env.example) 为未提交的 `.env`，填写 `DATABASE_URL`、`SESSION_SECRET`、SMTP 与首次管理员变量；然后安装驱动并执行迁移：
+
+```bash
+python3 -m venv .local/saas-venv
+.local/saas-venv/bin/python -m pip install -r requirements-saas.txt
+.local/saas-venv/bin/python tools/saas_migrate.py --migrate --bootstrap-admin --import-legacy
+```
+
+迁移会把现有 SQLite 读物、生词、备注、学习记录和句法数据作为管理员的 `private` 内容复制至 PostgreSQL；不会删除或修改 `.local/library.sqlite3`。首次管理员创建后，应从 `.env` 删除 `BOOTSTRAP_ADMIN_PASSWORD`。只有迁移完成后才将 `SHIYUE_SAAS_ENABLED=1` 设为启用状态。
+
+若需要在本机重设初始管理员密码，不要把密码作为命令参数传入。临时在当前 shell 中以静默方式设置 `BOOTSTRAP_ADMIN_PASSWORD`，再执行：
+
+```bash
+read -rs 'BOOTSTRAP_ADMIN_PASSWORD?新的管理员密码： '
+export BOOTSTRAP_ADMIN_PASSWORD
+.local/saas-venv/bin/python tools/saas_migrate.py --reset-admin-password
+unset BOOTSTRAP_ADMIN_PASSWORD
+```
+
+该操作会撤销该管理员的现有会话。
+
+当前是认证和迁移基础阶段：启用 SaaS 时，未完成多租户改造的旧内容接口会返回 `saas_content_migration_pending`，以防管理员旧数据泄露给邀请用户。请不要在此阶段把该开关用于正式读者服务。
+
+本机阶段 1 测试使用独立 PostgreSQL 16 集群：数据位于 `.local/postgres-phase1/data`，仅监听 `127.0.0.1:55432`，正式本机迁移库为 `shiyue_saas_local`，可销毁的验收库为 `shiyue_phase1_test`。不要启用 Homebrew 默认的 `/usr/local/var/postgresql@16` 集群。测试集群的启停命令如下：
+
+```bash
+pg_bin="$(brew --prefix postgresql@16)/bin"
+"$pg_bin/pg_ctl" -D .local/postgres-phase1/data -l .local/postgres-phase1/postgres.log \
+  -o "-h 127.0.0.1 -p 55432 -k $PWD/.local/postgres-phase1/socket" start
+"$pg_bin/pg_ctl" -D .local/postgres-phase1/data stop
+```
+
+执行真实阶段 1 验收：
+
+```bash
+SHIYUE_SAAS_TEST_DATABASE_URL=postgresql://127.0.0.1:55432/shiyue_phase1_test \
+  .local/saas-venv/bin/python tools/test_saas_phase1_integration.py
+```
+
+## 阶段 2：套餐、额度和会员中心
+
+`0002_membership.sql` 提供不可变套餐版本 `free-v1`、`advanced-v1`、`pro-v1`，并保存对应的 9 项权益、参考价格和账期快照。套餐调整必须创建新版本，绝不能修改已产生账期的 `limits_json`。
+
+权益服务使用事务、用户行锁和幂等键实现“预占—成功结算—失败释放”。`quota_reservations` 记录任务预占，`usage_ledger` 只记录已结算消耗或补发额度；相同用户、功能和幂等键不会重复扣减。人工开通创建 `manual_orders` 与 `subscriptions`，支持暂停、恢复和延期，过期订阅会自动回退免费版。
+
+启用 SaaS 后可使用：
+
+- `GET /api/membership`、`GET /api/membership/usage`、`GET /api/membership/orders`
+- `POST /api/admin/manual-orders`
+- `POST /api/admin/subscriptions`，`action` 为 `create`、`suspend`、`activate` 或 `extend`
+
+会员中心已提供登录、邀请注册、找回密码、额度与订单展示；管理员人工开通接口需要管理员会话和 CSRF 令牌。完整用户/订单运营后台将在阶段 5 完成。阶段 3 的多租户内容工作区完成前，AI、导入和书城动作仍不会通过旧 SQLite 路由执行或扣除正式额度。
+
+执行真实阶段 2 验收：
+
+```bash
+SHIYUE_SAAS_TEST_DATABASE_URL=postgresql://127.0.0.1:55432/shiyue_phase1_test \
+  .local/saas-venv/bin/python tools/test_saas_phase2_integration.py
+```
+
+## 阶段 3：书城、官方书架和受解锁保护的正文
+
+`0003_catalog.sql` 将官方书城与迁移的私人内容分离。`content_books` 中的旧内容不会自动进入书城；管理员必须通过 `POST /api/admin/catalog/books` 将某一本源内容标记为 `public_domain` 或 `licensed`，并设为 `published`。`private` 和 `prohibited` 内容不能发布。
+
+公共书城接口为 `GET /api/catalog`、`GET /api/catalog/series`、`GET /api/catalog/tags` 和 `GET /api/catalog/books/{id}`。登录后可通过 `POST /api/library/items` 收藏、`POST /api/catalog/books/{id}/unlock` 首次解锁，以及 `DELETE /api/library/items/{id}` 移除。收藏容量依据当前套餐计算；解锁只在首次发生时消耗账期额度，移除后重新收藏或再次打开不会重复扣除。
+
+`GET /api/catalog/books/{id}/reader` 只向已验证且已解锁的用户返回 PostgreSQL 中的正文文本，因此“开始阅读”可以进入受保护的文本阅读视图。音频、视频、原书页和封面仍不会经由旧 `/books/` 路径公开；它们将在阶段 6 的媒体资产和 Range 鉴权中接入。
+
+管理员可先检查待审核源内容：
+
+```bash
+curl -b "shiyue_session=..." http://127.0.0.1:8765/api/admin/catalog/sources
+```
+
+本机现有 39 本迁移内容均保持管理员私人资源，当前没有任何官方书城发布条目。
+
+执行真实阶段 3 验收：
+
+```bash
+SHIYUE_SAAS_TEST_DATABASE_URL=postgresql://127.0.0.1:55432/shiyue_phase1_test \
+  .local/saas-venv/bin/python tools/test_saas_phase3_integration.py
+```
+
+## 阶段 4：签到、成长值和会员邀请
+
+`0004_rewards.sql` 和 `0005_member_invite_allowances.sql` 提供签到、成长值账本、兑换目录、补签卡、有效学习记录、邀请里程碑和邀请码额度。成长值的正向发放有每月 100 点上限；兑换扣减成长值后，对 AI、句法、官方解锁或 MP3 导入的奖励会作为当前账期的权益信用写入 `usage_ledger`。
+
+规则已实现：每日签到 +1；当日累计阅读 10 分钟并点读至少 5 句 +2；连续第 3/7/14/30 天额外 +2/+5/+10/+20；完成生词复习每天 +2；完成一本已解锁官方读物 +10。相同事件均由幂等键或唯一约束保护，重复上报不会重复奖励。
+
+奖励目录默认包含：20 点换 10 次 AI 语境、30 点换 5 次句法、80 点换一次官方解锁、150 点换一次 MP3 导入、20 点换一张补签卡。
+
+会员邀请码遵循“后台或活动发放”原则：免费用户没有资格；进阶/Pro 用户也必须先获得 `member_invite_allowances`，每生成一个邀请码原子消耗一份额度。邀请用户完成首次有效学习奖励邀请人 +10，首次有效付费奖励 +30；相同设备或相同注册 IP 的邀请关系会被标记为不发奖。支付账号反作弊将在接入支付后补齐。
+
+接口：
+
+```text
+GET  /api/rewards/status
+POST /api/checkins
+GET  /api/rewards/catalog
+POST /api/rewards/redeem
+GET  /api/rewards/ledger
+POST /api/rewards/activity
+POST /api/rewards/complete-book
+POST /api/member-invites
+```
+
+执行真实阶段 4 验收：
+
+```bash
+SHIYUE_SAAS_TEST_DATABASE_URL=postgresql://127.0.0.1:55432/shiyue_phase1_test \
+  .local/saas-venv/bin/python tools/test_saas_phase4_integration.py
+```
+
+## 阶段 5：运营后台
+
+管理员登录 SaaS 后会看到“运营后台”。后台仅展示运营必要数据，不返回密码哈希、会话令牌、SSH 凭据或 Dioco 令牌值。已提供：用户与设备、封禁/恢复、渠道邀请码、人工订单、订阅暂停/恢复/延期、额度补发或扣减、邀请码额度发放、书城源内容审核、套餐版本列表/新版本创建、管理审计与经营 JSON 导出。
+
+关键管理接口：
+
+```text
+GET  /api/admin/dashboard
+GET  /api/admin/users
+GET  /api/admin/users/{id}
+POST /api/admin/users/{id}/status
+GET  /api/admin/invitations
+POST /api/admin/invitations
+POST /api/admin/quotas/adjust
+POST /api/admin/member-invite-allowances
+GET  /api/admin/plan-versions
+POST /api/admin/plan-versions
+GET  /api/admin/catalog/sources
+POST /api/admin/catalog/books
+GET  /api/admin/audit
+GET  /api/admin/exports/summary
+GET  /api/admin/platform-config
+```
+
+封禁、额度扣改、邀请码额度发放等具有影响用户权益的操作要求填写理由，并写入 `admin_audit_logs`。首次人工开通付费套餐会继续触发受邀用户的首次付费奖励逻辑。
+
+Dioco 配置在 SaaS 模式下为平台级环境变量：`SHIYUE_DIOCO_TOKEN` 与 `SHIYUE_DIOCO_EMAIL`。后台仅显示是否已配置，绝不返回令牌内容；普通用户看不到也不能修改它。现有本机 `.dioco.local.json` 仍只服务于遗留单用户模式。
+
+执行真实阶段 5 验收：
+
+```bash
+SHIYUE_SAAS_TEST_DATABASE_URL=postgresql://127.0.0.1:55432/shiyue_phase1_test \
+  .local/saas-venv/bin/python tools/test_saas_phase5_integration.py
+```
+
+## 阶段 6：媒体鉴权、安全和恢复
+
+`0007_security_media_accounts.sql` 建立 `media_assets`、`asset_variants`、`asset_usage`、`account_deletion_requests` 与 `security_events`；`0008/0009` 保留原本机管理员的迁移后 Pro 权益，以容纳既有私人媒体。媒体始终使用 `MEDIA_ROOT` 下的相对路径，登记时计算 SHA-256，拒绝绝对路径和路径穿越。
+
+SaaS 模式中，媒体只能通过以下接口访问：
+
+```text
+GET    /api/media/{asset_id}
+GET    /api/media/{asset_id}?variant=low
+DELETE /api/media/{asset_id}
+```
+
+私有媒体仅所有者可访问；官方媒体仅在读物已发布、版权合规且当前用户已解锁时可访问。音视频支持单 Range 请求；旧 `/books/...` 路径不会在 SaaS 模式公开。私有资产登记前会检查套餐空间，登记后计入 `storage_bytes`；逻辑删除释放空间，物理文件由清理工具先移到 `.local/media-trash`，支持 dry run。
+
+将既有媒体登记为管理员私人资产（可重复运行，已登记路径会跳过）：
+
+```bash
+DATABASE_URL=postgresql://127.0.0.1:55432/shiyue_saas_local \
+MEDIA_ROOT="$PWD/books" \
+  .local/saas-venv/bin/python tools/saas_media_inventory.py \
+  --owner-email "管理员邮箱" --media-root "$PWD/books"
+```
+
+账号数据接口为 `GET /api/account/export`、`POST /api/account/deletion`、`POST /api/account/deletion/cancel`。注销请求会退出现有会话并保留 30 天撤销期，完成后账号匿名化、私人资产逻辑删除。
+
+备份默认生成 PostgreSQL custom dump 与媒体 SHA-256 清单：
+
+```bash
+.local/saas-venv/bin/python tools/saas_backup.py \
+  --database-url postgresql://127.0.0.1:55432/shiyue_saas_local \
+  --media-root "$PWD/books" --output-root .local/saas-backups
+.local/saas-venv/bin/python tools/saas_backup_verify.py \
+  .local/saas-backups/<timestamp> --media-root "$PWD/books"
+```
+
+`tools/saas_restore_drill.py` 仅允许恢复到名称以 `_test` 结尾的数据库。可参考 `deployment/launchd/com.shiyue.saas-backup.plist.example` 设置本机定时备份；示例不自动安装或加载。
+
+阶段 6 还为 SaaS 响应添加 `nosniff`、反嵌入、Referrer、跨源隔离与 CSP 安全头，对登录、注册、找回密码、签到和 AI 接口启用内存限流。法律页面位于 `/terms`、`/privacy`、`/content-policy`、`/refunds`、`/copyright`。
+
+执行真实阶段 6 验收：
+
+```bash
+SHIYUE_SAAS_TEST_DATABASE_URL=postgresql://127.0.0.1:55432/shiyue_phase1_test \
+  .local/saas-venv/bin/python tools/test_saas_phase6_integration.py
+```
+
+## 阶段 7：私人学习空间
+
+`0010_private_workspace.sql` 将已迁移的 `content_books`、生词、标注、学习日数据和阅读进度通过所有者权限重新接入 SaaS。私人读物不会出现在官方书城；只有 `owner_id` 相同的用户能列出、阅读、更新生词/标注或记录学习活动。
+
+```text
+GET  /api/workspace/books
+GET  /api/workspace/books/{id}/reader
+GET  /api/workspace/vocabulary?bookId={id}
+POST /api/workspace/vocabulary
+GET  /api/workspace/annotations?bookId={id}
+POST /api/workspace/annotations
+GET  /api/workspace/learning-days
+POST /api/workspace/activity
+```
+
+工作区正文绝不会返回旧 `/books/...` URL；关联媒体继续走 `/api/media/{asset_id}`。阅读活动会同时写入该用户的 PostgreSQL 学习日记录和成长奖励的有效阅读判定。
+
+本机管理员的 39 本迁移私人读物已经可在 SaaS“私人学习空间”读取；其他用户会看到空空间，直至其内容由下一轮 PostgreSQL 原生导入任务创建。旧 SQLite 导入 Worker 仍不会在 SaaS 模式直接对邀请用户开放。
+
+执行真实阶段 7 验收：
+
+```bash
+SHIYUE_SAAS_TEST_DATABASE_URL=postgresql://127.0.0.1:55432/shiyue_phase1_test \
+  .local/saas-venv/bin/python tools/test_saas_phase7_integration.py
+```
+
+## 阶段 8：PostgreSQL 原生私人导入任务
+
+`0011_workspace_imports.sql` 增加 `workspace_import_tasks`。任务会记录创建用户、工作区、导入类型、套餐版本快照、额度预占、源资产、输出读物、进度、错误和幂等键。它不再调用旧 SQLite Worker。
+
+当前已经完成的实际导入路径是 **TXT / Markdown / PDF / MP3 / 本地视频 / YouTube**：上传文件或提交 YouTube 地址后会登记为受鉴权私人源资产、提取并分句、创建 PostgreSQL 私人读物，并显示在“私人学习空间”。PDF 使用项目本机 `.local/bin/pdf_ocr` 在隔离临时目录进行 OCR；MP3 使用项目本机 `whisper-cli + base.en` 生成带词级时间戳的正文；视频使用 FFmpeg 提取 M4A 音频与 JPEG 封面，并用隔离的 16kHz WAV 执行 Whisper；YouTube 使用 yt-dlp 下载最高 720p 视频及可用的原生英文、中文字幕，再复用相同视频处理器。所有结果都写入 PostgreSQL 与受鉴权媒体资产，不写入 SQLite。支持的 API：
+
+```text
+GET  /api/workspace/imports
+POST /api/workspace/imports
+POST /api/workspace/imports/{id}/upload
+POST /api/workspace/imports/{id}/complete
+POST /api/workspace/imports/{id}/cancel
+```
+
+MP3、视频和 YouTube 创建任务时分别预占 `mp3_imports`、`video_imports`、`youtube_imports`；成功完成后结算，失败或取消自动释放额度与私人源资产空间。当前 MP3 原生处理器接受 `.mp3`，视频原生处理器接受 `.mp4`、`.mov`、`.m4v`、`.mkv`、`.webm`。源视频、派生音频、封面和可用字幕使用同一个资产 ID，可分别通过 `/api/media/{id}`、`?variant=audio`、`?variant=cover`、`?variant=subtitles-en`、`?variant=subtitles-zh-CN` 鉴权访问。YouTube 只结算 `youtube_imports`，不会额外消耗 `video_imports`，也不会回退到遗留 SQLite 导入器。
+
+私人视频阅读页会直接使用受鉴权的源视频播放器，并提供派生音频与封面入口；这些变体的字节数计入同一私人资产的 `generated_bytes` 和空间账本。
+
+历史 SQLite 中已有的音频、视频和 YouTube 读物不会自动进入 SaaS 私人学习空间或官方书城；它们保留在本机旧库、PostgreSQL 落地区和媒体资产清单中，供管理员以后逐项人工审核并导入官方书城。新上传的 MP3 和本地视频不受这个规则影响。
+
+上传或下载会先按私人空间额度预检，媒体登记和派生变体登记时再以用户锁进行最终校验。TXT、Markdown、PDF、MP3、本地视频和 YouTube 导入都可通过 SaaS“私人学习空间”界面完成。
+
+SaaS 模式的“学习记录”和“生词复习”使用 PostgreSQL 工作区接口，不再访问旧 SQLite 学习表。私人阅读页可点击单词，手工保存私人释义和备注；复习评分、查词、阅读时长、句子数和学习会话写入当前账号的工作区学习日。浏览器英文朗读用于替代旧 `/api/word-tts`。平台词典的完整释义接口仍待后续单独租户化。
+
+AI 语境精讲和句法分析现已通过 `0013_workspace_ai.sql` 租户化。首次生成分别使用 `ai_context_generations`、`ai_grammar_generations` 的预占—结算—失败释放协议；同一用户、读物和内容哈希命中 PostgreSQL 缓存后不重复扣额。平台凭据仅来自 `SHIYUE_DIOCO_TOKEN`、`SHIYUE_DIOCO_EMAIL`。私人阅读页的单词面板与逐句句法按钮会调用对应 SaaS API；平台词典的完整释义仍留待后续单独接入。
+
+执行阶段 9 验收：
+
+```bash
+SHIYUE_SAAS_TEST_DATABASE_URL=postgresql://127.0.0.1:55432/shiyue_phase1_test \
+  .local/saas-venv/bin/python tools/test_saas_phase9_integration.py
+```
+
+上线前可运行不泄露秘密值的只读检查：
+
+```bash
+.local/saas-venv/bin/python tools/saas_readiness.py --env-file .env
+```
+
+该工具检查 PostgreSQL 与最新 migration、SMTP、平台 AI、外部备份目录以及 FFmpeg、Node.js、yt-dlp、Whisper、PDF OCR，不会打印数据库地址、密码或令牌内容。
+
+执行真实阶段 8 验收：
+
+```bash
+SHIYUE_SAAS_TEST_DATABASE_URL=postgresql://127.0.0.1:55432/shiyue_phase1_test \
+  .local/saas-venv/bin/python tools/test_saas_phase8_integration.py
+```
+
 ## 数据存储
 
 动态导入的数据不写入前端源码：

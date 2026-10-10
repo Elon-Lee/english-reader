@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import tempfile,unittest
+import json,tempfile,unittest
 from pathlib import Path
 
 import library_db
@@ -7,7 +7,7 @@ import library_db
 class SentenceGrammarDatabaseTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.old_db=library_db.DB_PATH;self.old_local=library_db.LOCAL_ROOT
-        library_db.LOCAL_ROOT=Path(self.temp.name);library_db.DB_PATH=library_db.LOCAL_ROOT/"library.sqlite3";library_db.connect().close()
+        library_db.LOCAL_ROOT=Path(self.temp.name);library_db.DB_PATH=library_db.LOCAL_ROOT/"library.sqlite3";db=library_db.connect();stamp=library_db.now();db.execute("INSERT INTO books(id,title,series,source_path,data_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",("book","Test","Test","test/book",json.dumps({"id":"book","title":"Test","sentences":[]}),stamp,stamp));db.commit();db.close()
 
     def tearDown(self):
         library_db.DB_PATH=self.old_db;library_db.LOCAL_ROOT=self.old_local;self.temp.cleanup()

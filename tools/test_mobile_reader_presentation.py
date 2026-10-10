@@ -14,7 +14,7 @@ class MobileReaderPresentationTests(unittest.TestCase):
 
     def test_mobile_assets_and_safe_area_are_enabled(self):
         self.assertIn("viewport-fit=cover", self.html)
-        self.assertIn("responsive.css?v=20261005-2", self.html)
+        self.assertIn("responsive.css?v=20261011-1", self.html)
         self.assertIn("100dvh", self.styles)
         self.assertIn("safe-area-inset-bottom", self.styles)
         self.assertIn("prefers-reduced-motion", self.styles)
