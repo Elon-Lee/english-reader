@@ -1,2 +1,4 @@
 # PostgreSQL driver used only when SHIYUE_SAAS_ENABLED=1.
 psycopg[binary]>=3.2,<4
+redis>=5,<7
+yt-dlp>=2026.1

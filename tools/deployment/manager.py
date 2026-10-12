@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Versioned code deployment and finished-resource synchronization."""
-import gzip,hashlib,ipaddress,json,os,re,shlex,shutil,sqlite3,subprocess,tarfile,tempfile,threading,time
+import gzip,hashlib,io,ipaddress,json,os,re,secrets,shlex,shutil,sqlite3,subprocess,tarfile,tempfile,threading,time
 from datetime import datetime,timedelta
 from pathlib import Path
 from urllib.parse import unquote
@@ -13,6 +13,9 @@ KEYS=STATE/"keys"
 EXPECT=ROOT/"tools/deployment/ssh_expect.exp"
 RUNTIME=STATE/"runtime";TLS=STATE/"tls"
 RUNTIME_IMAGE="shiyue-reader-runtime:20260930-1"
+SAAS_IMAGE="shiyue-saas-runtime:20261012-1"
+POSTGRES_IMAGE="postgres:16-bookworm"
+REDIS_IMAGE="redis:7-bookworm"
 TASK_LOCK=threading.Lock();MEMORY_PASSWORDS={}
 PRIVATE_CONFIG=ROOT/".dioco.local.json"
 
@@ -210,19 +213,92 @@ def remote_arch(remote):
     raise ValueError("无法识别远程CPU架构")
 def runtime_archive(oci_arch):return RUNTIME/f"shiyue-reader-runtime-{oci_arch}-20260930-1.tar.gz"
 def safe_host(value):return re.sub(r"[^A-Za-z0-9_.-]+","_",str(value))[:80] or "remote"
+def build_frontend_assets(job):
+    package=ROOT/"package.json"
+    if not package.is_file():raise ValueError("缺少 package.json，无法构建 React 前端")
+    job.update(27,"构建 React 生产前端")
+    try:
+        result=subprocess.run(["npm","run","build:modern"],cwd=ROOT,text=True,capture_output=True,timeout=600)
+    except FileNotFoundError as exc:raise ValueError("本机缺少 npm，无法构建 React 前端") from exc
+    except subprocess.TimeoutExpired as exc:raise ValueError("React 前端构建超时") from exc
+    output="\n".join(part.strip() for part in (result.stdout,result.stderr) if part and part.strip())
+    if result.returncode!=0:
+        if output:job.write(output[-4000:])
+        raise ValueError("React 前端构建失败")
+    required=(ROOT/"reader/site/index.html",ROOT/"reader/site/assets/index.js",ROOT/"reader/site/assets/index.css")
+    missing=[str(path.relative_to(ROOT)) for path in required if not path.is_file() or path.stat().st_size==0]
+    if missing:raise ValueError("React 前端构建产物不完整："+", ".join(missing))
+    summary=next((line for line in reversed(output.splitlines()) if line.strip()),"构建完成")
+    job.write(f"React 生产前端已构建：{summary[:500]}")
+
+def release_metadata(release):
+    commit=""
+    dirty=False
+    try:
+        commit=subprocess.run(["git","rev-parse","HEAD"],cwd=ROOT,text=True,capture_output=True,timeout=15,check=True).stdout.strip()
+        dirty=bool(subprocess.run(["git","status","--porcelain","--untracked-files=no"],cwd=ROOT,text=True,capture_output=True,timeout=15,check=True).stdout.strip())
+    except (FileNotFoundError,subprocess.SubprocessError):pass
+    return {"releaseId":release,"gitCommit":commit,"sourceDirty":dirty,"builtAt":now(),"packageFormat":2}
+
 def code_files():
-    files=[ROOT/"reader",ROOT/"deployment",ROOT/"start-reader.sh",ROOT/"start-reader-https.sh"]
-    files += list((ROOT/"tools").glob("*.py"))+[ROOT/"tools/deployment"]
+    files=[ROOT/"reader",ROOT/"deployment",ROOT/"requirements-saas.txt",ROOT/"start-reader.sh",ROOT/"start-reader-https.sh"]
+    files += list((ROOT/"tools").glob("*.py"))+[ROOT/"tools/deployment",ROOT/"tools/saas_migrations",ROOT/"tools/vendor/ECDICT/lemma.en.txt"]
     return files
 def build_code_package(job,release):
+    build_frontend_assets(job)
     target=STATE/f"{release}.tar.gz";STATE.mkdir(parents=True,exist_ok=True)
     def archive_filter(info):
-        if "__pycache__" in info.name:return None
+        if "__pycache__" in info.name or info.name.endswith((".pyc",".pyo",".DS_Store")):return None
+        if info.name=="reader/modern.html" or info.name=="reader/modern-assets" or info.name.startswith("reader/modern-assets/"):return None
         return info
     with tarfile.open(target,"w:gz") as archive:
         for path in code_files():
             if path.exists():archive.add(path,arcname=path.relative_to(ROOT),filter=archive_filter)
+        metadata=json.dumps(release_metadata(release),ensure_ascii=False,indent=2).encode("utf-8")
+        info=tarfile.TarInfo(".shiyue-release.json");info.size=len(metadata);info.mtime=int(time.time());info.mode=0o644
+        archive.addfile(info,io.BytesIO(metadata))
     digest=hashlib.sha256(target.read_bytes()).hexdigest();job.write(f"代码包：{target.name} · {target.stat().st_size/1024/1024:.1f} MiB · sha256={digest}");return target,digest
+
+def local_env_values():
+    values={}
+    path=ROOT/".env"
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8",errors="replace").splitlines():
+            line=line.strip()
+            if not line or line.startswith("#") or "=" not in line:continue
+            key,value=line.split("=",1);values[key.strip()]=value.strip().strip('"').strip("'")
+    return {**values,**{key:value for key,value in os.environ.items() if value}}
+
+def local_saas_database_url():
+    value=str(local_env_values().get("DATABASE_URL","")).strip()
+    if not value:raise ValueError("本机 .env 缺少 DATABASE_URL，无法迁移 SaaS 数据")
+    return value
+
+def build_saas_database_dump(job,release):
+    target=STATE/f"{release}.database.dump";target.parent.mkdir(parents=True,exist_ok=True)
+    pg_dump=shutil.which("pg_dump") or "/usr/local/opt/postgresql@16/bin/pg_dump"
+    if not Path(pg_dump).is_file():raise ValueError("本机缺少 pg_dump，无法迁移 SaaS 数据")
+    job.update(32,"导出本地 SaaS PostgreSQL 数据库")
+    try:subprocess.run([pg_dump,"--format=custom","--no-owner","--no-acl","--file",str(target),local_saas_database_url()],cwd=ROOT,check=True,timeout=900,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as exc:raise ValueError("本地 SaaS PostgreSQL 导出失败") from exc
+    if not target.is_file() or target.stat().st_size<1024:raise ValueError("本地 SaaS 数据库导出文件异常")
+    digest=hashlib.sha256(target.read_bytes()).hexdigest();job.write(f"SaaS 数据库快照：{target.name} · {target.stat().st_size/1024/1024:.1f} MiB · sha256={digest}");return target,digest
+
+def export_saas_public_content(job,revision):
+    stage=STATE/"staging"/revision;shutil.rmtree(stage,ignore_errors=True);stage.mkdir(parents=True)
+    bundle=STATE/f"{revision}.public.json.gz";manifest=STATE/f"{revision}.public.manifest.json"
+    media_root=Path(local_env_values().get("MEDIA_ROOT",str(ROOT/"books"))).expanduser().resolve()
+    python=ROOT/".local/saas-venv/bin/python"
+    if not python.is_file():python=Path(sys.executable)
+    command=[str(python),str(ROOT/"tools/deployment/saas_public_sync.py"),"export","--database-url",local_saas_database_url(),"--media-root",str(media_root),"--bundle",str(bundle),"--manifest",str(manifest)]
+    try:result=subprocess.run(command,cwd=ROOT,text=True,capture_output=True,check=True,timeout=900)
+    except subprocess.CalledProcessError as exc:raise ValueError("生成 SaaS 公共内容包失败") from exc
+    summary=json.loads(result.stdout.strip().splitlines()[-1]);payload=json.loads(manifest.read_text(encoding="utf-8"));payload["revision"]=revision;manifest.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8")
+    for item in payload.get("files",[]):
+        source=(media_root/item["path"]).resolve();source.relative_to(media_root)
+        destination=stage/item["path"];destination.parent.mkdir(parents=True,exist_ok=True);destination.symlink_to(source)
+    job.write(f"公共资源：{summary['catalogBooks']} 本上架书 · {summary['files']} 个文件 · {summary['bytes']/1024/1024:.1f} MiB")
+    return stage,bundle,manifest,summary
 
 def ensure_remote_docker(job,remote):
     probe=remote.ssh("if command -v docker >/dev/null 2>&1; then (docker info >/dev/null 2>&1 || (command -v systemctl >/dev/null 2>&1 && systemctl enable --now docker >/dev/null 2>&1) || service docker start >/dev/null 2>&1 || true); docker info >/dev/null 2>&1 && echo SHIYUE_DOCKER_READY; fi")
@@ -373,6 +449,136 @@ def health_check_command(target):
     code=f"import json,ssl,urllib.request; u='{scheme}://127.0.0.1:{port}/api/health'; c=ssl._create_unverified_context() if u.startswith('https') else None; print(urllib.request.urlopen(u,context=c,timeout=20).read().decode())"
     return f"docker exec shiyue-reader python3 -c {shlex.quote(code)}"
 
+def saas_app_run_command(target,release_path,name="shiyue-saas",port=None,restart=True):
+    root=shlex.quote(target["remote_root"]);release=shlex.quote(release_path);port=int(port or target["service_port"]);recording=bool(target["install_recording"])
+    options=[f"docker run -d --name {shlex.quote(name)}"]
+    if restart:options.append("--restart unless-stopped")
+    options += ["--network host",f"--env-file {root}/shared/config/saas.env","-e READER_HOST=0.0.0.0",f"-e READER_PORT={port}","-e SHIYUE_RUNTIME_MODE=saas","-e SHIYUE_SAAS_ENABLED=1","-e MEDIA_ROOT=/app/books","-e SAAS_BACKUP_ROOT=/state/backups/saas","-e SHIYUE_PDF_OCR=/opt/shiyue/pdf_ocr","-e SHIYUE_YTDLP=/usr/local/bin/yt-dlp","-e SHIYUE_NODE=/usr/bin/node",
+      f"-v {release}/reader:/app/reader:ro,z",f"-v {release}/tools:/app/tools:ro,z",f"-v {root}/shared/books:/app/books:z",f"-v {root}/shared/.local:/app/.local:z",f"-v {root}/shared/cache:/app/.cache:z",f"-v {root}/backups:/state/backups:z"]
+    if recording:options += [f"-v {root}/shared/whisper/ggml-base.en.bin:/opt/shiyue/models/ggml-base.en.bin:ro,z","-e SHIYUE_WHISPER_CLI=/opt/shiyue/whisper/whisper-cli","-e SHIYUE_WHISPER_MODEL=/opt/shiyue/models/ggml-base.en.bin"]
+    if target.get("use_https",0):options += [f"-v {root}/shared/https:/certs:ro,z","-e READER_TLS_CERT=/certs/server-cert.pem","-e READER_TLS_KEY=/certs/server-key.pem"]
+    options.append(shlex.quote(SAAS_IMAGE));return " \\\n  ".join(options)
+
+def saas_health_check_command(port,container="shiyue-saas"):
+    code=f"import json,urllib.request; h=json.loads(urllib.request.urlopen('http://127.0.0.1:{int(port)}/api/health',timeout=20).read()); assert h.get('status')=='ok' and h.get('saasEnabled') and h.get('redisReady'); print(json.dumps(h,ensure_ascii=False))"
+    return f"docker exec {shlex.quote(container)} python3 -c {shlex.quote(code)}"
+
+def ensure_remote_saas_config(job,remote,target):
+    root=target["remote_root"];destination=f"{root}/shared/config/saas.env"
+    found=remote.ssh(f"test -s {shlex.quote(destination)} && echo SHIYUE_SAAS_ENV_READY || true")
+    if "SHIYUE_SAAS_ENV_READY" in found:
+        job.write("远程 SaaS 密钥配置已存在，保留现有数据库和会话密钥");return
+    postgres_password=secrets.token_hex(24);redis_password=secrets.token_hex(24);session_secret=secrets.token_urlsafe(48);scheme="https" if target.get("use_https",0) else "http"
+    values={
+      "POSTGRES_DB":"shiyue","POSTGRES_USER":"shiyue","POSTGRES_PASSWORD":postgres_password,
+      "DATABASE_URL":f"postgresql://shiyue:{postgres_password}@127.0.0.1:5432/shiyue","REDIS_PASSWORD":redis_password,"REDIS_URL":f"redis://:{redis_password}@127.0.0.1:6379/0",
+      "SESSION_SECRET":session_secret,"APP_BASE_URL":f"{scheme}://{target['host']}:{int(target['service_port'])}","SHIYUE_SAAS_AUTO_MIGRATE":"1","BOOTSTRAP_ADMIN_EMAIL":"","BOOTSTRAP_ADMIN_PASSWORD":"",
+    }
+    with tempfile.TemporaryDirectory(prefix="shiyue-saas-env-") as temp:
+        path=Path(temp)/"saas.env";path.write_text("".join(f"{key}={value}\n" for key,value in values.items()),encoding="utf-8");os.chmod(path,0o600)
+        remote.scp(path,f"/tmp/shiyue-saas-{target['id']}.env")
+    remote.ssh(f"set -e; mkdir -p {shlex.quote(root)}/shared/config; install -m 600 /tmp/shiyue-saas-{target['id']}.env {shlex.quote(destination)}; rm -f /tmp/shiyue-saas-{target['id']}.env")
+    job.write("已生成远程专用 PostgreSQL、Redis 和会话密钥（未写入日志）")
+
+def prepare_remote_saas_release(remote,target,release,package_name,package_digest):
+    root=shlex.quote(target["remote_root"])
+    return remote.ssh(f"""set -euo pipefail
+mkdir -p {root}/releases/{release} {root}/shared/books {root}/shared/.local {root}/shared/cache {root}/shared/config {root}/shared/postgres {root}/shared/redis {root}/backups/saas {root}/backups/resources {root}/manifests/history {root}/logs
+archive=/tmp/{package_name}
+actual_digest=$(sha256sum "$archive" | awk '{{print $1}}')
+[ "$actual_digest" = "{package_digest}" ] || {{ echo '代码包 SHA-256 校验失败' >&2; exit 3; }}
+tar -xzf "$archive" -C {root}/releases/{release}
+test -s {root}/releases/{release}/reader/site/index.html
+test -s {root}/releases/{release}/reader/site/assets/index.js
+test -s {root}/releases/{release}/tools/reader_server.py
+test -d {root}/releases/{release}/tools/saas_migrations
+rm -f "$archive"
+""")
+
+def ensure_remote_saas_services(job,remote,target,release):
+    root=target["remote_root"];release_path=f"{root}/releases/{release}";env=f"{root}/shared/config/saas.env"
+    job.update(50,"安装并启动 PostgreSQL 与 Redis")
+    script=f"""set -euo pipefail
+pull_official_image() {{
+  target="$1"
+  mirror="$2"
+  docker image inspect "$target" >/dev/null 2>&1 && return 0
+  attempt=1
+  while [ "$attempt" -le 3 ]; do
+    if docker pull "$mirror"; then docker tag "$mirror" "$target"; return 0; fi
+    echo "国内镜像拉取失败，尝试 Docker Hub（$attempt/3）" >&2
+    if docker pull "$target"; then return 0; fi
+    attempt=$((attempt+1)); sleep 3
+  done
+  return 1
+}}
+pull_official_image {POSTGRES_IMAGE} m.daocloud.io/docker.io/library/{POSTGRES_IMAGE}
+pull_official_image {REDIS_IMAGE} m.daocloud.io/docker.io/library/{REDIS_IMAGE}
+set -a; . {shlex.quote(env)}; set +a
+if docker container inspect shiyue-postgres >/dev/null 2>&1; then
+  docker start shiyue-postgres >/dev/null 2>&1 || true
+  sleep 2
+  docker exec shiyue-postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1 || docker rm -f shiyue-postgres >/dev/null
+fi
+if ! docker container inspect shiyue-postgres >/dev/null 2>&1; then
+  docker run -d --name shiyue-postgres --restart unless-stopped -p 127.0.0.1:5432:5432 --env-file {shlex.quote(env)} -v {shlex.quote(root)}/shared/postgres:/var/lib/postgresql/data:Z --shm-size=256m {POSTGRES_IMAGE} -c shared_buffers=128MB -c max_connections=100 >/dev/null
+fi
+printf 'bind 0.0.0.0\nprotected-mode yes\nrequirepass %s\nappendonly yes\nmaxmemory 192mb\nmaxmemory-policy allkeys-lru\n' "$REDIS_PASSWORD" > {shlex.quote(root)}/shared/config/redis.conf
+redis_uid=$(docker run --rm --entrypoint id {REDIS_IMAGE} -u redis)
+redis_gid=$(docker run --rm --entrypoint id {REDIS_IMAGE} -g redis)
+chown "$redis_uid:$redis_gid" {shlex.quote(root)}/shared/config/redis.conf {shlex.quote(root)}/shared/redis
+chmod 600 {shlex.quote(root)}/shared/config/redis.conf
+if docker container inspect shiyue-redis >/dev/null 2>&1; then
+  docker start shiyue-redis >/dev/null 2>&1 || true
+  sleep 1
+  docker exec shiyue-redis redis-cli -a "$REDIS_PASSWORD" ping 2>/dev/null | grep -q PONG || docker rm -f shiyue-redis >/dev/null
+fi
+if ! docker container inspect shiyue-redis >/dev/null 2>&1; then
+  docker run -d --name shiyue-redis --restart unless-stopped -p 127.0.0.1:6379:6379 -v {shlex.quote(root)}/shared/redis:/data:Z -v {shlex.quote(root)}/shared/config/redis.conf:/usr/local/etc/redis/redis.conf:ro,Z {REDIS_IMAGE} redis-server /usr/local/etc/redis/redis.conf >/dev/null
+fi
+ready=0
+for attempt in $(seq 1 60); do docker exec shiyue-postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1 && ready=1 && break; sleep 1; done
+[ "$ready" -eq 1 ] || {{ docker logs --tail 200 shiyue-postgres >&2; exit 4; }}
+docker exec shiyue-redis redis-cli -a "$REDIS_PASSWORD" ping 2>/dev/null | grep -q PONG
+"""
+    remote.ssh(script)
+    job.update(57,"构建 SaaS 运行镜像")
+    remote.ssh(f"set -e; docker build -f {shlex.quote(release_path)}/deployment/docker/Dockerfile.saas -t {shlex.quote(SAAS_IMAGE)} {shlex.quote(release_path)}; docker image inspect {shlex.quote(SAAS_IMAGE)} >/dev/null")
+
+def restore_remote_saas_database(job,remote,target,dump,digest):
+    root=target["remote_root"];remote_dump=f"/tmp/{dump.name}";job.update(63,"上传并初始化 SaaS PostgreSQL 数据")
+    remote.scp(dump,remote_dump)
+    script=f"""set -euo pipefail
+actual=$(sha256sum {shlex.quote(remote_dump)} | awk '{{print $1}}')
+[ "$actual" = "{digest}" ] || {{ echo '数据库快照 SHA-256 校验失败' >&2; exit 3; }}
+set -a; . {shlex.quote(root)}/shared/config/saas.env; set +a
+existing=$(docker exec shiyue-postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT COALESCE(to_regclass('public.schema_migrations')::text,'')")
+if [ -z "$existing" ]; then
+  docker cp {shlex.quote(remote_dump)} shiyue-postgres:/tmp/shiyue-initial.dump
+  docker exec shiyue-postgres pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --no-acl --exit-on-error /tmp/shiyue-initial.dump
+  docker exec shiyue-postgres rm -f /tmp/shiyue-initial.dump
+  echo SHIYUE_DATABASE_RESTORED
+else
+  echo SHIYUE_DATABASE_PRESERVED
+fi
+rm -f {shlex.quote(remote_dump)}
+"""
+    output=remote.ssh(script);restored="SHIYUE_DATABASE_RESTORED" in output;job.write("远程 PostgreSQL 已从本地正式库初始化" if restored else "远程 PostgreSQL 已存在，未覆盖远程用户数据");return restored
+
+def prune_initial_database_to_published_content(job,remote,target):
+    root=target["remote_root"]
+    sql="""BEGIN;
+CREATE TEMP TABLE shiyue_public_catalog AS SELECT id,source_content_book_id FROM catalog_books WHERE publication_status='published' AND rights_status IN ('public_domain','licensed');
+DELETE FROM official_book_unlocks WHERE catalog_book_id NOT IN (SELECT id FROM shiyue_public_catalog);
+DELETE FROM user_library WHERE catalog_book_id NOT IN (SELECT id FROM shiyue_public_catalog);
+DELETE FROM catalog_books WHERE id NOT IN (SELECT id FROM shiyue_public_catalog);
+DELETE FROM media_assets ma WHERE NOT EXISTS (SELECT 1 FROM shiyue_public_catalog pc WHERE pc.id=ma.catalog_book_id OR pc.source_content_book_id=ma.content_book_id);
+DELETE FROM content_books WHERE id NOT IN (SELECT source_content_book_id FROM shiyue_public_catalog WHERE source_content_book_id IS NOT NULL);
+COMMIT;"""
+    job.update(67,"移除首次快照中的非公开书籍数据")
+    command=f"set -e; set -a; . {shlex.quote(root)}/shared/config/saas.env; set +a; docker exec shiyue-postgres psql -v ON_ERROR_STOP=1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -c {shlex.quote(sql)}"
+    remote.ssh(command);job.write("远程初始数据库仅保留已公开且版权允许的书籍内容；账号、订阅和平台配置已保留")
+
 def local_dioco_config():
     if not PRIVATE_CONFIG.exists():return None
     try:data=json.loads(PRIVATE_CONFIG.read_text(encoding="utf-8"))
@@ -435,13 +641,27 @@ except Exception as exc:
     else:job.write("警告：远程在线语境接口验证失败，请检查服务器外网访问")
     return ready
 
-def bootstrap_script(target,release,package_name):
+def bootstrap_script(target,release,package_name,package_digest):
+    if not re.fullmatch(r"code-\d{8}-\d{6}-[A-Za-z0-9]+",release or ""):raise ValueError("无效的代码版本")
+    if not re.fullmatch(r"code-[A-Za-z0-9._-]+\.tar\.gz",package_name or ""):raise ValueError("无效的代码包名称")
+    if not re.fullmatch(r"[0-9a-f]{64}",package_digest or ""):raise ValueError("无效的代码包校验值")
     root=shlex.quote(target["remote_root"]);run=docker_run_command(target);health=health_check_command(target)
     return f"""set -euo pipefail
 systemctl disable --now shiyue-reader >/dev/null 2>&1 || true
 mkdir -p {root}/releases/{release} {root}/shared/books {root}/shared/.local {root}/shared/cache {root}/shared/config {root}/backups/databases {root}/backups/resources {root}/manifests/history {root}/logs
 [ -f {root}/shared/config/dioco.local.json ] || echo '{{}}' > {root}/shared/config/dioco.local.json
+archive=/tmp/{package_name}
+actual_digest=$(sha256sum "$archive" | awk '{{print $1}}')
+if [ "$actual_digest" != "{package_digest}" ]; then
+  echo "代码包校验失败：expected={package_digest} actual=$actual_digest" >&2
+  exit 3
+fi
 tar -xzf /tmp/{package_name} -C {root}/releases/{release}
+test -s {root}/releases/{release}/.shiyue-release.json
+test -s {root}/releases/{release}/reader/site/index.html
+test -s {root}/releases/{release}/reader/site/assets/index.js
+test -s {root}/releases/{release}/reader/site/assets/index.css
+test -s {root}/releases/{release}/tools/reader_server.py
 previous_release=$(readlink -f {root}/current 2>/dev/null || true)
 docker rm -f shiyue-reader >/dev/null 2>&1 || true
 ln -sfn {root}/releases/{release} {root}/current
@@ -518,6 +738,76 @@ def sync_content(job,remote,target,progress=None):
     script=f"set -e; cp {shlex.quote(root)}/shared/.local/library.sqlite3 {shlex.quote(root)}/backups/databases/{revision}.sqlite3 2>/dev/null || true; docker exec shiyue-reader python3 /app/tools/deployment/remote_apply.py /app/.local/{bundle.name} /app/.local/library.sqlite3; cp /tmp/{manifest.name} {shlex.quote(root)}/manifests/current-content.json; cp /tmp/{manifest.name} {shlex.quote(root)}/manifests/history/{revision}.json; cp {shlex.quote(remote_bundle)} {shlex.quote(root)}/manifests/history/{revision}.json.gz; docker restart shiyue-reader >/dev/null; sleep 3; {health}; rm -f {shlex.quote(remote_bundle)} /tmp/{manifest.name}"
     output=remote.ssh(script);return {"contentRevision":revision,"health":output,"media":sync_result}
 
+def sync_saas_public_content(job,remote,target,release_path=None,progress=None,restart=True):
+    progress=progress or {"scan":8,"prepare":22,"package":30,"upload":42,"apply":70,"database":78,"merge":88}
+    revision=new_release_id("public");job.update(progress["scan"],"扫描本地 SaaS 公共书目与媒体");stage,bundle,manifest,summary=export_saas_public_content(job,revision)
+    root=target["remote_root"];release_path=release_path or f"{root}/current";backup=f"{root}/backups/resources/{revision}";remote_bundle=f"{root}/shared/.local/{bundle.name}";remote_manifest=f"/tmp/{manifest.name}"
+    job.update(progress["prepare"],"准备远程公共资源目录");remote.ssh(f"set -e; docker inspect shiyue-postgres >/dev/null; docker image inspect {shlex.quote(SAAS_IMAGE)} >/dev/null; mkdir -p {shlex.quote(root)}/shared/books {shlex.quote(backup)} {shlex.quote(root)}/manifests/history {shlex.quote(root)}/shared/.local")
+    sync_result=remote.sync_tree_package(stage,f"{root}/shared/books",backup,manifest,f"{root}/manifests/current-saas-public.json",progress)
+    job.update(progress["database"],"上传公共书目数据库包");remote.scp(bundle,remote_bundle);remote.scp(manifest,remote_manifest)
+    job.update(progress["merge"],"合并公共书目并保留远程用户数据")
+    command=(f"docker run --rm --network host --env-file {shlex.quote(root)}/shared/config/saas.env "
+      f"-v {shlex.quote(release_path)}/tools:/app/tools:ro,z -v {shlex.quote(root)}/shared/.local:/app/.local:z "
+      f"-v {shlex.quote(root)}/manifests:/state/manifests:z {shlex.quote(SAAS_IMAGE)} python3 /app/tools/deployment/saas_public_sync.py apply "
+      f"--bundle /app/.local/{shlex.quote(bundle.name)} --previous-manifest /state/manifests/current-saas-public.json")
+    script=f"""set -euo pipefail
+{command}
+cp {shlex.quote(remote_manifest)} {shlex.quote(root)}/manifests/current-saas-public.json
+cp {shlex.quote(remote_manifest)} {shlex.quote(root)}/manifests/history/{revision}.json
+cp {shlex.quote(remote_bundle)} {shlex.quote(root)}/manifests/history/{revision}.json.gz
+rm -f {shlex.quote(remote_bundle)} {shlex.quote(remote_manifest)}
+"""
+    output=remote.ssh(script)
+    if restart:
+        remote.ssh("docker restart shiyue-saas >/dev/null")
+        output += remote.ssh(saas_health_check_command(target["service_port"]))
+    return {"contentRevision":revision,"database":output,"media":sync_result,"summary":summary}
+
+def activate_saas_release(job,remote,target,release):
+    root=target["remote_root"];release_path=f"{root}/releases/{release}";port=int(target["service_port"]);candidate_port=port+10000
+    candidate=saas_app_run_command(target,release_path,"shiyue-saas-candidate",candidate_port,False);candidate_health=saas_health_check_command(candidate_port,"shiyue-saas-candidate")
+    root_check_code=f"import urllib.request; h=urllib.request.urlopen('http://127.0.0.1:{candidate_port}/',timeout=20).read().decode(); assert '/assets/index.js' in h and 'modern-assets' not in h; print('SHIYUE_ROOT_SITE_READY')"
+    job.update(91,"候选端口验收完整 SaaS 服务")
+    script=f"""set -euo pipefail
+docker rm -f shiyue-saas-candidate >/dev/null 2>&1 || true
+{candidate}
+healthy=0
+for attempt in $(seq 1 60); do
+  if {candidate_health} >/tmp/shiyue-saas-candidate-health.json 2>/tmp/shiyue-saas-candidate-error.log; then healthy=1; break; fi
+  sleep 1
+done
+if [ "$healthy" -ne 1 ]; then docker logs --tail 200 shiyue-saas-candidate >&2 || true; exit 5; fi
+docker exec shiyue-saas-candidate python3 -c {shlex.quote(root_check_code)}
+cat /tmp/shiyue-saas-candidate-health.json
+docker rm -f shiyue-saas-candidate >/dev/null
+"""
+    candidate_output=remote.ssh(script)
+    job.update(95,"替换旧站并启用根路径 SaaS")
+    production=saas_app_run_command(target,f"{root}/current","shiyue-saas",port,True);production_health=saas_health_check_command(port,"shiyue-saas");legacy=docker_run_command(target)
+    previous_saas=saas_app_run_command(target,f"{root}/current","shiyue-saas",port,True)
+    switch=f"""set -euo pipefail
+previous_release=$(readlink -f {shlex.quote(root)}/current 2>/dev/null || true)
+docker rm -f shiyue-saas shiyue-reader >/dev/null 2>&1 || true
+ln -sfn {shlex.quote(release_path)} {shlex.quote(root)}/current
+{production}
+healthy=0
+for attempt in $(seq 1 60); do
+  if {production_health} >/tmp/shiyue-saas-health.json 2>/tmp/shiyue-saas-health-error.log; then healthy=1; break; fi
+  sleep 1
+done
+if [ "$healthy" -ne 1 ]; then
+  docker logs --tail 200 shiyue-saas >&2 || true
+  docker rm -f shiyue-saas >/dev/null 2>&1 || true
+  if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then
+    ln -sfn "$previous_release" {shlex.quote(root)}/current
+    if [ -s "$previous_release/reader/site/index.html" ]; then {previous_saas}; else {legacy}; fi
+  fi
+  exit 6
+fi
+cat /tmp/shiyue-saas-health.json
+"""
+    return {"candidate":candidate_output,"production":remote.ssh(switch)}
+
 def run_task(kind,worker,target_id):
     target_id=int(target_id);job=Job(kind,target_id)
     def target():
@@ -548,7 +838,7 @@ def start_deploy(target_id):
         if target.get("use_https",1):
             certificate=ensure_remote_tls(job,remote,target);job.write(f"HTTPS根证书：{certificate}")
         job.update(47,"同步远程词典服务配置");dioco=sync_remote_private_config(job,remote,target)
-        job.update(50,"激活代码版本并启动运行容器");health=remote.ssh(bootstrap_script(target,release,package.name))
+        job.update(50,"激活代码版本并启动运行容器");health=remote.ssh(bootstrap_script(target,release,package.name,digest))
         content=sync_content(job,remote,target,{"scan":58,"prepare":62,"generate":65,"package":68,"upload":72,"apply":80,"database":86,"merge":91})
         job.update(96,"验证远程词典与语境接口");dioco_ready=remote_dioco_check(job,remote,target)
         job.update(97,"最终健康检查");final_health=remote.ssh(health_check_command(target));db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close();job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"initialHealth":health,"contentRevision":content["contentRevision"],"media":content["media"],"runtimeArchive":str(runtime),"rootCertificate":str(certificate) if certificate else "","diocoConfigured":dioco["configured"],"diocoReady":dioco_ready},"一键完整部署完成")
@@ -561,12 +851,39 @@ def start_upgrade(target_id):
         job.update(25,"生成程序版本包");package,digest=build_code_package(job,release)
         job.update(42,"上传修改后的程序代码");remote.scp(package,f"/tmp/{package.name}")
         job.update(58,"同步远程词典服务配置");dioco=sync_remote_private_config(job,remote,target)
-        job.update(65,"切换程序版本");health=remote.ssh(bootstrap_script(target,release,package.name))
+        job.update(65,"切换程序版本");health=remote.ssh(bootstrap_script(target,release,package.name,digest))
         job.update(88,"验证远程词典与语境接口");dioco_ready=remote_dioco_check(job,remote,target)
         job.update(92,"验证升级结果");final_health=remote.ssh(health_check_command(target))
         db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close()
         job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"initialHealth":health,"codeBytes":package.stat().st_size,"diocoConfigured":dioco["configured"],"diocoReady":dioco_ready},"程序升级完成")
     return run_task("program_upgrade",worker,target_id)
+def start_saas_deploy(target_id):
+    def worker(job,remote,target):
+        release=new_release_id("code");job.update(4,"检查远程 SaaS 运行环境",release_id=release);_,oci_arch=remote_arch(remote)
+        ensure_remote_docker(job,remote);ensure_remote_runtime(job,remote,oci_arch)
+        job.update(24,"生成根路径 SaaS 程序包");package,digest=build_code_package(job,release);dump,dump_digest=build_saas_database_dump(job,release)
+        job.update(38,"上传 SaaS 程序版本");remote.scp(package,f"/tmp/{package.name}")
+        ensure_remote_saas_config(job,remote,target);prepare_remote_saas_release(remote,target,release,package.name,digest)
+        if target["install_recording"]:
+            model=ROOT/"tools/vendor/whisper.cpp/models/ggml-base.en.bin"
+            if not model.exists():raise ValueError("本地缺少 ggml-base.en.bin，无法安装 SaaS 录音转写")
+            remote_model=f"{target['remote_root']}/shared/whisper/ggml-base.en.bin";local_hash=hashlib.sha256(model.read_bytes()).hexdigest();remote.ssh(f"mkdir -p {shlex.quote(target['remote_root'])}/shared/whisper")
+            output=remote.ssh(f"test -f {shlex.quote(remote_model)} && sha256sum {shlex.quote(remote_model)} | cut -d' ' -f1 || true").strip().splitlines();remote_hash=output[-1] if output else ""
+            if remote_hash!=local_hash:job.update(45,"上传 SaaS 录音模型");remote.scp(model,remote_model)
+        if target.get("use_https",0):ensure_remote_tls(job,remote,target)
+        ensure_remote_saas_services(job,remote,target,release);restored=restore_remote_saas_database(job,remote,target,dump,dump_digest)
+        if restored:prune_initial_database_to_published_content(job,remote,target)
+        public=sync_saas_public_content(job,remote,target,f"{target['remote_root']}/releases/{release}",{"scan":70,"prepare":73,"package":76,"upload":79,"apply":82,"database":85,"merge":88},False)
+        activation=activate_saas_release(job,remote,target,release);final_health=remote.ssh(saas_health_check_command(target["service_port"]))
+        db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health,"mode":"saas"}),now()));db.commit();db.close()
+        job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"databaseImported":True,"publicContentRevision":public["contentRevision"],"publicMedia":public["media"],"candidate":activation["candidate"]},"SaaS 根站完整部署完成")
+    return run_task("saas_deploy",worker,target_id)
+def start_saas_public_sync(target_id):
+    def worker(job,remote,target):
+        output=remote.ssh(f"set -e; docker inspect shiyue-saas >/dev/null; docker inspect shiyue-postgres >/dev/null; docker inspect shiyue-redis >/dev/null; test -s {shlex.quote(target['remote_root'])}/current/reader/site/index.html; echo SHIYUE_SAAS_READY")
+        if "SHIYUE_SAAS_READY" not in output:raise ValueError("远程尚未完成 SaaS 根站部署")
+        result=sync_saas_public_content(job,remote,target);job.complete(result,"SaaS 公共资源增量同步完成")
+    return run_task("saas_public_sync",worker,target_id)
 def start_sync(target_id):
     def worker(job,remote,target):
         job.update(3,"检查远程词典服务配置");dioco=sync_remote_private_config(job,remote,target)

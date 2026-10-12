@@ -7,6 +7,9 @@
   "scripts": {
     "dev:modern": "vite --config frontend/vite.config.js",
     "build:modern": "vite build --config frontend/vite.config.js",
+    "package:remote": "python3 tools/deploy_remote.py --package-only",
+    "deploy:jdcloud": "python3 tools/deploy_remote.py --target 京东云服务器 --saas --timeout 14400",
+    "sync:jdcloud:public": "python3 tools/deploy_remote.py --target 京东云服务器 --sync-public",
     "test:modern": "python3 tools/test_modern_frontend.py",
     "test:ui": "python3 tools/test_mobile_reader_presentation.py && python3 tools/test_membership_presentation.py && python3 tools/test_remote_reader_presentation.py && python3 tools/test_reader_performance.py",
     "check:js": "node --check reader/app.js"

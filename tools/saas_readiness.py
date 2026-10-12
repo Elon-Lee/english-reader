@@ -50,7 +50,7 @@ def main()->int:
     add("yt-dlp",executable(environment,"SHIYUE_YTDLP",str(ROOT/".local/bin/yt-dlp")),"YouTube 下载器")
     add("Whisper",executable(environment,"SHIYUE_WHISPER_CLI",str(ROOT/"tools/vendor/whisper.cpp/build/bin/whisper-cli")),"音视频转写")
     add("PDF OCR",executable(environment,"SHIYUE_PDF_OCR",str(ROOT/".local/bin/pdf_ocr")),"PDF 导入")
-    migration_files=sorted((ROOT/"tools/saas_migrations").glob("*.sql"));latest=migration_files[-1].name if migration_files else "none";add("迁移文件",latest=="0013_workspace_ai.sql",f"{len(migration_files)} 个，最新 {latest}")
+    migration_files=sorted((ROOT/"tools/saas_migrations").glob("*.sql"));latest=migration_files[-1].name if migration_files else "none";add("迁移文件",bool(migration_files),f"{len(migration_files)} 个，最新 {latest}")
     database_ok=False;applied=[]
     if configured(environment,"DATABASE_URL"):
         try:

@@ -40,10 +40,12 @@ from saas_rewards import RewardService
 from saas_workspace import WorkspaceService
 from saas_imports import WorkspaceImportService
 from saas_ai import WorkspaceAIService
+from saas_cache import SaaSCache
 from youtube_subtitles import has_translated_english_track,select_chinese_track,select_native_english_track
 
 ROOT=Path(__file__).resolve().parents[1]
 READER=ROOT/"reader"
+SITE=READER/"site"
 CLI=Path(os.environ.get("SHIYUE_WHISPER_CLI",str(ROOT/"tools/vendor/whisper.cpp/build/bin/whisper-cli"))).expanduser()
 MODEL=Path(os.environ.get("SHIYUE_WHISPER_MODEL",str(ROOT/"tools/vendor/whisper.cpp/models/ggml-base.en.bin"))).expanduser()
 GRAMMAR_PYTHON=Path(os.environ.get("SHIYUE_GRAMMAR_PYTHON",str(ROOT/".local/forced-aligner/venv/bin/python"))).expanduser()
@@ -80,6 +82,7 @@ ACCOUNTS=AccountLifecycleService(SAAS)
 WORKSPACE=WorkspaceService(SAAS)
 WORKSPACE_IMPORTS=WorkspaceImportService(SAAS,MEMBERSHIPS,MEDIA)
 WORKSPACE_AI=WorkspaceAIService(SAAS,MEMBERSHIPS)
+CACHE_SERVICE=SaaSCache()
 RATE_LIMIT_LOCK=threading.Lock()
 RATE_LIMIT_BUCKETS=defaultdict(deque)
 RATE_LIMIT_RULES={
@@ -269,7 +272,9 @@ class Handler(SimpleHTTPRequestHandler):
             # would leak the administrator's legacy data to new accounts.
             if not route.path.startswith("/api/deployment/"):
                 self.saas_content_pending(); return
-        if route.path == "/api/health": self.reply({"status":"ok","runtimeMode":RUNTIME_MODE,"saasEnabled":SAAS.enabled,"books":len(library()),"time":now()}); return
+        if route.path == "/api/health":
+            cache=CACHE_SERVICE.status();healthy=not cache["enabled"] or cache["ready"]
+            self.reply({"status":"ok" if healthy else "degraded","runtimeMode":RUNTIME_MODE,"saasEnabled":SAAS.enabled,"redisEnabled":cache["enabled"],"redisReady":cache["ready"],"books":len(library()),"time":now()},200 if healthy else 503); return
         if route.path.startswith("/api/deployment/"):
             if not self.deployment_allowed():return
             query=parse_qs(route.query)
@@ -312,12 +317,30 @@ class Handler(SimpleHTTPRequestHandler):
                 if not self.require_saas_user(): return
                 self.saas_content_pending(); return
             self.serve_books_file(route.path); return
-        if SAAS.enabled and route.path=="/":
-            route=urlsplit("/modern.html")
+        if SAAS.enabled:
+            if route.path=="/modern.html" or route.path.startswith("/modern-assets"):
+                self.send_response(308);self.send_header("Location","/");self.send_header("Content-Length","0");self.end_headers();return
+            if route.path=="/" or route.path.startswith("/assets/"):
+                if self.serve_saas_site(route):return
         range_header=self.headers.get("Range")
         if range_header and self.serve_range(range_header): return
         if self.serve_reader_asset(route):return
         super().do_GET()
+    def serve_saas_site(self,route):
+        relative="index.html" if route.path=="/" else unquote(route.path).lstrip("/")
+        path=(SITE/relative).resolve()
+        try:path.relative_to(SITE.resolve())
+        except ValueError:self.send_error(403);return True
+        if not path.is_file():return False
+        stat=path.stat();etag=f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+        if self.headers.get("If-None-Match")==etag:
+            self.send_response(304);self.send_header("ETag",etag);self.send_header("Cache-Control","public, max-age=31536000, immutable" if path.suffix in {".js",".css",".svg",".png",".woff",".woff2"} else "no-cache");self.end_headers();return True
+        data=path.read_bytes();content_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream";compressible=path.suffix.lower() in {".html",".js",".css",".json",".svg",".txt"}
+        encoded=compressible and "gzip" in self.headers.get("Accept-Encoding","").lower() and len(data)>1024
+        if encoded:data=gzip.compress(data,compresslevel=6)
+        self.send_response(200);self.send_header("Content-Type",content_type);self.send_header("Content-Length",str(len(data)));self.send_header("ETag",etag);self.send_header("Cache-Control","public, max-age=31536000, immutable" if path.suffix in {".js",".css",".svg",".png",".woff",".woff2"} else "no-cache")
+        if encoded:self.send_header("Content-Encoding","gzip");self.send_header("Vary","Accept-Encoding")
+        self.end_headers();self.wfile.write(data);return True
     def serve_reader_asset(self,route):
         relative=unquote(route.path).lstrip("/") or "index.html";path=(READER/relative).resolve()
         try:path.relative_to(READER.resolve())
@@ -604,7 +627,7 @@ class Handler(SimpleHTTPRequestHandler):
             for key in ("reader","id","book"):
                 value=(query.get(key)or[""])[0]
                 if value:params[key]=value
-            location=("/modern.html?" if (query.get("modern")or[""])[0] in {"1","true","yes"} else "/?")+urlencode(params)
+            location="/?"+urlencode(params)
             self.send_response(302);self.send_header("Location",location)
             for key,value in self.session_cookie_headers(result["sessionToken"],result["csrfToken"]):self.send_header(key,value)
             self.send_header("Content-Length","0");self.end_headers()
@@ -1333,6 +1356,7 @@ if __name__ == "__main__":
     if SAAS.enabled:
         try:
             SAAS.assert_runtime_configured()
+            CACHE_SERVICE.assert_ready()
             if os.environ.get("SHIYUE_SAAS_AUTO_MIGRATE","").strip().lower() in {"1","true","yes","on"}:
                 applied=SAAS.migrate()
                 if applied: print("SaaS migration 已应用："+", ".join(applied),flush=True)

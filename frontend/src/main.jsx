@@ -29,7 +29,7 @@ const { Header, Sider, Content } = Layout
 const { Title, Text, Paragraph } = Typography
 
 function modernEntryPath() {
-  return location.pathname.startsWith('/modern-assets') ? '/modern-assets/' : '/modern.html'
+  return '/'
 }
 
 const fallbackBooks = [

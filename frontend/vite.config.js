@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 export default defineConfig({
   root: resolve(process.cwd(), 'frontend'),
   plugins: [react()],
-  base: '/modern-assets/',
+  base: '/',
   server: {
     host: '127.0.0.1',
     port: 5173,
@@ -21,7 +21,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: resolve(process.cwd(), 'reader/modern-assets'),
+    outDir: resolve(process.cwd(), 'reader/site'),
     emptyOutDir: true,
     rollupOptions: {
       input: resolve(process.cwd(), 'frontend/index.html'),

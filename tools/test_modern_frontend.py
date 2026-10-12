@@ -7,8 +7,9 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 READER = ROOT / "reader"
-MODERN = READER / "modern.html"
-ASSETS = READER / "modern-assets" / "assets"
+SITE = READER / "site"
+INDEX = SITE / "index.html"
+ASSETS = SITE / "assets"
 
 
 def check(condition: bool, message: str) -> None:
@@ -17,11 +18,12 @@ def check(condition: bool, message: str) -> None:
 
 
 def main() -> int:
-    check(MODERN.is_file(), "reader/modern.html missing")
-    html = MODERN.read_text(encoding="utf-8")
-    check('/modern-assets/assets/index.js' in html, "modern.html must use the fixed production entry")
-    check('/modern-assets/assets/index.css' in html, "modern.html must load the production stylesheet")
-    check((ASSETS / "index.js").is_file(), "modern entry chunk missing")
+    check(INDEX.is_file(), "reader/site/index.html missing")
+    html = INDEX.read_text(encoding="utf-8")
+    check('/assets/index.js' in html, "root site must use the fixed production entry")
+    check('/assets/index.css' in html, "root site must load the production stylesheet")
+    check('/modern-assets/' not in html, "root site must not depend on the legacy modern-assets path")
+    check((ASSETS / "index.js").is_file(), "root entry chunk missing")
     entry = (ASSETS / "index.js").read_text(encoding="utf-8")
     imports = re.findall(r"(?:from|import\()\s*['\"]([^'\"]+\.js)['\"]", entry)
     check(imports, "modern entry has no vendor chunk imports")
