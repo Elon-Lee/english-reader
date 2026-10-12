@@ -36,7 +36,7 @@ def main()->int:
             except Exception:time.sleep(.1)
         else:raise RuntimeError("SaaS UI server did not become healthy")
         if not health.get("saasEnabled"):raise AssertionError("SaaS mode is not enabled")
-        html=urlopen(BASE+"/",timeout=5).read().decode();required=['id="saasAuth"','id="saasLoginForm"','id="saasRegisterForm"','id="saasForgotForm"','app.js?v=20261010-6','styles.css?v=20261010-4']
+        html=urlopen(BASE+"/",timeout=5).read().decode();required=['id="root"','/modern-assets/assets/index.js']
         missing=[item for item in required if item not in html]
         if missing:raise AssertionError("missing SaaS UI markers: "+", ".join(missing))
         chrome=Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");debug=ROOT/".local/debug";debug.mkdir(parents=True,exist_ok=True);desktop=debug/"saas-login-desktop.png";mobile=debug/"saas-login-mobile.png"

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from deployment import manager
 import import_video_worker
+import saas_imports
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -22,5 +23,10 @@ class VideoQualityVariantTests(unittest.TestCase):
     def test_sync_exports_all_video_variants(self):
         source=inspect.getsource(manager.export_content)
         self.assertIn('videoVariants',source)
+
+    def test_saas_import_generates_low_video_variant(self):
+        source=inspect.getsource(saas_imports.WorkspaceImportService._video_book)
+        self.assertIn('video-low.mp4',source);self.assertIn('scale=640:360',source);self.assertIn('"name":"low"',source)
+        self.assertIn('videoDefaultQuality',source);self.assertIn('videoVariants',source)
 
 if __name__=='__main__':unittest.main()

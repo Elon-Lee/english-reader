@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,7 @@ from saas_auth import SaaSService
 
 
 CHROME=Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+NODE=Path(shutil.which("node") or "/usr/local/bin/node")
 SCREENS=("catalog","my-library","workspace","stats","vocab","rewards","membership","admin","settings")
 
 
@@ -33,9 +35,16 @@ def stop(process):
 
 def screenshot(url:str,target:Path,size:str)->None:
     target.unlink(missing_ok=True)
+    budget=max(1000,min(30000,int(os.environ.get("SHIYUE_SCREENSHOT_BUDGET_MS","8000"))))
+    width,height=(int(value) for value in size.split(",",1))
+    if width<500 or str(os.environ.get("SHIYUE_SCREENSHOT_USE_CDP","")).strip().lower() in {"1","true","yes","on"}:
+        environment={**os.environ,"SHIYUE_SCREENSHOT_BUDGET_MS":str(budget)}
+        subprocess.run([str(NODE),str(ROOT/"tools/cdp_screenshot.mjs"),url,str(width),str(height),str(target)],cwd=ROOT,env=environment,text=True,capture_output=True,timeout=45,check=True)
+        if not target.is_file() or target.stat().st_size<10_000:raise RuntimeError(f"invalid screenshot: {target}")
+        return
     with tempfile.TemporaryDirectory(prefix="shiyue-walkthrough-") as profile:
-        command=[str(CHROME),"--headless","--disable-gpu","--no-sandbox","--disable-dev-shm-usage","--disable-background-networking","--disable-sync","--metrics-recording-only","--virtual-time-budget=8000",f"--user-data-dir={profile}",f"--window-size={size}",f"--screenshot={target}",url]
-        try:subprocess.run(command,text=True,capture_output=True,timeout=12,check=True)
+        command=[str(CHROME),"--headless","--disable-gpu","--no-sandbox","--disable-dev-shm-usage","--disable-background-networking","--disable-sync","--metrics-recording-only","--force-device-scale-factor=1",f"--virtual-time-budget={budget}",f"--user-data-dir={profile}",f"--window-size={size}",f"--screenshot={target}",url]
+        try:subprocess.run(command,text=True,capture_output=True,timeout=30,check=True)
         except subprocess.TimeoutExpired:
             if not target.is_file() or target.stat().st_size<10_000:raise
     if not target.is_file() or target.stat().st_size<10_000:raise RuntimeError(f"invalid screenshot: {target}")

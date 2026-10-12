@@ -189,6 +189,35 @@ class MembershipService:
     def usage(self, user_id: str) -> dict[str, Any]:
         return self.membership(user_id, include_usage=True)
 
+    def plans(self) -> dict[str, Any]:
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""SELECT pv.id,pv.display_name,pv.rank,pv.period_days,pv.quotas_json,pv.pricing_json,p.slug
+                FROM plan_versions pv JOIN plans p ON p.id=pv.plan_id
+                WHERE pv.active=TRUE AND p.active=TRUE ORDER BY pv.rank,pv.created_at DESC""")
+                return {"plans":[{"id":row["id"],"slug":row["slug"],"name":row["display_name"],"rank":int(row["rank"]),"periodDays":int(row["period_days"]),"quotas":as_json(row["quotas_json"]),"pricing":as_json(row["pricing_json"])} for row in self.accounts._many(cursor)]}
+
+    def change_requests(self,user_id:str)->dict[str,Any]:
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""SELECT mcr.*,current_plan.display_name AS current_name,requested_plan.display_name AS requested_name
+                FROM membership_change_requests mcr JOIN plan_versions current_plan ON current_plan.id=mcr.current_plan_version_id
+                JOIN plan_versions requested_plan ON requested_plan.id=mcr.requested_plan_version_id
+                WHERE mcr.user_id=%s ORDER BY mcr.created_at DESC LIMIT 20""",(user_id,))
+                return {"requests":[{"id":row["id"],"currentPlan":row["current_plan_version_id"],"currentName":row["current_name"],"requestedPlan":row["requested_plan_version_id"],"requestedName":row["requested_name"],"status":row["status"],"note":row["note"],"createdAt":timestamp(row["created_at"]),"updatedAt":timestamp(row["updated_at"])} for row in self.accounts._many(cursor)]}
+
+    def request_change(self,user_id:str,plan_version:str,note:str="")->dict[str,Any]:
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                context=self._context(cursor,user_id);requested=self._plan(cursor,str(plan_version or "").strip())
+                if requested["id"]==context["plan"]["id"]:raise SaaSError("plan_unchanged","你当前已经在使用该套餐。",409)
+                cursor.execute("SELECT id FROM membership_change_requests WHERE user_id=%s AND status='pending' FOR UPDATE",(user_id,));existing=self.accounts._one(cursor)
+                if existing:raise SaaSError("membership_change_pending","已有待处理的套餐变更申请。",409)
+                request_id=new_id();cursor.execute("""INSERT INTO membership_change_requests(id,user_id,current_plan_version_id,requested_plan_version_id,note)
+                VALUES(%s,%s,%s,%s,%s)""",(request_id,user_id,context["plan"]["id"],requested["id"],str(note or "")[:1000]))
+                self._audit(cursor,user_id,user_id,"membership_change_requested",{"requestId":request_id,"from":context["plan"]["id"],"to":requested["id"]})
+                return {"request":{"id":request_id,"currentPlan":context["plan"]["id"],"requestedPlan":requested["id"],"requestedName":requested["display_name"],"status":"pending","note":str(note or "")[:1000],"createdAt":timestamp(utcnow())}}
+
     def reserve(self, user_id: str, feature: str, idempotency_key: str, quantity: int = 1, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         feature = self._feature(feature)
         key = str(idempotency_key or "").strip()

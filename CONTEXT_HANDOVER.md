@@ -1,5 +1,7 @@
 # 拾页 SaaS Context Handover
 
+> 历史交接资料，内容可能已过期。后续 AI 必须先读取 `AGENTS.md` 和 `AI_CONTEXT/README.md`；只有追溯旧决策时再读取本文。
+
 更新时间：2026-10-10（Asia/Shanghai）
 
 本文件用于在新会话中继续开发。项目根目录：`/Users/x/Documents/english`。

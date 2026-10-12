@@ -85,6 +85,7 @@ RATE_LIMIT_BUCKETS=defaultdict(deque)
 RATE_LIMIT_RULES={
     "/api/auth/login":(10,300),"/api/auth/register":(8,3600),"/api/auth/forgot-password":(5,3600),
     "/api/auth/reset-password":(8,3600),"/api/checkins":(30,3600),"/api/word-context":(60,3600),"/api/sentence-grammar":(60,3600),
+    "/api/word-hover":(300,3600),"/api/word-dictionary":(120,3600),
 }
 
 def run_import_process(job_id,command,log_path):
@@ -231,6 +232,9 @@ class Handler(SimpleHTTPRequestHandler):
         if SAAS.enabled and route.path in {"/api/account/export","/api/account/deletion-status"}:
             if not self.require_saas_user():return
             self.account_get(route.path);return
+        if SAAS.enabled and route.path == "/api/preferences":
+            if not self.require_saas_user(verified=True):return
+            self.reply(SAAS.preferences(str(self._saas_session["id"])));return
         if SAAS.enabled and route.path.startswith("/api/admin/"):
             if not self.require_saas_user():return
             self.admin_get(route);return
@@ -248,9 +252,15 @@ class Handler(SimpleHTTPRequestHandler):
         if SAAS.enabled and route.path=="/api/admin/catalog/sources":
             if not self.require_saas_user():return
             self.catalog_admin_get();return
-        if SAAS.enabled and route.path in {"/api/membership","/api/membership/usage","/api/membership/orders"}:
+        if SAAS.enabled and route.path in {"/api/membership","/api/membership/usage","/api/membership/orders","/api/membership/plans","/api/membership/requests"}:
             if not self.require_saas_user(): return
             self.membership_get(route.path); return
+        if SAAS.enabled and route.path in {"/api/word-hover","/api/word-dictionary","/api/word-tts"}:
+            if not self.require_saas_user(verified=True):return
+            query=parse_qs(route.query)
+            if route.path=="/api/word-hover":self.word_hover(query);return
+            if route.path=="/api/word-dictionary":self.word_dictionary(query);return
+            self.word_tts(query);return
         if SAAS.enabled and route.path.startswith("/api/") and route.path != "/api/health":
             if not self.require_saas_user(): return
             # Existing reader handlers still write the single-user SQLite
@@ -302,6 +312,8 @@ class Handler(SimpleHTTPRequestHandler):
                 if not self.require_saas_user(): return
                 self.saas_content_pending(); return
             self.serve_books_file(route.path); return
+        if SAAS.enabled and route.path=="/":
+            route=urlsplit("/modern.html")
         range_header=self.headers.get("Range")
         if range_header and self.serve_range(range_header): return
         if self.serve_reader_asset(route):return
@@ -396,6 +408,12 @@ class Handler(SimpleHTTPRequestHandler):
         if SAAS.enabled and route.path in {"/api/account/deletion","/api/account/deletion/cancel"}:
             if not self.require_saas_user() or not self.require_csrf():return
             self.account_post(route.path);return
+        if SAAS.enabled and route.path == "/api/preferences":
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:self.reply({"preferences":SAAS.update_preferences(str(self._saas_session["id"]),self.json_body())})
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"preferences_unavailable","error":str(exc)},503)
+            return
         if SAAS.enabled and route.path.startswith("/api/admin/"):
             if not self.require_saas_user() or not self.require_csrf():return
             self.admin_post(route.path);return
@@ -408,6 +426,13 @@ class Handler(SimpleHTTPRequestHandler):
         if SAAS.enabled and route.path in {"/api/admin/subscriptions","/api/admin/manual-orders"}:
             if not self.require_saas_user() or not self.require_csrf(): return
             self.membership_post(route.path); return
+        if SAAS.enabled and route.path=="/api/membership/requests":
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                item=self.json_body();self.reply(MEMBERSHIPS.request_change(str(self._saas_session["id"]),str(item.get("planVersion","")).strip(),str(item.get("note","")or"")),201)
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"membership_unavailable","error":str(exc)},503)
+            return
         if SAAS.enabled and route.path.startswith("/api/"):
             must_verify=route.path.startswith("/api/import") or route.path in {"/api/word-context","/api/sentence-grammar"}
             if not self.require_saas_user(verified=must_verify): return
@@ -416,6 +441,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.saas_content_pending(); return
         if route.path.startswith("/api/deployment/"):
             if not self.deployment_allowed():return
+            if SAAS.enabled and not self.require_csrf():return
             try:item=self.json_body()
             except Exception:self.reply({"error":"invalid json"},400);return
             try:
@@ -476,6 +502,15 @@ class Handler(SimpleHTTPRequestHandler):
             self.reply({"error":str(exc)},500)
     def do_DELETE(self):
         route=urlsplit(self.path)
+        if SAAS.enabled and route.path.startswith("/api/admin/users/") and "/devices/" in route.path:
+            if not self.require_saas_user() or not self.require_csrf():return
+            if not self._saas_session.get("is_admin"):
+                self.reply({"code":"admin_required","error":"该操作仅允许管理员执行。"},403);return
+            prefix="/api/admin/users/";user_id,device_id=route.path[len(prefix):].split("/devices/",1)
+            try:self.reply(ADMIN.revoke_device(str(self._saas_session["id"]),unquote(user_id),unquote(device_id),"运营后台撤销异常设备"))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"admin_unavailable","error":str(exc)},503)
+            return
         if SAAS.enabled and route.path.startswith("/api/media/"):
             if not self.require_saas_user() or not self.require_csrf():return
             try:self.reply(MEDIA.delete(str(self._saas_session["id"]),unquote(route.path.rsplit("/",1)[1]),bool(self._saas_session.get("is_admin"))))
@@ -487,6 +522,14 @@ class Handler(SimpleHTTPRequestHandler):
             try:self.reply(CATALOG.remove(str(self._saas_session["id"]),unquote(route.path.rsplit("/",1)[1])))
             except SaaSError as exc:self.reply(exc.payload(),exc.status)
             except SaaSConfigurationError as exc:self.reply({"code":"saas_unavailable","error":str(exc)},503)
+            return
+        if SAAS.enabled and route.path.startswith("/api/workspace/books/"):
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                item=self.json_body() if int(self.headers.get("Content-Length","0") or 0)>0 else {}
+                self.reply(WORKSPACE.delete_book(str(self._saas_session["id"]),unquote(route.path.rsplit("/",1)[1]),str(item.get("confirmTitle","") or "")))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"workspace_unavailable","error":str(exc)},503)
             return
         if not route.path.startswith("/api/auth/devices/"):
             self.send_error(404); return
@@ -553,14 +596,15 @@ class Handler(SimpleHTTPRequestHandler):
     def debug_browser_login(self,route):
         secret=os.environ.get("SHIYUE_BROWSER_AUDIT_SECRET","");email=os.environ.get("SHIYUE_BROWSER_AUDIT_EMAIL","");password=os.environ.get("SHIYUE_BROWSER_AUDIT_PASSWORD","")
         query=parse_qs(route.query);supplied=(query.get("token")or[""])[0];screen=(query.get("screen")or["catalog"])[0]
-        allowed={"catalog","my-library","workspace","stats","vocab","rewards","membership","admin","settings","reader"}
+        allowed={"catalog","library","my-library","workspace","stats","vocab","rewards","membership","admin","platform","settings","reader"}
         if not secret or not email or not password or supplied!=secret or self.client_address[0] not in {"127.0.0.1","::1"}:self.reply({"error":"not found"},404);return
         try:
-            result=SAAS.login(email,password,"browser-audit-device",self.headers.get("User-Agent","") or "browser-audit",self.client_address[0]);params={"screen":screen if screen in allowed else "catalog"}
+            device_key=(query.get("device")or["browser-audit-device"])[0]
+            result=SAAS.login(email,password,device_key,self.headers.get("User-Agent","") or "browser-audit",self.client_address[0]);params={"screen":screen if screen in allowed else "catalog"}
             for key in ("reader","id","book"):
                 value=(query.get(key)or[""])[0]
                 if value:params[key]=value
-            location="/?"+urlencode(params)
+            location=("/modern.html?" if (query.get("modern")or[""])[0] in {"1","true","yes"} else "/?")+urlencode(params)
             self.send_response(302);self.send_header("Location",location)
             for key,value in self.session_cookie_headers(result["sessionToken"],result["csrfToken"]):self.send_header(key,value)
             self.send_header("Content-Length","0");self.end_headers()
@@ -602,6 +646,8 @@ class Handler(SimpleHTTPRequestHandler):
             if path=="/api/membership": self.reply(MEMBERSHIPS.membership(user_id));return
             if path=="/api/membership/usage": self.reply(MEMBERSHIPS.usage(user_id));return
             if path=="/api/membership/orders": self.reply({"orders":MEMBERSHIPS.orders(user_id)});return
+            if path=="/api/membership/plans":self.reply(MEMBERSHIPS.plans());return
+            if path=="/api/membership/requests":self.reply(MEMBERSHIPS.change_requests(user_id));return
             self.reply({"error":"not found"},404)
         except SaaSError as exc:
             self.reply(exc.payload(),exc.status)
@@ -652,10 +698,10 @@ class Handler(SimpleHTTPRequestHandler):
             if path=="/api/admin/users":self.reply(ADMIN.users((query.get("q")or[""])[0],(query.get("limit")or[100])[0]));return
             if path.startswith("/api/admin/users/"):
                 self.reply(ADMIN.user_detail(unquote(path.rsplit("/",1)[1])));return
-            if path=="/api/admin/invitations":self.reply(ADMIN.invitations((query.get("limit")or[100])[0]));return
+            if path=="/api/admin/invitations":self.reply(ADMIN.invitations((query.get("limit")or[100])[0],(query.get("q")or[""])[0],(query.get("offset")or[0])[0]));return
             if path=="/api/admin/plan-versions":self.reply(ADMIN.plan_versions());return
             if path=="/api/admin/catalog/sources":self.reply(CATALOG.review_sources());return
-            if path=="/api/admin/audit":self.reply(ADMIN.audit((query.get("limit")or[100])[0]));return
+            if path=="/api/admin/audit":self.reply(ADMIN.audit((query.get("limit")or[100])[0],(query.get("q")or[""])[0],(query.get("action")or[""])[0]));return
             if path=="/api/admin/platform-config":self.reply(ADMIN.platform_config());return
             if path=="/api/admin/exports/summary":self.reply(ADMIN.export_summary());return
             if path=="/api/admin/media-assets":self.reply(MEDIA.list_assets((query.get("scope")or[""])[0],(query.get("ownerId")or[""])[0],(query.get("limit")or[20])[0],(query.get("offset")or[0])[0]));return
@@ -672,7 +718,9 @@ class Handler(SimpleHTTPRequestHandler):
             if path=="/api/admin/catalog/books":
                 self.reply(CATALOG.review(actor_id,str(item.get("sourceBookId","")).strip(),str(item.get("rightsStatus","")).strip(),str(item.get("publicationStatus","")).strip(),item));return
             if path=="/api/admin/invitations":
-                self.reply(ADMIN.create_invitation(actor_id,str(item.get("code","")).strip(),item.get("maxUses",1),item.get("expiresAt"),str(item.get("note","")or""),str(item.get("channel","")or"")),201);return
+                self.reply(ADMIN.create_invitations(actor_id,str(item.get("code","")).strip(),item.get("maxUses",1),item.get("count",1),item.get("expiresAt"),str(item.get("note","")or""),str(item.get("channel","")or"")),201);return
+            if path=="/api/admin/platform-config":
+                self.reply(ADMIN.update_platform_config(actor_id,item));return
             if path=="/api/admin/quotas/adjust":
                 key=str(item.get("idempotencyKey","")).strip() or f"admin-{uuid.uuid4().hex}"
                 self.reply(ADMIN.adjust_quota(actor_id,str(item.get("userId","")).strip(),str(item.get("feature","")).strip(),item.get("quantity"),str(item.get("reason","")or""),key));return
@@ -757,7 +805,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not isinstance(item,dict):self.reply({"code":"invalid_payload","error":"请求数据无效。"},400);return
         try:
             user_id=str(self._saas_session["id"]);book_id=str(item.get("bookId","")).strip();sentence_id=str(item.get("sentenceId","")).strip()
-            if path=="/api/word-context":self.reply(WORKSPACE_AI.context(user_id,book_id,sentence_id,item.get("wordIndex")));return
+            if path=="/api/word-context":self.reply(WORKSPACE_AI.context(user_id,book_id,sentence_id,item.get("wordIndex"),item.get("word")));return
             if path=="/api/sentence-grammar":self.reply(WORKSPACE_AI.grammar(user_id,book_id,sentence_id));return
             self.reply({"error":"not found"},404)
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
@@ -1168,7 +1216,10 @@ class Handler(SimpleHTTPRequestHandler):
                     for item in rows[:3]:
                         if item.get("text") and item["text"] not in examples: examples.append(item["text"])
                 result={"word":word,"hover":render.get("hoverDictEntries",[]),"groups":groups,"examples":examples[:5],"source":"Dioco"}
-                cached.write_text(json.dumps(result,ensure_ascii=False))
+            local_dictionary=dictionary();local=local_dictionary.get(word.casefold()) or local_dictionary.get(infer_lemma(word).casefold()) or {}
+            phonetic=str(local.get("phonetic","")or"").strip()
+            formatted=f"/{phonetic.strip('/')}/" if phonetic else ""
+            if result.get("phonetic")!=formatted:result["phonetic"]=formatted;cached.write_text(json.dumps(result,ensure_ascii=False))
             self.reply(result)
         except Exception as exc: self.reply({"error":f"dictionary upstream failed: {exc}"},502)
     def word_hover(self,query):

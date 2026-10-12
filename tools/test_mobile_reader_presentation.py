@@ -11,6 +11,7 @@ class MobileReaderPresentationTests(unittest.TestCase):
         self.html = (ROOT / "reader/index.html").read_text()
         self.script = (ROOT / "reader/app.js").read_text()
         self.styles = (ROOT / "reader/responsive.css").read_text()
+        self.components = (ROOT / "reader/components.css").read_text()
 
     def test_mobile_assets_and_safe_area_are_enabled(self):
         self.assertIn("viewport-fit=cover", self.html)
@@ -18,6 +19,15 @@ class MobileReaderPresentationTests(unittest.TestCase):
         self.assertIn("100dvh", self.styles)
         self.assertIn("safe-area-inset-bottom", self.styles)
         self.assertIn("prefers-reduced-motion", self.styles)
+
+    def test_shiyue_component_layer_is_loaded(self):
+        self.assertIn('vendor/bootstrap/bootstrap.min.css?v=5.3.3', self.html)
+        self.assertIn('vendor/bootstrap-icons/bootstrap-icons.min.css?v=1.11.3', self.html)
+        self.assertIn('vendor/bootstrap/bootstrap.bundle.min.js?v=5.3.3', self.html)
+        self.assertIn('components.css?v=20261011-1', self.html)
+        self.assertIn('.btn-primary', self.components)
+        self.assertIn('.ui-toast', self.components)
+        self.assertIn('id="mobileBottomNav"', self.html)
 
     def test_non_reader_pages_hide_reader_content_and_keep_menu_trigger(self):
         self.assertIn('screen-shelf', self.html)

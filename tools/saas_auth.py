@@ -478,7 +478,78 @@ class SaaSService:
                     WHERE user_id=%s AND revoked_at IS NULL ORDER BY last_seen_at DESC""",
                     (user_id,),
                 )
-                return self._many(cursor)
+                return [{"id":row["id"],"label":row["label"],"userAgent":row["user_agent"],"firstSeenAt":iso(row["first_seen_at"]) if row["first_seen_at"] else "","lastSeenAt":iso(row["last_seen_at"]) if row["last_seen_at"] else "","revoked":False} for row in self._many(cursor)]
+
+    def preferences(self, user_id: str) -> dict[str, Any]:
+        with self.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT preferences_json FROM user_preferences WHERE user_id=%s", (user_id,))
+                row = self._one(cursor)
+                if not row:
+                    return {}
+                value = row.get("preferences_json", {})
+                return value if isinstance(value, dict) else json.loads(value or "{}")
+
+    def update_preferences(self, user_id: str, incoming: Any) -> dict[str, Any]:
+        if not isinstance(incoming, dict):
+            raise SaaSError("invalid_preferences", "阅读偏好数据无效。", 400)
+        enum_fields = {
+            "readerMode": {"intensive", "extensive", "shadow"},
+            "density": {"comfortable", "compact"},
+            "reminder": {"off", "daily", "weekdays"},
+            "readerLayout": {"side", "stack"},
+            "heatmapRange": {"month", "quarter", "year"},
+            "shortcutPrevious": {"a", "s", "d", "space", "arrowleft", "arrowright", "enter"},
+            "shortcutRepeat": {"a", "s", "d", "space", "arrowleft", "arrowright", "enter"},
+            "shortcutNext": {"a", "s", "d", "space", "arrowleft", "arrowright", "enter"},
+            "shortcutPlay": {"a", "s", "d", "space", "arrowleft", "arrowright", "enter"},
+        }
+        boolean_fields = {"eyeComfort", "focusMode", "sentenceAutoPause"}
+        number_fields = {
+            "wordTipSeconds": (0.5, 10.0),
+            "reviewPageSize": (5, 50),
+            "manualRepeatCount": (1, 10),
+            "manualPauseSeconds": (0.5, 10.0),
+            "highlightLeadMs": (-300, 600),
+            "playbackRate": (0.5, 2.0),
+        }
+        current = self.preferences(user_id)
+        changed = False
+        for key, values in enum_fields.items():
+            if key in incoming:
+                value = str(incoming[key]).strip()
+                if value not in values:
+                    raise SaaSError("invalid_preferences", f"阅读偏好 {key} 无效。", 400)
+                current[key] = value
+                changed = True
+        for key in boolean_fields:
+            if key in incoming:
+                if not isinstance(incoming[key], bool):
+                    raise SaaSError("invalid_preferences", f"阅读偏好 {key} 无效。", 400)
+                current[key] = incoming[key]
+                changed = True
+        for key, (minimum, maximum) in number_fields.items():
+            if key in incoming:
+                try:
+                    value = float(incoming[key])
+                except (TypeError, ValueError) as exc:
+                    raise SaaSError("invalid_preferences", f"阅读偏好 {key} 无效。", 400) from exc
+                if value < minimum or value > maximum:
+                    raise SaaSError("invalid_preferences", f"阅读偏好 {key} 超出允许范围。", 400)
+                if key in {"reviewPageSize", "manualRepeatCount", "highlightLeadMs"}:
+                    value = int(value)
+                current[key] = value
+                changed = True
+        shortcut_values = [current.get(key) for key in ("shortcutPrevious", "shortcutRepeat", "shortcutNext", "shortcutPlay") if current.get(key)]
+        if len(shortcut_values) != len(set(shortcut_values)):
+            raise SaaSError("invalid_preferences", "四个阅读快捷键不能重复。", 400)
+        if not changed:
+            raise SaaSError("invalid_preferences", "没有可保存的阅读偏好。", 400)
+        with self.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""INSERT INTO user_preferences(user_id,preferences_json) VALUES(%s,%s::jsonb)
+                ON CONFLICT(user_id) DO UPDATE SET preferences_json=EXCLUDED.preferences_json,updated_at=NOW()""", (user_id, json.dumps(current, ensure_ascii=False)))
+        return current
 
     def revoke_device(self, user_id: str, device_id: str) -> None:
         with self.transaction() as connection:

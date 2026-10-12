@@ -1,0 +1,552 @@
+/*
+ * Shiyue component layer.
+ *
+ * The class names intentionally follow Bootstrap's component vocabulary so the
+ * project can switch to the official Bootstrap distribution when npm access is
+ * available. Until then this file is self-contained and keeps the reader
+ * usable without a CDN or a build step.
+ */
+:root {
+  --bs-primary: var(--green);
+  --bs-primary-rgb: 47, 91, 72;
+  --bs-secondary: var(--muted);
+  --bs-body-bg: var(--paper);
+  --bs-body-color: var(--ink);
+  --bs-border-color: var(--line);
+  --bs-border-radius: 10px;
+  --bs-border-radius-sm: 8px;
+  --bs-border-radius-lg: 16px;
+  --bs-focus-ring-color: #2f5b4838;
+  --ui-control-height: 42px;
+  --ui-motion: 160ms ease;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+/* Bootstrap's .nav is intended for list navigation. Shiyue also uses the
+ * short class on sidebar buttons, so restore the reader-specific layout. */
+.sidebar .nav {
+  display: block;
+  flex: none;
+  flex-wrap: unset;
+  padding-left: 14px;
+  margin-bottom: 0;
+}
+
+.mobile-bottom-nav .nav {
+  display: grid;
+  padding-left: 4px;
+  margin-bottom: 0;
+}
+
+button,
+.btn {
+  transition: color var(--ui-motion), background-color var(--ui-motion),
+    border-color var(--ui-motion), box-shadow var(--ui-motion),
+    transform var(--ui-motion), opacity var(--ui-motion);
+}
+
+button:focus-visible,
+.btn:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="tab"]:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--bs-focus-ring-color);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: var(--ui-control-height);
+  padding: 9px 15px;
+  border: 1px solid transparent;
+  border-radius: var(--bs-border-radius-sm);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.btn:active:not(:disabled),
+.btn.is-pressed {
+  transform: translateY(1px);
+}
+
+.btn:disabled,
+.btn.disabled,
+button:disabled {
+  cursor: not-allowed;
+  opacity: .52;
+  transform: none;
+}
+
+.btn-primary,
+.btn-shiyue-primary {
+  color: #fff;
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.btn-primary:hover:not(:disabled),
+.btn-shiyue-primary:hover:not(:disabled) {
+  color: #fff;
+  background: var(--green-dark, #234638);
+  border-color: var(--green-dark, #234638);
+}
+
+.btn-secondary,
+.btn-shiyue-secondary {
+  color: var(--green);
+  background: #fff;
+  border-color: #bfcfc1;
+}
+
+.btn-secondary:hover:not(:disabled),
+.btn-shiyue-secondary:hover:not(:disabled) {
+  color: var(--green);
+  background: #eef4ed;
+  border-color: #96b19d;
+}
+
+.btn-light,
+.btn-shiyue-ghost {
+  color: var(--ink);
+  background: #fff;
+  border-color: var(--line);
+}
+
+.btn-light:hover:not(:disabled),
+.btn-shiyue-ghost:hover:not(:disabled) {
+  background: #f1f3ee;
+  border-color: #c8d0c7;
+}
+
+.btn-danger,
+.btn-shiyue-danger {
+  color: #fff;
+  background: #a85e45;
+  border-color: #a85e45;
+}
+
+.btn-danger:hover:not(:disabled),
+.btn-shiyue-danger:hover:not(:disabled) {
+  color: #fff;
+  background: #8f4936;
+  border-color: #8f4936;
+}
+
+.btn-sm {
+  min-height: 34px;
+  padding: 7px 11px;
+  font-size: 11px;
+}
+
+.btn-lg {
+  min-height: 48px;
+  padding: 12px 19px;
+  font-size: 14px;
+}
+
+.btn-icon,
+.btn-shiyue-icon {
+  width: 42px;
+  min-width: 42px;
+  padding: 0;
+  border-radius: 10px;
+}
+
+.catalog-search button,
+.catalog-actions button,
+.workspace-continue button,
+.stats-next-step button,
+.admin-form button,
+.admin-review-form button,
+.membership-orders button,
+.settings-save-row > button,
+.workspace-import-form > button,
+.youtube-import-panel > button,
+.video-import-panel > button {
+  min-height: var(--ui-control-height);
+  border-radius: var(--bs-border-radius-sm);
+  box-shadow: 0 4px 12px rgba(32, 51, 44, .08);
+  transition: color var(--ui-motion), background-color var(--ui-motion),
+    border-color var(--ui-motion), box-shadow var(--ui-motion), transform var(--ui-motion);
+}
+
+.catalog-search button:hover:not(:disabled),
+.catalog-actions button:hover:not(:disabled),
+.workspace-continue button:hover:not(:disabled),
+.stats-next-step button:hover:not(:disabled),
+.admin-form button:hover:not(:disabled),
+.admin-review-form button:hover:not(:disabled),
+.membership-orders button:hover:not(:disabled),
+.settings-save-row > button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(32, 51, 44, .13);
+}
+
+.catalog-actions button.secondary,
+.admin-section-head button,
+.admin-media-pagination button,
+.membership-logout {
+  background: #fff;
+  color: var(--green);
+  border: 1px solid #bfcfc1;
+}
+
+.is-loading {
+  pointer-events: none;
+}
+
+.is-loading::before {
+  width: 14px;
+  height: 14px;
+  content: "";
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ui-spin .7s linear infinite;
+}
+
+@keyframes ui-spin {
+  to { transform: rotate(360deg); }
+}
+
+.form-control,
+.form-select,
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  min-height: var(--ui-control-height);
+  border: 1px solid var(--line);
+  border-radius: var(--bs-border-radius-sm);
+  background: #fff;
+  color: var(--ink);
+  transition: border-color var(--ui-motion), box-shadow var(--ui-motion),
+    background-color var(--ui-motion);
+}
+
+.form-control,
+.form-select {
+  width: 100%;
+  padding: 9px 12px;
+}
+
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  padding: 9px 12px;
+}
+
+.form-control:hover,
+.form-select:hover,
+input:not([type="checkbox"]):not([type="radio"]):hover,
+select:hover,
+textarea:hover {
+  border-color: #b9c8bb;
+}
+
+.form-control:focus,
+.form-select:focus,
+input:not([type="checkbox"]):not([type="radio"]):focus,
+select:focus,
+textarea:focus {
+  border-color: #7e9f89;
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--bs-focus-ring-color);
+}
+
+.form-control.is-invalid,
+.form-select.is-invalid {
+  border-color: #b8663f;
+  box-shadow: 0 0 0 3px #b8663f22;
+}
+
+.form-text,
+.field-help {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.ui-card,
+.card,
+.panel {
+  border-radius: var(--bs-border-radius-lg);
+}
+
+.catalog-book-card,
+.membership-usage-group,
+.admin-panel,
+.stats-next-step,
+.workspace-continue {
+  box-shadow: 0 8px 24px rgba(32, 51, 44, .035);
+}
+
+.catalog-book-card:hover,
+.workspace-continue:hover,
+.stats-next-step:hover {
+  box-shadow: 0 12px 30px rgba(32, 51, 44, .09);
+}
+
+.admin-tabs,
+.settings-tabs,
+.mode-switch {
+  isolation: isolate;
+}
+
+.admin-tabs button,
+.settings-tabs > button,
+.mode-switch button {
+  min-height: 40px;
+  transition: color var(--ui-motion), background-color var(--ui-motion),
+    box-shadow var(--ui-motion), transform var(--ui-motion);
+}
+
+.admin-tabs button:focus-visible,
+.settings-tabs > button:focus-visible,
+.mode-switch button:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--bs-focus-ring-color);
+}
+
+.admin-tabs.btn-group {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0;
+  overflow-x: auto;
+  border-radius: 999px;
+}
+
+.admin-tabs.btn-group .btn {
+  flex: 0 0 auto;
+  min-height: 40px;
+  border-radius: 0;
+}
+
+.admin-tabs.btn-group .btn:first-child {
+  border-radius: 999px 0 0 999px;
+}
+
+.admin-tabs.btn-group .btn:last-child {
+  border-radius: 0 999px 999px 0;
+}
+
+.admin-tabs.btn-group .btn-primary {
+  color: #fff;
+  background: var(--green);
+  border-color: var(--green);
+}
+
+.admin-form > button[type="submit"],
+.admin-review-form > button[type="submit"] {
+  align-self: end;
+  justify-self: start;
+  min-width: 132px;
+}
+
+.admin-media-table-wrap {
+  overflow-x: auto;
+  margin-top: 14px;
+}
+
+.admin-media-table-header,
+.admin-media-row {
+  display: grid;
+  grid-template-columns: minmax(90px, .8fr) minmax(130px, 1.2fr) minmax(90px, .7fr) minmax(140px, 1fr) minmax(210px, 2fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 760px;
+}
+
+.admin-media-table-header {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .4px;
+}
+
+.admin-media-row {
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid #edf0eb;
+  border-radius: 0;
+  background: #fff;
+  font-size: 11px;
+}
+
+.admin-media-row > span,
+.admin-media-row > em {
+  min-width: 0;
+}
+
+.admin-media-row code {
+  max-width: none;
+}
+
+.admin-media-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  margin-top: 16px;
+}
+
+.admin-media-pagination .page-link {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--green);
+}
+
+.admin-media-pagination .page-link:first-child {
+  border-radius: 8px 0 0 8px;
+}
+
+.admin-media-pagination .page-link:last-child {
+  border-radius: 0 8px 8px 0;
+}
+
+.admin-media-pagination .admin-media-page-label {
+  min-width: 110px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.ui-toast,
+.reader-toast {
+  position: fixed;
+  z-index: 220;
+  right: max(18px, env(safe-area-inset-right));
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  max-width: min(420px, calc(100vw - 36px));
+  padding: 12px 15px;
+  border: 1px solid #cbd9cc;
+  border-radius: 12px;
+  background: #203d31f2;
+  color: #fff;
+  box-shadow: 0 16px 42px #17271f3d;
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(12px);
+  transition: opacity var(--ui-motion), transform var(--ui-motion);
+}
+
+.ui-toast.show,
+.reader-toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.mobile-bottom-nav {
+  display: none;
+}
+
+.mobile-bottom-nav-item {
+  display: grid;
+  place-items: center;
+  gap: 3px;
+  min-width: 0;
+  min-height: 54px;
+  padding: 5px 4px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.mobile-bottom-nav-item.active {
+  background: #e5eee5;
+  color: var(--green);
+}
+
+.ui-nav-icon {
+  font-size: 17px;
+  line-height: 1;
+}
+
+@media (max-width: 767px) {
+  body.saas-mode .mobile-bottom-nav:not(.hidden) {
+    display: grid !important;
+  }
+
+  .mobile-bottom-nav {
+    position: fixed;
+    z-index: 35;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 2px;
+    padding: 5px max(8px, env(safe-area-inset-left)) calc(5px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-right));
+    border-top: 1px solid var(--line);
+    background: #faf9f5f5;
+    backdrop-filter: blur(16px);
+  }
+
+  .mobile-bottom-nav:not(.hidden) {
+    display: grid !important;
+  }
+
+  body.screen-reader .mobile-bottom-nav,
+  body.focus .mobile-bottom-nav {
+    display: none;
+  }
+
+  .dashboard,
+  .shelf {
+    padding-bottom: calc(156px + env(safe-area-inset-bottom)) !important;
+  }
+
+  .ui-toast,
+  .reader-toast {
+    right: 14px;
+    bottom: calc(82px + env(safe-area-inset-bottom));
+    left: 14px;
+    max-width: none;
+    text-align: center;
+  }
+
+  .btn,
+  .btn-sm,
+  .btn-lg {
+    min-height: 44px;
+  }
+
+  .btn-icon,
+  .btn-shiyue-icon {
+    width: 44px;
+    min-width: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+  }
+}

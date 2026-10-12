@@ -8,6 +8,7 @@ import os
 import re
 from html.parser import HTMLParser
 from typing import Any, Callable
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from saas_auth import SaaSError, SaaSService, new_id
@@ -31,10 +32,15 @@ class WorkspaceAIService:
     def __init__(self,accounts:SaaSService,memberships:MembershipService,generator:Callable[[str,dict[str,Any]],dict[str,Any]]|None=None):
         self.accounts,self.memberships=accounts,memberships
         self.generator=generator or self._dioco_generate
-        self.upstream=str(os.environ.get("SHIYUE_DIOCO_UPSTREAM","https://api-cdn-plus.dioco.io")).rstrip("/")
+        self.upstream="https://api-cdn-plus.dioco.io"
 
     def _sentence(self,cursor:Any,user_id:str,book_id:str,sentence_id:str)->tuple[dict[str,Any],dict[str,Any],list[dict[str,Any]],int]:
         cursor.execute("SELECT * FROM content_books WHERE id=%s AND owner_id=%s AND visibility IN ('private','draft')",(book_id,user_id));book=self.accounts._one(cursor)
+        if not book:
+            cursor.execute("""SELECT src.* FROM catalog_books cb
+            JOIN content_books src ON src.id=cb.source_content_book_id
+            JOIN official_book_unlocks ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
+            WHERE cb.id=%s AND cb.publication_status='published' AND cb.rights_status IN ('public_domain','licensed')""",(user_id,book_id));book=self.accounts._one(cursor)
         if not book:raise SaaSError("workspace_book_not_found","私人读物不存在或你无权访问。",404)
         data=as_json(book["data_json"]);sentences=data.get("sentences",[]) if isinstance(data.get("sentences",[]),list) else []
         for index,sentence in enumerate(sentences):
@@ -43,6 +49,20 @@ class WorkspaceAIService:
 
     @staticmethod
     def _digest(value:Any)->str:return hashlib.sha256(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+
+    @staticmethod
+    def _word(sentence:dict[str,Any],index:int,requested_word:Any="")->str:
+        source_words=sentence.get("words",[]) if isinstance(sentence.get("words",[]),list) else []
+        if 0<=index<len(source_words):
+            source=source_words[index]
+            raw=str(source.get("text") or source.get("word") or source.get("form") or "") if isinstance(source,dict) else str(source or "")
+            match=WORD_RE.search(raw)
+            if match:return match.group(0)
+        text=str(sentence.get("text","")).strip();words=WORD_RE.findall(text)
+        if 0<=index<len(words):return words[index]
+        requested=WORD_RE.fullmatch(str(requested_word or "").strip())
+        if requested and any(requested.group(0).casefold()==word.casefold() for word in words):return requested.group(0)
+        raise SaaSError("workspace_word_not_found","单词不存在。",404)
 
     def _cached(self,cursor:Any,user_id:str,result_type:str,content_key:str,input_hash:str)->dict[str,Any]|None:
         cursor.execute("SELECT * FROM workspace_ai_results WHERE owner_id=%s AND result_type=%s AND content_key=%s AND input_hash=%s",(user_id,result_type,content_key,input_hash));return self.accounts._one(cursor)
@@ -70,37 +90,41 @@ class WorkspaceAIService:
             if isinstance(exc,SaaSError):raise
             raise SaaSError("ai_generation_failed","AI 生成失败，请稍后重试。",502) from exc
 
-    def context(self,user_id:str,book_id:str,sentence_id:str,word_index:Any)->dict[str,Any]:
+    def context(self,user_id:str,book_id:str,sentence_id:str,word_index:Any,requested_word:Any="")->dict[str,Any]:
         try:index=int(word_index)
         except (TypeError,ValueError) as exc:raise SaaSError("invalid_word_index","单词索引无效。",400) from exc
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                _,sentence,sentences,sentence_index=self._sentence(cursor,user_id,book_id,sentence_id);text=str(sentence.get("text","")).strip();words=WORD_RE.findall(text)
-                if index<0 or index>=len(words):raise SaaSError("workspace_word_not_found","单词不存在。",404)
-                word=words[index];expanded=" ".join(str(item.get("text","")).strip() for item in sentences[max(0,sentence_index-1):sentence_index+2] if isinstance(item,dict)).strip()
+                book,sentence,sentences,sentence_index=self._sentence(cursor,user_id,book_id,sentence_id);text=str(sentence.get("text","")).strip();word=self._word(sentence,index,requested_word)
+                expanded=" ".join(str(item.get("text","")).strip() for item in sentences[max(0,sentence_index-1):sentence_index+2] if isinstance(item,dict)).strip()
                 content_key=f"{book_id}:{sentence_id}:{index}";input_hash=self._digest({"word":word,"sentence":text,"expanded":expanded});cached=self._cached(cursor,user_id,"word_context",content_key,input_hash)
                 if cached:return {"bookId":book_id,"sentenceId":str(sentence_id),"wordIndex":index,"word":word,"explanation":as_json(cached["payload"]).get("text",""),"source":cached["provider"],"cached":True,"charged":False}
-        result=self._generate(user_id,"ai_context_generations","word_context",content_key,input_hash,book_id,{"word":word,"contextSentence":text,"expandedContext":expanded})
+        result=self._generate(user_id,"ai_context_generations","word_context",content_key,input_hash,str(book["id"]),{"word":word,"contextSentence":text,"expandedContext":expanded})
         return {"bookId":book_id,"sentenceId":str(sentence_id),"wordIndex":index,"word":word,"explanation":result["payload"]["text"],"source":result["provider"],"cached":result["cached"],"charged":result["charged"]}
 
     def grammar(self,user_id:str,book_id:str,sentence_id:str)->dict[str,Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                _,sentence,_,_=self._sentence(cursor,user_id,book_id,sentence_id);text=str(sentence.get("text","")).strip();content_key=f"{book_id}:{sentence_id}";input_hash=self._digest({"sentence":text});cached=self._cached(cursor,user_id,"sentence_grammar",content_key,input_hash)
-                cursor.execute("SELECT payload FROM content_sentence_grammar WHERE book_id=%s AND sentence_id=%s",(book_id,str(sentence_id)));structure_row=self.accounts._one(cursor);structure=as_json(structure_row["payload"]) if structure_row else {}
+                book,sentence,_,_=self._sentence(cursor,user_id,book_id,sentence_id);text=str(sentence.get("text","")).strip();content_key=f"{book_id}:{sentence_id}";input_hash=self._digest({"sentence":text});cached=self._cached(cursor,user_id,"sentence_grammar",content_key,input_hash)
+                cursor.execute("SELECT payload FROM content_sentence_grammar WHERE book_id=%s AND sentence_id=%s",(str(book["id"]),str(sentence_id)));structure_row=self.accounts._one(cursor);structure=as_json(structure_row["payload"]) if structure_row else {}
                 if cached:return {"bookId":book_id,"sentenceId":str(sentence_id),"text":text,"aiExplanation":as_json(cached["payload"]).get("text",""),"source":cached["provider"],"structure":structure,"cached":True,"charged":False}
-        result=self._generate(user_id,"ai_grammar_generations","sentence_grammar",content_key,input_hash,book_id,{"sentence":text,"structure":structure})
+        result=self._generate(user_id,"ai_grammar_generations","sentence_grammar",content_key,input_hash,str(book["id"]),{"sentence":text,"structure":structure})
         return {"bookId":book_id,"sentenceId":str(sentence_id),"text":text,"aiExplanation":result["payload"]["text"],"source":result["provider"],"structure":structure,"cached":result["cached"],"charged":result["charged"]}
 
     def _dioco_generate(self,result_type:str,prompt:dict[str,Any])->dict[str,Any]:
-        token=str(os.environ.get("SHIYUE_DIOCO_TOKEN","")).strip();email=str(os.environ.get("SHIYUE_DIOCO_EMAIL","")).strip()
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT value_json FROM platform_settings WHERE key='ai.dioco'");row=self.accounts._one(cursor);config=as_json(row["value_json"]) if row else {}
+        token=str(config.get("token","")or"").strip();email=str(config.get("email","")or"").strip();upstream=str(config.get("upstream","")or self.upstream).rstrip("/")
         if not token or not email:raise SaaSError("ai_provider_unavailable","平台 AI 服务尚未配置。",503)
         if result_type=="word_context":instruction="请用简洁准确的中文解释这个英文单词在当前句和上下文中的具体含义、搭配与语气。<WORD>：<CONTEXT>";word=prompt["word"];sentence=prompt["contextSentence"];expanded=prompt["expandedContext"]
         else:instruction=f"请用简洁准确的中文讲解这句英文的句型、主干、从句、时态语态和学习重点。已有结构：{json.dumps(prompt.get('structure',{}),ensure_ascii=False)}。原句：<CONTEXT>";word="sentence grammar";sentence=prompt["sentence"];expanded=sentence
         body={"promptWithPlaceHolders_translated":instruction,"contextSentence":sentence,"expandedContext":expanded,"word":word,"userLanguage_G":"zh-CN","studyLanguage_G":"en","diocoToken":token,"userEmail":email}
-        request=Request(self.upstream+"/base_lexa_generate",data=json.dumps(body,ensure_ascii=False).encode(),headers={"Accept":"application/json, text/plain, */*","Content-Type":"application/json","Origin":"https://www.youtube.com","Referer":"https://www.youtube.com/","User-Agent":"Mozilla/5.0"},method="POST")
+        request=Request(upstream+"/base_lexa_generate",data=json.dumps(body,ensure_ascii=False).encode(),headers={"Accept":"application/json, text/plain, */*","Content-Type":"application/json","Origin":"https://www.youtube.com","Referer":"https://www.youtube.com/","User-Agent":"Mozilla/5.0"},method="POST")
         try:
             with urlopen(request,timeout=45) as response:raw=json.loads(response.read())
+        except HTTPError as exc:raise SaaSError("ai_provider_failed",f"平台 AI 服务拒绝请求（HTTP {exc.code}）。",502) from exc
+        except URLError as exc:raise SaaSError("ai_provider_failed","平台 AI 服务当前无法连接。",502) from exc
         except Exception as exc:raise SaaSError("ai_provider_failed","平台 AI 服务调用失败。",502) from exc
         text=plain_html(raw.get("data",{}).get("generation",""))
         if not text:raise SaaSError("ai_empty_result","平台 AI 服务没有返回可用内容。",502)

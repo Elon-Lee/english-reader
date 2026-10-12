@@ -46,7 +46,7 @@ class WorkspaceAITests(unittest.TestCase):
         self.accounts.verify_email(raw)
 
     def create_book(self,owner_id:str)->str:
-        book_id="private-ai-book";data={"id":book_id,"title":"AI Private","sentences":[{"id":"s1","text":"We survive together.","words":[{"text":"We"},{"text":"survive"},{"text":"together"}]},{"id":"s2","text":"This is the next sentence.","words":[]}]}
+        book_id="private-ai-book";data={"id":book_id,"title":"AI Private","sentences":[{"id":"s1","text":"We survive together.","words":[{"text":"We"},{"text":"survive"},{"text":"together"}]},{"id":"s2","text":"This is the next sentence.","words":[]},{"id":"s3","text":"Hello, world.","words":[{"text":"Hello"},{"text":","},{"text":"world"}]}]}
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("""INSERT INTO content_books(id,owner_id,title,english_title,series,level,source_type,source_path,status,visibility,cover_url,page_base_url,audio_url,pdf_url,video_url,duration,alignment,data_json,quality_json,created_at,updated_at)
@@ -77,6 +77,28 @@ class WorkspaceAITests(unittest.TestCase):
         usage=self.memberships.usage(owner);context_usage=next(row for row in usage["usage"] if row["feature"]=="ai_context_generations");self.assertEqual(context_usage["used"],0);self.assertEqual(context_usage["reserved"],0)
         retried=ai.context(owner,self.book_id,"s1",0);self.assertTrue(retried["charged"]);self.assertEqual(retried["explanation"],"重试成功")
         usage=self.memberships.usage(owner);context_usage=next(row for row in usage["usage"] if row["feature"]=="ai_context_generations");self.assertEqual(context_usage["used"],1);self.assertEqual(context_usage["reserved"],0)
+
+    def test_context_uses_imported_word_index_when_punctuation_is_a_token(self):
+        result=self.ai.context(str(self.owner["id"]),self.book_id,"s3",2,"world")
+        self.assertEqual(result["word"],"world")
+        self.assertEqual(self.calls[0][1]["word"],"world")
+
+    def test_unlocked_official_book_uses_source_content_for_ai_cache(self):
+        owner=str(self.owner["id"]);catalog_id="catalog-ai-book"
+        self.memberships.usage(owner)
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""INSERT INTO catalog_books(id,source_content_book_id,title,english_title,rights_status,publication_status)
+                VALUES(%s,%s,'AI Official','AI Official','licensed','published')""",(catalog_id,self.book_id))
+                cursor.execute("SELECT id FROM usage_periods WHERE user_id=%s ORDER BY starts_at DESC LIMIT 1",(owner,));period=self.accounts._one(cursor)
+                cursor.execute("INSERT INTO official_book_unlocks(id,user_id,catalog_book_id,usage_period_id) VALUES(%s,%s,%s,%s)",(new_id(),owner,catalog_id,period["id"]))
+        result=self.ai.context(owner,catalog_id,"s1",1,"survive")
+        self.assertEqual(result["bookId"],catalog_id)
+        self.assertEqual(result["word"],"survive")
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT content_book_id FROM workspace_ai_results WHERE owner_id=%s AND content_key=%s",(owner,f"{catalog_id}:s1:1"));row=self.accounts._one(cursor)
+        self.assertEqual(row["content_book_id"],self.book_id)
 
 
 if __name__=="__main__":unittest.main()

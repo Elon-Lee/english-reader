@@ -5,8 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>拾页 · 英语点读</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="vendor/bootstrap/bootstrap.min.css?v=5.3.3">
+  <link rel="stylesheet" href="vendor/bootstrap-icons/bootstrap-icons.min.css?v=1.11.3">
   <link rel="stylesheet" href="styles.css?v=20261011-1">
   <link rel="stylesheet" href="responsive.css?v=20261011-1">
+  <link rel="stylesheet" href="components.css?v=20261011-1">
 </head>
 <body class="runtime-pending screen-shelf">
   <section id="saasAuth" class="saas-auth hidden" aria-live="polite">
@@ -49,6 +52,13 @@
   </aside>
   <button id="sidebarBackdrop" class="mobile-backdrop sidebar-backdrop hidden" type="button" aria-label="关闭菜单"></button>
   <button id="mobilePanelBackdrop" class="mobile-backdrop panel-backdrop hidden" type="button" aria-label="关闭详情面板"></button>
+  <nav id="mobileBottomNav" class="mobile-bottom-nav hidden" data-saas-only="true" aria-label="主要导航">
+    <button class="mobile-bottom-nav-item nav" data-screen="catalog" type="button"><span class="ui-nav-icon">⌂</span><span>书城</span></button>
+    <button class="mobile-bottom-nav-item nav" data-screen="my-library" type="button"><span class="ui-nav-icon">▦</span><span>书架</span></button>
+    <button class="mobile-bottom-nav-item nav" data-screen="workspace" type="button"><span class="ui-nav-icon">▤</span><span>学习空间</span></button>
+    <button class="mobile-bottom-nav-item nav" data-screen="stats" type="button"><span class="ui-nav-icon">◎</span><span>学习记录</span></button>
+    <button class="mobile-bottom-nav-item nav" data-screen="membership" type="button"><span class="ui-nav-icon">◇</span><span>我的</span></button>
+  </nav>
 
   <main>
     <header class="topbar non-reader" aria-hidden="true">
@@ -109,7 +119,7 @@
 
     <section id="admin" class="screen dashboard admin-screen hidden">
       <div class="page-title"><small>ADMIN OPERATIONS</small><h1>运营后台</h1><p>用户、邀请码、套餐、额度、书城审核和运营审计。密码与平台密钥不会在此展示。</p></div>
-      <nav id="adminTabs" class="admin-tabs" aria-label="运营后台分类"><button class="active" data-admin-tab="overview">概览与用户</button><button data-admin-tab="membership">会员与额度</button><button data-admin-tab="catalog">书城审核</button><button data-admin-tab="media">媒体资产</button><button data-admin-tab="audit">审计与导出</button></nav>
+      <nav id="adminTabs" class="admin-tabs btn-group" role="tablist" aria-label="运营后台分类"><button class="btn btn-outline-secondary active" role="tab" aria-selected="true" data-admin-tab="overview">概览与用户</button><button class="btn btn-outline-secondary" role="tab" aria-selected="false" data-admin-tab="membership">会员与额度</button><button class="btn btn-outline-secondary" role="tab" aria-selected="false" data-admin-tab="catalog">书城审核</button><button class="btn btn-outline-secondary" role="tab" aria-selected="false" data-admin-tab="media">媒体资产</button><button class="btn btn-outline-secondary" role="tab" aria-selected="false" data-admin-tab="audit">审计与导出</button></nav>
       <p id="adminActionNotice" class="admin-action-notice" aria-live="polite">请选择功能分类进行操作。</p>
       <div id="adminDashboard" class="admin-dashboard" data-admin-pane="overview"></div>
       <section class="panel admin-panel" data-admin-pane="overview"><div class="admin-section-head"><div><small>USERS</small><h2>用户与设备</h2></div><button id="adminRefresh" type="button">刷新</button></div><input id="adminUserSearch" class="admin-search" type="search" placeholder="搜索邮箱、昵称或用户 ID"><div id="adminUserList" class="admin-user-list"></div></section>
@@ -123,7 +133,7 @@
       </div>
       <section class="panel admin-panel" data-admin-pane="catalog"><div class="admin-section-head"><div><small>CATALOG REVIEW</small><h2>官方书城审核</h2></div></div><form id="adminCatalogReviewForm" class="admin-review-form"><label>源内容 ID<input id="adminCatalogSourceId" required></label><label>版权<select id="adminCatalogRights"><option value="public_domain">公版</option><option value="licensed">已授权</option><option value="private">私人</option><option value="prohibited">禁止上架</option></select></label><label>发布状态<select id="adminCatalogPublication"><option value="draft">草稿</option><option value="published">发布</option><option value="archived">归档</option></select></label><button type="submit">保存审核</button></form><div id="adminCatalogSources" class="admin-source-list"></div></section>
       <section class="panel admin-panel" data-admin-pane="audit"><div class="admin-section-head"><div><small>AUDIT & EXPORT</small><h2>管理操作审计</h2></div><button id="adminExport" type="button">导出经营 JSON</button></div><div id="adminAuditList" class="admin-audit-list"></div><p id="adminNotice" class="membership-notice"></p></section>
-      <section class="panel admin-panel" data-admin-pane="media"><div class="admin-section-head"><div><small>MEDIA INVENTORY</small><h2>媒体资产清单</h2></div><button id="adminMediaRefresh" type="button">刷新资产</button></div><div id="adminMediaList" class="admin-media-list"></div><div class="admin-media-pagination"><button id="adminMediaPrev" type="button">上一页</button><span id="adminMediaPage">第 1 页</span><button id="adminMediaNext" type="button">下一页</button></div></section>
+      <section class="panel admin-panel" data-admin-pane="media"><div class="admin-section-head"><div><small>MEDIA INVENTORY</small><h2>媒体资产清单</h2></div><button id="adminMediaRefresh" class="btn btn-outline-secondary" type="button">刷新资产</button></div><div class="table-responsive admin-media-table-wrap"><div class="admin-media-table-header" aria-hidden="true"><span>类型</span><span>内容类型</span><span>大小</span><span>归属 / 状态</span><span>存储路径</span></div><div id="adminMediaList" class="admin-media-list"></div></div><nav class="admin-media-pagination pagination" aria-label="媒体资产分页"><button id="adminMediaPrev" class="page-link" type="button">上一页</button><span id="adminMediaPage" class="page-link admin-media-page-label">第 1 页</span><button id="adminMediaNext" class="page-link" type="button">下一页</button></nav></section>
     </section>
 
     <section id="stats" class="screen dashboard hidden"><div class="page-title"><small>LEARNING LOG</small><h1>学习记录</h1><p id="statsDescription">查看最近的阅读与复习情况。</p></div><div id="statsContent"></div></section>
@@ -317,6 +327,7 @@
       <div class="delete-dialog-actions"><button value="cancel">取消</button><button id="confirmUninstallNode" type="button" disabled>确认卸载</button></div>
     </form>
   </dialog>
+  <script src="vendor/bootstrap/bootstrap.bundle.min.js?v=5.3.3"></script>
   <script src="app.js?v=20261011-1"></script>
 </body>
 </html>

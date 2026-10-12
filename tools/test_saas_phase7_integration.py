@@ -87,6 +87,21 @@ class PrivateWorkspaceTests(unittest.TestCase):
         self.assertFalse(first["idempotent"]);self.assertTrue(second["idempotent"])
         days=self.workspace.learning_days(owner_id)["days"];self.assertEqual(days[0]["payload"]["sentences"],5);self.assertEqual(days[0]["payload"]["lookups"],2);self.assertEqual(days[0]["payload"]["reviews"],1);self.assertEqual(days[0]["payload"]["shadow_attempts"],1);self.assertEqual(days[0]["payload"]["sessions"],1)
 
+    def test_unlocked_official_reader_can_save_and_reload_word_rating(self):
+        owner_id=str(self.owner["id"]);catalog_id="catalog-workspace-book"
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""INSERT INTO catalog_books(id,source_content_book_id,title,english_title,rights_status,publication_status)
+                VALUES(%s,%s,'官方读物','Official Reader','licensed','published')""",(catalog_id,self.book_id))
+                cursor.execute("SELECT id FROM usage_periods WHERE user_id=%s ORDER BY starts_at DESC LIMIT 1",(owner_id,));period=self.accounts._one(cursor)
+                cursor.execute("INSERT INTO official_book_unlocks(id,user_id,catalog_book_id,usage_period_id) VALUES(%s,%s,%s,%s)",(new_id(),owner_id,catalog_id,period["id"]))
+        saved=self.workspace.save_vocabulary(owner_id,catalog_id,"s1",0,{"word":"My","rating":"easy"})
+        self.assertEqual(saved["bookId"],catalog_id)
+        items=self.workspace.vocabulary(owner_id,catalog_id)["items"]
+        self.assertEqual(items[0]["bookId"],catalog_id);self.assertEqual(items[0]["payload"]["rating"],"easy")
+        with self.assertRaises(SaaSError) as denied:self.workspace.save_vocabulary(str(self.other["id"]),catalog_id,"s1",0,{"word":"My","rating":"hard"})
+        self.assertEqual(denied.exception.code,"learning_book_not_found")
+
     def test_http_workspace_media_and_reward_activity(self):
         with socket.socket() as probe:probe.bind(("127.0.0.1",0));port=probe.getsockname()[1]
         environment={**os.environ,**self.environment,"READER_HOST":"127.0.0.1","READER_PORT":str(port)};root=Path(__file__).resolve().parents[1];process=subprocess.Popen([sys.executable,str(root/"tools/reader_server.py")],cwd=root,env=environment,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True);connection=None

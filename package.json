@@ -1,0 +1,31 @@
+{
+  "name": "english",
+  "version": "1.0.0",
+  "description": "拾页英语学习平台前端组件层",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "dev:modern": "vite --config frontend/vite.config.js",
+    "build:modern": "vite build --config frontend/vite.config.js",
+    "test:modern": "python3 tools/test_modern_frontend.py",
+    "test:ui": "python3 tools/test_mobile_reader_presentation.py && python3 tools/test_membership_presentation.py && python3 tools/test_remote_reader_presentation.py && python3 tools/test_reader_performance.py",
+    "check:js": "node --check reader/app.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "bootstrap": "5.3.3",
+    "bootstrap-icons": "1.11.3",
+    "dayjs": "^1.11.23"
+  },
+  "devDependencies": {
+    "@ant-design/icons": "^6.0.0",
+    "@vitejs/plugin-react": "^5.0.4",
+    "antd": "^5.27.6",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^7.1.5"
+  }
+}

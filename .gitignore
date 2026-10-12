@@ -6,3 +6,4 @@ books/.reader/
 tools/__pycache__/
 books
 .DS_Store
+node_modules
