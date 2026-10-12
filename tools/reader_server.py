@@ -320,14 +320,14 @@ class Handler(SimpleHTTPRequestHandler):
         if SAAS.enabled:
             if route.path=="/modern.html" or route.path.startswith("/modern-assets"):
                 self.send_response(308);self.send_header("Location","/");self.send_header("Content-Length","0");self.end_headers();return
-            if route.path=="/" or route.path.startswith("/assets/"):
+            if route.path in {"/", "/verify-email", "/reset-password"} or route.path.startswith("/assets/"):
                 if self.serve_saas_site(route):return
         range_header=self.headers.get("Range")
         if range_header and self.serve_range(range_header): return
         if self.serve_reader_asset(route):return
         super().do_GET()
     def serve_saas_site(self,route):
-        relative="index.html" if route.path=="/" else unquote(route.path).lstrip("/")
+        relative="index.html" if route.path in {"/", "/verify-email", "/reset-password"} else unquote(route.path).lstrip("/")
         path=(SITE/relative).resolve()
         try:path.relative_to(SITE.resolve())
         except ValueError:self.send_error(403);return True

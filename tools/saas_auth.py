@@ -32,6 +32,8 @@ SESSION_TTL_DAYS = 30
 VERIFY_TTL_HOURS = 24
 RESET_TTL_HOURS = 2
 PASSWORD_MIN_LENGTH = 10
+INVITATION_VERIFICATION_EMAIL_LIMIT = 3
+PASSWORD_RESET_EMAIL_LIMIT = 3
 
 
 class SaaSError(Exception):
@@ -324,6 +326,8 @@ class SaaSService:
                     raise SaaSError("invalid_invitation", "邀请码已过期。", 400)
                 if int(invitation["used_count"]) >= int(invitation["max_uses"]):
                     raise SaaSError("invitation_exhausted", "邀请码使用次数已满。", 400)
+                if int(invitation.get("verification_email_count", 0)) >= INVITATION_VERIFICATION_EMAIL_LIMIT:
+                    raise SaaSError("invitation_email_limit", "该邀请码的激活邮件发送次数已达上限。", 429)
                 cursor.execute("SELECT 1 FROM users WHERE email=%s", (normalized_email,))
                 if cursor.fetchone():
                     raise SaaSError("email_exists", "该邮箱已注册，请直接登录。", 409)
@@ -346,6 +350,7 @@ class SaaSService:
                 if member_invite and not member_invite["invitee_id"] and member_invite["inviter_id"] != user_id:
                     cursor.execute("UPDATE member_invites SET invitee_id=%s,status='registered',registered_at=NOW() WHERE id=%s", (user_id, member_invite["id"]))
                 verification_token = self._new_verification(cursor, user_id)
+                cursor.execute("UPDATE invitations SET verification_email_count=verification_email_count+1 WHERE id=%s", (invitation["id"],))
                 cursor.execute("SELECT id,email,display_name,plan_version,email_verified_at FROM users WHERE id=%s", (user_id,))
                 user = self._one(cursor) or {}
         delivered = self._send_verification(normalized_email, verification_token)
@@ -383,6 +388,8 @@ class SaaSService:
                     raise SaaSError("invalid_credentials", "邮箱或密码不正确。", 401)
                 if user["status"] != "active":
                     raise SaaSError("account_unavailable", "该账号当前不可登录。", 403)
+                if not user.get("email_verified_at"):
+                    raise SaaSError("email_unverified", "邮箱尚未激活，请先前往邮箱完成验证。", 403)
                 # Membership expiry must also take effect for device limits,
                 # even if the member has not opened the membership screen.
                 cursor.execute("UPDATE subscriptions SET status='expired',updated_at=NOW() WHERE user_id=%s AND status IN ('active','grace_period') AND ends_at<=NOW()", (user["id"],))
@@ -568,9 +575,14 @@ class SaaSService:
         raw = ""
         with self.transaction() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT id,email FROM users WHERE email=%s AND status='active' FOR UPDATE", (normalized_email,))
+                cursor.execute(
+                    "SELECT id,email,password_reset_request_count,password_reset_locked_at FROM users WHERE email=%s AND status='active' FOR UPDATE",
+                    (normalized_email,),
+                )
                 user = self._one(cursor)
                 if not user:
+                    return False
+                if int(user.get("password_reset_request_count", 0)) >= PASSWORD_RESET_EMAIL_LIMIT:
                     return False
                 raw = random_token()
                 cursor.execute("UPDATE password_reset_tokens SET consumed_at=NOW() WHERE user_id=%s AND consumed_at IS NULL", (user["id"],))
@@ -578,7 +590,25 @@ class SaaSService:
                     "INSERT INTO password_reset_tokens(id,user_id,token_hash,expires_at) VALUES(%s,%s,%s,%s)",
                     (new_id(), user["id"], token_hash(raw), utcnow() + timedelta(hours=RESET_TTL_HOURS)),
                 )
-        return self._send_password_reset(normalized_email, raw)
+                cursor.execute(
+                    """UPDATE users SET password_reset_request_count=password_reset_request_count+1,
+                    password_reset_locked_at=CASE WHEN password_reset_request_count+1 >= %s THEN NOW() ELSE NULL END,
+                    updated_at=NOW() WHERE id=%s""",
+                    (PASSWORD_RESET_EMAIL_LIMIT, user["id"]),
+                )
+        delivered = self._send_password_reset(normalized_email, raw)
+        if delivered:
+            return True
+        with self.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE password_reset_tokens SET consumed_at=NOW() WHERE token_hash=%s AND consumed_at IS NULL", (token_hash(raw),))
+                cursor.execute(
+                    """UPDATE users SET password_reset_request_count=GREATEST(password_reset_request_count-1,0),
+                    password_reset_locked_at=CASE WHEN password_reset_request_count-1 >= %s THEN password_reset_locked_at ELSE NULL END,
+                    updated_at=NOW() WHERE id=%s""",
+                    (PASSWORD_RESET_EMAIL_LIMIT, user["id"]),
+                )
+        return False
 
     def reset_password(self, raw_token: Any, password: Any) -> None:
         supplied = str(raw_token or "").strip()
@@ -596,7 +626,11 @@ class SaaSService:
                 if not record or record["expires_at"] <= utcnow():
                     raise SaaSError("invalid_reset", "重置链接无效或已过期。", 400)
                 cursor.execute("UPDATE password_reset_tokens SET consumed_at=NOW() WHERE id=%s", (record["id"],))
-                cursor.execute("UPDATE users SET password_hash=%s,updated_at=NOW() WHERE id=%s", (hash_password(password_value), record["user_id"]))
+                cursor.execute(
+                    """UPDATE users SET password_hash=%s,password_reset_request_count=0,
+                    password_reset_locked_at=NULL,updated_at=NOW() WHERE id=%s""",
+                    (hash_password(password_value), record["user_id"]),
+                )
                 cursor.execute("UPDATE user_sessions SET revoked_at=NOW() WHERE user_id=%s AND revoked_at IS NULL", (record["user_id"],))
 
     @staticmethod

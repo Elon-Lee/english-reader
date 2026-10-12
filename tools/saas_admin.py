@@ -38,7 +38,7 @@ class AdminService:
                 plans=[{"planVersion":r["plan_version"],"users":int(r["total"])} for r in self.accounts._many(cursor)]
                 cursor.execute("SELECT COUNT(*) AS total FROM subscriptions WHERE status IN ('active','grace_period') AND starts_at<=NOW() AND ends_at>NOW()")
                 active_subscriptions=int((self.accounts._one(cursor)or{"total":0})["total"])
-                cursor.execute("SELECT COUNT(*) AS total FROM invitations WHERE status='active' AND (expires_at IS NULL OR expires_at>NOW()) AND used_count<max_uses")
+                cursor.execute("SELECT COUNT(*) AS total FROM invitations WHERE status='active' AND (expires_at IS NULL OR expires_at>NOW()) AND used_count<max_uses AND verification_email_count<3")
                 invitations=int((self.accounts._one(cursor)or{"total":0})["total"])
                 cursor.execute("SELECT COUNT(*) AS total,COUNT(*) FILTER (WHERE publication_status='published') AS published FROM catalog_books")
                 catalog=self.accounts._one(cursor)or{}
@@ -108,7 +108,7 @@ class AdminService:
                 cursor.execute(f"SELECT COUNT(*) AS total FROM invitations i {where}",values);total=int((self.accounts._one(cursor)or{"total":0})["total"])
                 cursor.execute("""SELECT i.*,u.email AS creator_email FROM invitations i LEFT JOIN users u ON u.id=i.created_by
                 """+where+" ORDER BY i.created_at DESC LIMIT %s OFFSET %s",(*values,max(1,min(200,int(limit))),max(0,int(offset))))
-                return {"invitations":[{"id":r["id"],"code":r["code"],"channel":r["channel"],"status":r["status"],"maxUses":int(r["max_uses"]),"usedCount":int(r["used_count"]),"expiresAt":timestamp(r["expires_at"]),"note":r["note"],"createdBy":r["creator_email"],"createdAt":timestamp(r["created_at"])} for r in self.accounts._many(cursor)],"total":total,"limit":max(1,min(200,int(limit))),"offset":max(0,int(offset))}
+                return {"invitations":[{"id":r["id"],"code":r["code"],"channel":r["channel"],"status":r["status"],"maxUses":int(r["max_uses"]),"usedCount":int(r["used_count"]),"verificationEmailCount":int(r["verification_email_count"]),"verificationEmailLimit":3,"expiresAt":timestamp(r["expires_at"]),"note":r["note"],"createdBy":r["creator_email"],"createdAt":timestamp(r["created_at"])} for r in self.accounts._many(cursor)],"total":total,"limit":max(1,min(200,int(limit))),"offset":max(0,int(offset))}
 
     def create_invitation(self, actor_id: str, code: str, max_uses: int, expires_at: Any = None, note: str = "", channel: str = "") -> dict[str, Any]:
         expiry=parse_time(expires_at,"expiresAt") if expires_at else None

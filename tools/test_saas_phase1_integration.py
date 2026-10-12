@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
+from unittest.mock import patch
 
 from saas_auth import ROOT, SaaSError, SaaSService, new_id, token_hash, utcnow
 
@@ -107,10 +108,27 @@ class PhaseOnePostgresTests(unittest.TestCase):
             self.service.register("expired@local.test", "valid password for testing", "EXPIRED")
         self.assertEqual(expired.exception.code, "invalid_invitation")
 
+    def test_invitation_can_send_at_most_three_verification_emails(self):
+        self.invitation("MAIL-LIMIT", 10)
+        with patch.object(self.service, "_send_verification", return_value=True):
+            for index in range(3):
+                result = self.service.register(f"mail-limit-{index}@local.test", "valid password for testing", "MAIL-LIMIT")
+                self.assertTrue(result["emailDelivery"])
+            with self.assertRaises(SaaSError) as limited:
+                self.service.register("mail-limit-3@local.test", "valid password for testing", "MAIL-LIMIT")
+        self.assertEqual(limited.exception.code, "invitation_email_limit")
+        with self.service.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT used_count,verification_email_count FROM invitations WHERE code='MAIL-LIMIT'")
+                self.assertEqual(cursor.fetchone(), (3, 3))
+
     def test_verification_csrf_device_limit_and_logout(self):
         self.invitation("FLOW-ONLY")
         result = self.service.register("reader@local.test", "valid password for testing", "FLOW-ONLY")
         user_id = str(result["user"]["id"])
+        with self.assertRaises(SaaSError) as unverified:
+            self.service.login("reader@local.test", "valid password for testing", "device-flow-00000001", "Phase1 test")
+        self.assertEqual(unverified.exception.code, "email_unverified")
         self.verify(user_id)
         login = self.service.login("reader@local.test", "valid password for testing", "device-flow-00000001", "Phase1 test")
         session = self.service.authenticate(login["sessionToken"])
@@ -147,6 +165,26 @@ class PhaseOnePostgresTests(unittest.TestCase):
             self.service.login("reset@local.test", "valid password for testing", "device-reset-0000001", "Phase1 test")
         fresh = self.service.login("reset@local.test", "replacement password for test", "device-reset-0000001", "Phase1 test")
         self.assertIsNotNone(self.service.authenticate(fresh["sessionToken"]))
+
+    def test_password_reset_email_limit_clears_after_success(self):
+        self.invitation("RESET-LIMIT")
+        registered = self.service.register("reset-limit@local.test", "valid password for testing", "RESET-LIMIT")
+        self.verify(str(registered["user"]["id"]))
+        tokens = []
+
+        def capture(_email, raw_token):
+            tokens.append(raw_token)
+            return True
+
+        with patch.object(self.service, "_send_password_reset", side_effect=capture):
+            self.assertTrue(self.service.forgot_password("reset-limit@local.test"))
+            self.assertTrue(self.service.forgot_password("reset-limit@local.test"))
+            self.assertTrue(self.service.forgot_password("reset-limit@local.test"))
+            self.assertFalse(self.service.forgot_password("reset-limit@local.test"))
+            self.assertEqual(len(tokens), 3)
+            self.service.reset_password(tokens[-1], "replacement password for reset limit")
+            self.assertTrue(self.service.forgot_password("reset-limit@local.test"))
+            self.assertEqual(len(tokens), 4)
 
     def test_operational_admin_password_reset_revokes_current_sessions(self):
         before = self.service.login("admin@local.test", "phase1 admin password", "device-admin-00000001", "Phase1 test")
@@ -198,6 +236,15 @@ class PhaseOnePostgresTests(unittest.TestCase):
             else:
                 stderr = process.stderr.read() if process.stderr else ""
                 self.fail("SaaS test server did not start: " + stderr)
+            for auth_path in ("/verify-email?token=test", "/reset-password?token=test"):
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+                connection.request("GET", auth_path)
+                response = connection.getresponse()
+                body = response.read().decode("utf-8")
+                self.assertEqual(response.status, 200)
+                self.assertIn('id="root"', body)
+                connection.close()
+                connection = None
             payload = json.dumps({"email": "http-reader@local.test", "password": "valid password for testing"})
             connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
             connection.request("POST", "/api/auth/login", payload, {"Content-Type": "application/json", "X-Device-Id": "device-http-00000001"})

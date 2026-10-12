@@ -2,9 +2,19 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'node:path'
 
+const buildVersion = process.env.SHIYUE_BUILD_VERSION || Date.now().toString(36)
+
 export default defineConfig({
   root: resolve(process.cwd(), 'frontend'),
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: 'shiyue-entry-cache-version',
+      transformIndexHtml(html) {
+        return html.replace(/(\/assets\/(?:index\.js|index\.css))(?=["'])/g, `$1?v=${buildVersion}`)
+      },
+    },
+  ],
   base: '/',
   server: {
     host: '127.0.0.1',

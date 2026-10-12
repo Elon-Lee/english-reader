@@ -4,7 +4,7 @@
 
 - 主服务：`tools/reader_server.py`。
 - PostgreSQL 服务模块：`tools/saas_auth.py`、`saas_membership.py`、`saas_catalog.py`、`saas_workspace.py`、`saas_imports.py`、`saas_ai.py`、`saas_admin.py` 等。
-- 最新 migration：`0015_membership_change_requests.sql`；正式库和测试库均已应用。
+- 最新 migration：`0017_auth_email_limit_backfill.sql`；正式本地库、隔离测试库和京东云生产库均已应用。`0016` 增加认证邮件计数与重置锁定字段，`0017` 把历史邀请码使用次数回填到激活邮件上限。
 - 认证使用数据库会话 Cookie 和 CSRF；所有写接口必须校验 CSRF。
 - 测试库名称必须以 `_test` 结尾。
 - 京东云生产运行 PostgreSQL 16 Bookworm、Redis 7 Bookworm 和 `shiyue-saas-runtime:20261012-1`；数据库和 Redis 端口仅绑定 `127.0.0.1`，应用通过 host network 访问。
@@ -22,11 +22,12 @@
 - 生词服务支持已解锁官方读物：API 接收 catalog book ID，校验当前用户的 `official_book_unlocks`，以源 `content_book_id` 安全存储，并对前端继续返回 catalog book ID；未解锁用户不能读写该词汇记录。
 - 新增鉴权与 CSRF 保护的 `/api/workspace/progress`，只更新最近句子；私人和已解锁官方读物都经过租户/解锁校验，不写活动事件、不累计学习时长或奖励。官方阅读接口会返回映射后的 `progress`。
 - 生产根路径 `/` 已直接启用 React SaaS；健康接口同时校验 Redis。首次远程数据库从本地正式库恢复后，只保留合法已公开书籍的内容/媒体数据，并保留账号、订阅和平台配置。
+- 2026-10-12 已完成 Resend 生产邮件配置：验证发送子域名 `auth.10ye.cc`，Cloudflare DNS 已配置 DKIM、SPF/Return-Path CNAME 和 DMARC；本地 `.env` 与京东云 `/srv/shiyue/shared/config/saas.env` 均使用受限于该域名的 Resend SMTP 密钥。京东云和本地均已向 Resend 官方测试地址真实发送成功，生产容器已重建并通过健康检查。密钥未写入代码、Git、日志或交接文档。
+- 2026-10-12 已完成认证邮件流程加固并部署生产：`/verify-email` 与 `/reset-password` 直接返回 React 入口，重置页可提交新密码，激活页自动验证 token；注册和找回邮件发送成功后前端切回登录。未激活邮箱登录返回 `email_unverified`。每个邀请码最多产生 3 封激活邮件；同一账号连续申请 3 封重置邮件后停止继续发送，成功重置会清零计数。入口 JS/CSS 带构建版本查询参数，避免固定文件名的旧缓存继续加载过时认证页面。生产发布为 `code-20261012-235032-6d5d0c1a`。
 
 ## 未完成
 
 - 真实支付提供方、支付回调、退款和自动订阅开通。
-- 生产 SMTP 的真实发送验收。
 - 100～500 用户的并发和容量压测。
 - AI Token 数据库字段目前是普通 JSONB；如进入生产，应评估应用层加密或外部密钥管理。
 

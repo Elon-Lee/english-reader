@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-  App as AntApp, Avatar, Badge, Button, Card, Col, ConfigProvider, Descriptions,
+  Alert, App as AntApp, Avatar, Badge, Button, Card, Col, ConfigProvider, Descriptions,
   Drawer, Dropdown, Empty, Form, Input, InputNumber, Layout, List, Menu, Modal, Progress, Row,
   Segmented, Select, Space, Spin, Statistic, Table, Tag, Tooltip, Typography, message,
 } from 'antd'
@@ -161,8 +161,8 @@ function App() {
     try { await postJson('/api/admin/manual-orders', payload); await reloadWorkspace(); messageApi.success('人工订阅已创建') } catch (error) { messageApi.error(error.message || '人工订阅创建失败'); throw error }
   }
   const login = async values => { const stored = localStorage.getItem('shiyue-modern-device') || `modern-${crypto.randomUUID?.() || Date.now()}-device`; localStorage.setItem('shiyue-modern-device', stored); try { await postJson('/api/auth/login', { ...values, deviceId: stored }); setAuthState('authenticated'); await reloadWorkspace() } catch (error) { messageApi.error(error.message || '登录失败'); throw error } }
-  const register = async values => { try { await postJson('/api/auth/register', values); messageApi.success('账号已创建，请前往邮箱完成验证') } catch (error) { messageApi.error(error.message || '注册失败'); throw error } }
-  const forgotPassword = async values => { try { await postJson('/api/auth/forgot-password', values); messageApi.success('如果账号存在，重置邮件已发送') } catch (error) { messageApi.error(error.message || '发送失败'); throw error } }
+  const register = async values => { try { const result = await postJson('/api/auth/register', values); messageApi.success('账号已创建，请前往邮箱完成验证'); return result } catch (error) { messageApi.error(error.message || '注册失败'); throw error } }
+  const forgotPassword = async values => { try { const result = await postJson('/api/auth/forgot-password', values); messageApi.success('如果账号存在，重置邮件已发送'); return result } catch (error) { messageApi.error(error.message || '发送失败'); throw error } }
   const logout = async () => { try { await postJson('/api/auth/logout', {}); setCurrentUser(null); setAuthState('unauthenticated') } catch (error) { messageApi.error(error.message || '退出登录失败') } }
   const savePreferences = async values => { try { const result = await postJson('/api/preferences', values); setPreferences(current => ({ ...current, ...(result.preferences || result || values) })); messageApi.success('阅读偏好已保存') } catch (error) { messageApi.error(error.message || '阅读偏好保存失败'); throw error } }
   const mergePreferences = values => setPreferences(current => ({ ...current, ...values }))
@@ -182,6 +182,7 @@ function App() {
   const openReader = book => { const kind = book.source === '官方读物' ? 'official' : 'workspace'; location.href = `${modernEntryPath()}?screen=reader&reader=${kind}&id=${encodeURIComponent(book.id)}` }
 
   const theme = { token: { colorPrimary: '#2f6f50', colorInfo: '#2f6f50', borderRadius: 12, fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif' }, components: { Layout: { siderBg: '#17392b', headerBg: '#fbfaf7' }, Menu: { darkItemBg: '#17392b', darkItemSelectedBg: '#2b5943', darkItemHoverBg: '#234b38', itemBorderRadius: 10 } } }
+  if (['/verify-email', '/reset-password'].includes(location.pathname)) return <ConfigProvider theme={theme}><AntApp>{contextHolder}<AuthActionPage path={location.pathname} /></AntApp></ConfigProvider>
   if (authState === 'loading') return <ConfigProvider theme={theme}><AntApp>{contextHolder}<main className="modern-boot"><div className="brand-mark-modern">拾</div><Spin size="large" /><Text type="secondary">正在恢复工作区…</Text></main></AntApp></ConfigProvider>
   if (authState !== 'authenticated') return <ConfigProvider theme={theme}><AntApp>{contextHolder}<AuthPage loading={false} onLogin={login} onRegister={register} onForgot={forgotPassword} /></AntApp></ConfigProvider>
   return <ConfigProvider theme={theme}>
@@ -200,10 +201,48 @@ function App() {
 
 function Brand() { return <div className="modern-brand"><div className="brand-mark-modern">拾</div><div><Text className="brand-name">拾页</Text><Text className="brand-subtitle">ENGLISH WORKSPACE</Text></div></div> }
 function AuthPage({ loading, onLogin, onRegister, onForgot }) {
+  const [form] = Form.useForm()
   const [mode, setMode] = useState('login')
   const [submitting, setSubmitting] = useState(false)
-  const submit = async values => { setSubmitting(true); try { if (mode === 'login') await onLogin(values); else if (mode === 'register') await onRegister({ invitationCode: values.invitationCode, email: values.email, password: values.password }); else await onForgot({ email: values.email }) } finally { setSubmitting(false) } }
-  return <main className="modern-auth"><Card className="modern-auth-card"><div className="modern-auth-brand"><div className="brand-mark-modern">拾</div><div><Text className="brand-name auth-brand-name">拾页</Text><Text className="brand-subtitle auth-brand-subtitle">ENGLISH WORKSPACE</Text></div></div><Text className="eyebrow">SHIYUE MEMBERS</Text><Title level={1}>{mode === 'login' ? '登录拾页' : mode === 'register' ? '创建账号' : '找回密码'}</Title><Paragraph>{mode === 'login' ? '登录后进入书城、学习空间和会员中心。' : mode === 'register' ? '使用有效邀请码创建学习账号。' : '输入注册邮箱，我们会发送密码重置邮件。'}</Paragraph><Segmented block value={mode} onChange={setMode} options={[{ label: '登录', value: 'login' }, { label: '注册', value: 'register' }, { label: '找回密码', value: 'forgot' }]} /><Form layout="vertical" onFinish={submit} disabled={loading} className="modern-auth-form">{mode === 'register' && <Form.Item label="邀请码" name="invitationCode" rules={[{ required: true, message: '请输入邀请码' }]}><Input size="large" autoComplete="off" /></Form.Item>}<Form.Item label="邮箱" name="email" rules={[{ required: true, type: 'email', message: '请输入有效邮箱' }]}><Input size="large" autoComplete="email" /></Form.Item>{mode !== 'forgot' && <Form.Item label="密码" name="password" rules={[{ required: true, min: 10, message: '密码至少 10 位' }]}><Input.Password size="large" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></Form.Item>}<Button block type="primary" size="large" htmlType="submit" loading={submitting || loading}>{mode === 'login' ? '登录' : mode === 'register' ? '创建账号' : '发送重置邮件'}</Button></Form><Text type="secondary">继续即表示同意用户协议、隐私政策与内容声明。</Text></Card></main>
+  const submit = async values => {
+    setSubmitting(true)
+    try {
+      if (mode === 'login') await onLogin(values)
+      else if (mode === 'register') {
+        await onRegister({ invitationCode: values.invitationCode, email: values.email, password: values.password })
+        setMode('login')
+        form.setFieldsValue({ invitationCode: undefined, password: undefined })
+      } else {
+        await onForgot({ email: values.email })
+        setMode('login')
+        form.setFieldsValue({ password: undefined })
+      }
+    } finally { setSubmitting(false) }
+  }
+  return <main className="modern-auth"><Card className="modern-auth-card"><div className="modern-auth-brand"><div className="brand-mark-modern">拾</div><div><Text className="brand-name auth-brand-name">拾页</Text><Text className="brand-subtitle auth-brand-subtitle">ENGLISH WORKSPACE</Text></div></div><Text className="eyebrow">SHIYUE MEMBERS</Text><Title level={1}>{mode === 'login' ? '登录拾页' : mode === 'register' ? '创建账号' : '找回密码'}</Title><Paragraph>{mode === 'login' ? '登录后进入书城、学习空间和会员中心。未激活邮箱的账号需要先完成邮件验证。' : mode === 'register' ? '使用有效邀请码创建学习账号，完成邮箱激活后才能登录。' : '输入注册邮箱，我们会发送密码重置邮件。'}</Paragraph><Segmented block value={mode} onChange={setMode} options={[{ label: '登录', value: 'login' }, { label: '注册', value: 'register' }, { label: '找回密码', value: 'forgot' }]} /><Form form={form} layout="vertical" onFinish={submit} disabled={loading} className="modern-auth-form">{mode === 'register' && <Form.Item label="邀请码" name="invitationCode" rules={[{ required: true, message: '请输入邀请码' }]}><Input size="large" autoComplete="off" /></Form.Item>}<Form.Item label="邮箱" name="email" rules={[{ required: true, type: 'email', message: '请输入有效邮箱' }]}><Input size="large" autoComplete="email" /></Form.Item>{mode !== 'forgot' && <Form.Item label="密码" name="password" rules={[{ required: true, min: 10, message: '密码至少 10 位' }]}><Input.Password size="large" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></Form.Item>}<Button block type="primary" size="large" htmlType="submit" loading={submitting || loading}>{mode === 'login' ? '登录' : mode === 'register' ? '创建账号' : '发送重置邮件'}</Button></Form><Text type="secondary">继续即表示同意用户协议、隐私政策与内容声明。</Text></Card></main>
+}
+
+function AuthActionPage({ path }) {
+  const token = new URLSearchParams(location.search).get('token') || ''
+  const [status, setStatus] = useState(path === '/verify-email' ? 'loading' : 'ready')
+  const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  useEffect(() => {
+    if (path !== '/verify-email') return
+    if (!token) { setStatus('error'); setError('验证链接缺少必要参数。'); return }
+    postJson('/api/auth/verify-email', { token })
+      .then(() => setStatus('success'))
+      .catch(reason => { setStatus('error'); setError(reason.message || '邮箱验证失败') })
+  }, [path, token])
+  const backToLogin = () => { location.href = '/' }
+  if (path === '/verify-email') return <main className="modern-auth"><Card className="modern-auth-card"><div className="modern-auth-brand"><div className="brand-mark-modern">拾</div><div><Text className="brand-name auth-brand-name">拾页</Text><Text className="brand-subtitle auth-brand-subtitle">EMAIL VERIFICATION</Text></div></div>{status === 'loading' ? <div className="auth-action-state"><Spin size="large" /><Title level={2}>正在验证邮箱</Title><Paragraph>请稍候，我们正在确认验证链接。</Paragraph></div> : status === 'success' ? <div className="auth-action-state"><CheckCircleFilled className="auth-action-success" /><Title level={2}>邮箱已激活</Title><Paragraph>现在可以使用注册邮箱和密码登录拾页。</Paragraph><Button block type="primary" size="large" onClick={backToLogin}>返回登录</Button></div> : <div className="auth-action-state"><Alert type="error" showIcon message="邮箱验证失败" description={error} /><Button block size="large" onClick={backToLogin}>返回登录</Button></div>}</Card></main>
+  const resetPassword = async values => {
+    setSubmitting(true); setError('')
+    try { await postJson('/api/auth/reset-password', { token, password: values.password }); setStatus('success') }
+    catch (reason) { setError(reason.message || '密码重置失败') }
+    finally { setSubmitting(false) }
+  }
+  return <main className="modern-auth"><Card className="modern-auth-card"><div className="modern-auth-brand"><div className="brand-mark-modern">拾</div><div><Text className="brand-name auth-brand-name">拾页</Text><Text className="brand-subtitle auth-brand-subtitle">PASSWORD RESET</Text></div></div>{status === 'success' ? <div className="auth-action-state"><CheckCircleFilled className="auth-action-success" /><Title level={2}>密码已重置</Title><Paragraph>旧设备会话已经失效，请使用新密码重新登录。</Paragraph><Button block type="primary" size="large" onClick={backToLogin}>返回登录</Button></div> : <><Text className="eyebrow">ACCOUNT SECURITY</Text><Title level={1}>设置新密码</Title><Paragraph>新密码至少需要 10 位。完成后请重新登录。</Paragraph>{!token && <Alert type="error" showIcon message="重置链接缺少必要参数" />}{error && <Alert className="auth-action-alert" type="error" showIcon message={error} />}<Form layout="vertical" onFinish={resetPassword} disabled={!token || submitting} className="modern-auth-form"><Form.Item label="新密码" name="password" rules={[{ required: true, min: 10, message: '密码至少 10 位' }]}><Input.Password size="large" autoComplete="new-password" /></Form.Item><Form.Item label="确认新密码" name="confirmPassword" dependencies={['password']} rules={[{ required: true, message: '请再次输入新密码' }, ({ getFieldValue }) => ({ validator(_, value) { return !value || getFieldValue('password') === value ? Promise.resolve() : Promise.reject(new Error('两次输入的密码不一致')) } })]}><Input.Password size="large" autoComplete="new-password" /></Form.Item><Button block type="primary" size="large" htmlType="submit" loading={submitting}>确认重置密码</Button></Form><Button block type="link" onClick={backToLogin}>返回登录</Button></>}</Card></main>
 }
 function SidebarMenu({ nav, settings, screen, selectScreen }) { return <div className="sidebar-menu-wrap"><Menu theme="dark" mode="inline" selectedKeys={[screen]} items={nav} onClick={({ key }) => selectScreen(key)} /><div className="menu-divider" /><Menu theme="dark" mode="inline" selectedKeys={[screen]} items={settings} onClick={({ key }) => selectScreen(key)} /></div> }
 
