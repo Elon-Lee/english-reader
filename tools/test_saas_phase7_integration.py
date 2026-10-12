@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
+from saas_catalog import CatalogService
 from saas_media import MediaService
 from saas_membership import MembershipService
 from saas_workspace import WorkspaceService
@@ -31,7 +32,7 @@ class PrivateWorkspaceTests(unittest.TestCase):
     def setUpClass(cls):
         assert_safe_database(TEST_URL);cls.temp=tempfile.TemporaryDirectory(prefix="shiyue-phase7-");cls.root=Path(cls.temp.name)/"media";cls.root.mkdir()
         cls.environment={"DATABASE_URL":TEST_URL,"SHIYUE_SAAS_ENABLED":"1","SESSION_SECRET":"test-only-session-secret-that-is-at-least-32-characters","BOOTSTRAP_ADMIN_EMAIL":"admin@local.test","BOOTSTRAP_ADMIN_PASSWORD":"phase7 admin password","MEDIA_ROOT":str(cls.root)}
-        cls.accounts=SaaSService(TEST_URL,cls.environment);cls.accounts.migrate();cls.memberships=MembershipService(cls.accounts);cls.workspace=WorkspaceService(cls.accounts);cls.media=MediaService(cls.accounts,cls.memberships,cls.root)
+        cls.accounts=SaaSService(TEST_URL,cls.environment);cls.accounts.migrate();cls.memberships=MembershipService(cls.accounts);cls.workspace=WorkspaceService(cls.accounts);cls.catalog=CatalogService(cls.accounts,cls.memberships);cls.media=MediaService(cls.accounts,cls.memberships,cls.root)
 
     @classmethod
     def tearDownClass(cls):cls.temp.cleanup()
@@ -99,6 +100,8 @@ class PrivateWorkspaceTests(unittest.TestCase):
         self.assertEqual(saved["bookId"],catalog_id)
         items=self.workspace.vocabulary(owner_id,catalog_id)["items"]
         self.assertEqual(items[0]["bookId"],catalog_id);self.assertEqual(items[0]["payload"]["rating"],"easy")
+        progress=self.workspace.save_progress(owner_id,catalog_id,"s2");self.assertEqual(progress["lastSentenceId"],"s2")
+        official_reader=self.catalog.reader(owner_id,catalog_id)["book"];self.assertEqual(official_reader["progress"]["lastSentenceId"],"s2")
         with self.assertRaises(SaaSError) as denied:self.workspace.save_vocabulary(str(self.other["id"]),catalog_id,"s1",0,{"word":"My","rating":"hard"})
         self.assertEqual(denied.exception.code,"learning_book_not_found")
 

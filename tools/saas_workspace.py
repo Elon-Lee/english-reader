@@ -134,6 +134,17 @@ class WorkspaceService:
                 self._user(cursor,user_id);cursor.execute("SELECT day,payload FROM content_learning_daily WHERE owner_id=%s ORDER BY day DESC LIMIT %s",(user_id,max(1,min(730,int(limit)))))
                 return {"days":[{"day":row["day"].isoformat(),"payload":as_json(row["payload"])} for row in self.accounts._many(cursor)]}
 
+    def save_progress(self,user_id:str,book_id:str,last_sentence_id:str)->dict[str,Any]:
+        sentence_id=str(last_sentence_id or "").strip()
+        if not sentence_id:raise SaaSError("invalid_progress","最近阅读句子无效。",400)
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                self._user(cursor,user_id);storage_book_id,public_book_id=self._learning_book(cursor,user_id,book_id,True)
+                cursor.execute("""INSERT INTO workspace_progress(user_id,content_book_id,last_sentence_id,reading_seconds,updated_at)
+                VALUES(%s,%s,%s,0,NOW()) ON CONFLICT (user_id,content_book_id) DO UPDATE
+                SET last_sentence_id=EXCLUDED.last_sentence_id,updated_at=NOW()""",(user_id,storage_book_id,sentence_id))
+                return {"bookId":public_book_id,"lastSentenceId":sentence_id}
+
     def activity(self,user_id:str,book_id:str,reading_seconds:Any,sentences:Any,last_sentence_id:str,idempotency_key:str,lookups:Any=0,reviews:Any=0,shadow_attempts:Any=0,sessions:Any=0)->dict[str,Any]:
         try:
             seconds=max(0,min(86400,int(float(reading_seconds or 0))));sentence_count=max(0,min(10000,int(sentences or 0)))

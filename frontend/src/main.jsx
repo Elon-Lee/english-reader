@@ -96,7 +96,7 @@ function App() {
       screen === 'rewards' ? getJson('/api/rewards/catalog', { rewards: [] }) : Promise.resolve({ rewards: rewardsCatalog }),
       screen === 'rewards' ? getJson('/api/rewards/ledger', { items: [] }) : Promise.resolve({ items: rewardsLedger }),
       screen === 'library' ? getJson('/api/workspace/imports', { tasks: [] }) : Promise.resolve({ tasks: importTasks }),
-      screen === 'settings' ? getJson('/api/preferences', preferences) : Promise.resolve(preferences),
+      ['settings', 'reader'].includes(screen) ? getJson('/api/preferences', preferences) : Promise.resolve(preferences),
       screen === 'settings' ? getJson('/api/account/deletion-status', { status: 'none' }) : Promise.resolve(deletionStatus),
     ])
     setHealth(healthData)

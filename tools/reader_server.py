@@ -399,7 +399,7 @@ class Handler(SimpleHTTPRequestHandler):
         if SAAS.enabled and (route.path=="/api/workspace/imports" or route.path.startswith("/api/workspace/imports/")):
             if not self.require_saas_user(verified=True) or not self.require_csrf():return
             self.workspace_import_post(route);return
-        if SAAS.enabled and route.path in {"/api/workspace/vocabulary","/api/workspace/annotations","/api/workspace/activity"}:
+        if SAAS.enabled and route.path in {"/api/workspace/vocabulary","/api/workspace/annotations","/api/workspace/activity","/api/workspace/progress"}:
             if not self.require_saas_user(verified=True) or not self.require_csrf():return
             self.workspace_post(route.path);return
         if SAAS.enabled and route.path in {"/api/word-context","/api/sentence-grammar"}:
@@ -791,6 +791,7 @@ class Handler(SimpleHTTPRequestHandler):
             user_id=str(self._saas_session["id"])
             if path=="/api/workspace/vocabulary":self.reply(WORKSPACE.save_vocabulary(user_id,str(item.get("bookId","")).strip(),str(item.get("sentenceId","")).strip(),item.get("wordIndex"),item.get("payload")),201);return
             if path=="/api/workspace/annotations":self.reply(WORKSPACE.annotate(user_id,str(item.get("bookId","")).strip(),str(item.get("sentenceId","")).strip(),item.get("wordIndex"),item.get("payload")));return
+            if path=="/api/workspace/progress":self.reply(WORKSPACE.save_progress(user_id,str(item.get("bookId","")).strip(),str(item.get("lastSentenceId","")).strip()));return
             if path=="/api/workspace/activity":
                 result=WORKSPACE.activity(user_id,str(item.get("bookId","")).strip(),item.get("readingSeconds",0),item.get("sentences",0),str(item.get("lastSentenceId","")or""),str(item.get("idempotencyKey","")).strip(),item.get("lookups",0),item.get("reviews",0),item.get("shadowAttempts",0),item.get("sessions",0))
                 try:result["reward"]=REWARDS.activity(user_id,item.get("readingSeconds",0),item.get("sentences",0),item.get("reviews",0),str(item.get("idempotencyKey","")).strip())
