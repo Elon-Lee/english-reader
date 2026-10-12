@@ -876,7 +876,7 @@ def start_saas_deploy(target_id):
         public=sync_saas_public_content(job,remote,target,f"{target['remote_root']}/releases/{release}",{"scan":70,"prepare":73,"package":76,"upload":79,"apply":82,"database":85,"merge":88},False)
         activation=activate_saas_release(job,remote,target,release);final_health=remote.ssh(saas_health_check_command(target["service_port"]))
         db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health,"mode":"saas"}),now()));db.commit();db.close()
-        job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"databaseImported":True,"publicContentRevision":public["contentRevision"],"publicMedia":public["media"],"candidate":activation["candidate"]},"SaaS 根站完整部署完成")
+        job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"databaseImported":restored,"publicContentRevision":public["contentRevision"],"publicMedia":public["media"],"candidate":activation["candidate"]},"SaaS 根站完整部署完成")
     return run_task("saas_deploy",worker,target_id)
 def start_saas_public_sync(target_id):
     def worker(job,remote,target):

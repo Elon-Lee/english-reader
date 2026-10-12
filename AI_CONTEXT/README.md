@@ -1,13 +1,13 @@
 # 拾页 AI 共享上下文
 
-更新时间：2026-10-11（Asia/Shanghai）
+更新时间：2026-10-12（Asia/Shanghai）
 
 这是后续 AI 的最小全局上下文。只读取与当前任务相关的任务文档。
 
 ## 当前架构
 
 - 前端：React 18 + Ant Design 5 + Vite，源码在 `frontend/src/`。
-- SaaS 入口：生产由 `reader/modern.html` 加载 `reader/modern-assets/`；开发入口为 `http://127.0.0.1:5173/modern-assets/`。
+- SaaS 入口：生产根路径 `/` 直接加载 `reader/site/`；`/modern.html` 和 `/modern-assets/*` 只保留 308 兼容跳转。开发入口仍由 Vite 提供。
 - 后端：Python 单体 HTTP 服务 `tools/reader_server.py`，业务拆分在 `tools/saas_*.py`。
 - SaaS 数据：PostgreSQL；正式本地库 `shiyue_saas_local`，隔离测试库 `shiyue_phase1_test`。
 - 旧数据：`.local/library.sqlite3` 和 `books/` 继续保留，不能删除；SaaS 新页面不再使用旧 UI。
@@ -15,6 +15,7 @@
 - 认证：数据库会话 Cookie + CSRF；未登录时 React 渲染登录页。
 - 长任务：导入和部署使用任务 API + 前端轮询，不依赖 WebSocket。
 - 当前服务：后台 `127.0.0.1:8790`；Vite `127.0.0.1:5173`。
+- 京东云生产：`117.72.209.44:8765`，Docker 运行 `shiyue-saas`、PostgreSQL 16 和 Redis 7；PostgreSQL/Redis 只监听远程回环地址。
 
 ## 全局完成状态
 
@@ -22,6 +23,7 @@
 - PC React 页面已经覆盖登录、学习空间、书城、书架、学习记录、生词、奖励、会员、运营后台、平台部署、系统设置和阅读器。
 - PC 主要 API 已真实接入；刷新路由、认证闪屏、分页、热力图、任务轮询、批量邀请码和数据库 AI 配置已修正。
 - 阅读器已改为旧版语义的媒体/字幕/释义三栏交互，并保留快捷键、护眼和专注模式。
+- 京东云旧 reader 服务已被根路径 React SaaS 替换；生产 PostgreSQL、Redis、SaaS 容器和已公开书籍增量同步已实机验收。
 - 最新构建与测试通过，最近 PC 浏览器验收目录：`.local/debug/modern-walkthrough/20261011T135345Z`。
 
 ## 全局未完成
@@ -29,7 +31,7 @@
 - 移动端展示、底部操作区、手势和弹层交互尚未进入正式优化阶段。
 - 真实支付网关、支付回调和自动开通尚未接入；当前只有套餐变更申请和后台人工订阅。
 - 大文件上传已避免 `arrayBuffer()` 内存复制，但尚未实现可恢复分片上传。
-- 生产远程节点的部署、升级、清理和回滚尚未做本轮实机高风险验收。
+- 京东云 SaaS 完整部署和公开资源增量同步已验收；生产回滚、卸载等高风险动作尚未执行。
 - Dioco 完整词典接口 `base_dict_getFullDict_8` 尚未按用户提供的请求正式接入；当前词汇 AI 走 `/api/word-context`。
 - 旧 UI 文件仍物理保留用于兼容和行为参考；不能删除，SaaS 路由不得再使用它们。
 - `frontend/src/main.jsx` 仍包含部分已停用的旧 React 内联组件，后续可在不改变行为的前提下清理。

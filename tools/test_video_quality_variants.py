@@ -27,6 +27,7 @@ class VideoQualityVariantTests(unittest.TestCase):
     def test_saas_import_generates_low_video_variant(self):
         source=inspect.getsource(saas_imports.WorkspaceImportService._video_book)
         self.assertIn('video-low.mp4',source);self.assertIn('scale=640:360',source);self.assertIn('"name":"low"',source)
+        self.assertIn('"-map","0:a:0?"',source);self.assertIn('"-c:a","aac"',source)
         self.assertIn('videoDefaultQuality',source);self.assertIn('videoVariants',source)
 
 if __name__=='__main__':unittest.main()

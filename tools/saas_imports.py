@@ -184,7 +184,7 @@ class WorkspaceImportService:
                     [ffmpeg,"-y","-v","error","-i",str(source),"-vn","-c:a","aac","-b:a","128k",str(audio_path)],
                     [ffmpeg,"-y","-v","error","-i",str(source),"-vn","-ar","16000","-ac","1","-c:a","pcm_s16le",str(whisper_audio)],
                     [ffmpeg,"-y","-v","error","-ss","0","-i",str(source),"-frames:v","1","-vf","scale=960:-2",str(cover_path)],
-                    [ffmpeg,"-y","-v","error","-i",str(source),"-map","0:v:0","-an","-vf","scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2","-c:v","libx264","-preset","veryfast","-crf","27","-maxrate","380k","-bufsize","760k","-g","50","-keyint_min","50","-pix_fmt","yuv420p","-threads","2","-movflags","+faststart",str(low_video_path)],
+                    [ffmpeg,"-y","-v","error","-i",str(source),"-map","0:v:0","-map","0:a:0?","-vf","scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2","-c:v","libx264","-preset","veryfast","-crf","27","-maxrate","380k","-bufsize","760k","-g","50","-keyint_min","50","-pix_fmt","yuv420p","-threads","2","-c:a","aac","-b:a","96k","-ac","2","-movflags","+faststart",str(low_video_path)],
                 ]
                 for command in commands:
                     try:subprocess.run(command,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=600)
