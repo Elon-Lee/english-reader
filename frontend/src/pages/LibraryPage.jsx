@@ -10,8 +10,8 @@ function Cover({ book }) {
   return <div className="book-cover" style={{ '--cover': book.accent || '#dce9d8' }}><span>{String(book.title || '书').slice(0, 2).toUpperCase()}</span><small>{book.title}</small></div>
 }
 
-export default function LibraryPage({ libraryBooks, books: fallbackBooks, importTasks, openReader, openImport, onCancelImport, onRefresh, messageApi }) {
-  const books = libraryBooks?.length ? libraryBooks : fallbackBooks || []
+export default function LibraryPage({ libraryBooks, importTasks, openReader, openImport, onCancelImport, onRefresh, messageApi }) {
+  const books = libraryBooks || []
   const tasks = importTasks || []
   const [query, setQuery] = useState('')
   const [source, setSource] = useState('全部')

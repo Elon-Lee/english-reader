@@ -13,6 +13,8 @@
 - 新增命令行入口：`npm run package:remote` 只打包；`npm run deploy:jdcloud` 完整部署根路径 SaaS/PostgreSQL/Redis；`npm run sync:jdcloud:public` 只增量同步合法已公开书籍及相关正文、语法和媒体。
 - 发布包不再包含 `reader/modern.html` 或 `reader/modern-assets/`；生产前端构建到 `reader/site/` 并直接接管根路径，旧路径仅返回 308 到 `/`。
 - 公共同步只选择 `publication_status='published'` 且 `rights_status IN ('public_domain','licensed')` 的 catalog 书籍，不同步草稿、待审核、私人书籍或无关 `private-uploads`，也不覆盖远程用户、订阅、会话和学习数据。
+- 2026-10-13 本地修复“用户与订阅 → 查看详情”在存在人工订单时失败：`AdminService.user_detail` 读取 `manual_orders` 时误用了不存在的 `plan_version` 列，已改为真实列 `plan_version_id`，并补充带人工订阅/订单的阶段 5 回归测试。已在隔离测试库通过浏览器确认用户详情、设备和订阅记录正常展示；按用户要求尚未发布远程。
+- 2026-10-13 本地前端构建将 React/Ant Design/vendor/icons 共享分包改为内容哈希文件名，入口 JS/CSS 仍带构建版本参数，避免发布后新入口加载浏览器缓存中的旧分包。该变更随下次用户手动发布生效，尚未远程部署。
 
 ## 当前生产状态
 
@@ -27,6 +29,7 @@
 
 ## 未完成
 
+- 2026-10-13 的用户详情查询修复仅在本地，等待用户后续自行点击发布。
 - 京东云生产节点的完整 SaaS 替换和公共资源增量同步已实机验收。代码回滚、公共内容回滚和卸载仍未执行高风险生产验收。
 - 部署日志目前在任务刷新后展示有限，后续可增加增量日志 Drawer。
 - AI 配置尚未实现独立的“测试连接”按钮。

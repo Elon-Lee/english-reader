@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import {
   Alert, App as AntApp, Avatar, Badge, Button, Card, Col, ConfigProvider, Descriptions,
   Drawer, Dropdown, Empty, Form, Input, InputNumber, Layout, List, Menu, Modal, Progress, Row,
-  Segmented, Select, Space, Spin, Statistic, Table, Tag, Tooltip, Typography, message,
+  Segmented, Select, Skeleton, Space, Statistic, Table, Tag, Tooltip, Typography, message,
 } from 'antd'
 import {
   AppstoreOutlined, BarChartOutlined, BookOutlined, CheckCircleFilled, CloudUploadOutlined,
@@ -23,6 +23,7 @@ import SettingsPage from './pages/SettingsPage'
 import StatsPageNew from './pages/StatsPage'
 import VocabularyPage from './pages/VocabularyPage'
 import WorkspacePage from './pages/WorkspacePage'
+import PageSkeleton from './components/PageSkeleton'
 import './styles.css'
 
 const { Header, Sider, Content } = Layout
@@ -32,28 +33,26 @@ function modernEntryPath() {
   return '/'
 }
 
-const fallbackBooks = [
-  { id: 'atomic-habits', title: 'Atomic Habits', subtitle: 'An Easy & Proven Way to Build Good Habits', level: 'B2', progress: 72, minutes: 38, cover: 'AH', accent: '#d9eadf', author: 'James Clear', source: '私人读物' },
-  { id: 'little-prince', title: 'The Little Prince', subtitle: 'A classic story for close reading', level: 'B1', progress: 41, minutes: 16, cover: 'LP', accent: '#f5dfba', author: 'Antoine de Saint-Exupéry', source: '官方读物' },
-  { id: 'deep-work', title: 'Deep Work', subtitle: 'Rules for Focused Success in a Distracted World', level: 'C1', progress: 18, minutes: 9, cover: 'DW', accent: '#d8e1ef', author: 'Cal Newport', source: '私人读物' },
-  { id: 'sapiens', title: 'Sapiens', subtitle: 'A Brief History of Humankind', level: 'C1', progress: 0, minutes: 0, cover: 'SA', accent: '#ecd8d0', author: 'Yuval Noah Harari', source: '私人读物' },
-]
+const bookAccents = ['#d9eadf', '#f5dfba', '#d8e1ef', '#ecd8d0']
 
-function normalizeBook(book, fallback = fallbackBooks[0], source = '私人读物') {
+function normalizeBook(book, index = 0, source = '私人读物') {
   const progress = book.progress || {}
   const durationMinutes = Number(book.estimatedMinutes || (book.duration ? Number(book.duration) / 60 : 0))
   const readingSeconds = Number(progress.readingSeconds || 0)
-  return { ...fallback, ...book, id: book.id || fallback.id, title: book.title || book.englishTitle || fallback.title, subtitle: book.subtitle || book.description || book.series?.title || fallback.subtitle, author: book.author || fallback.author, level: book.level || fallback.level, source: source || fallback.source, accent: fallback.accent, cover: (book.title || book.englishTitle || fallback.cover).slice(0, 2).toUpperCase(), progress: Number(book.progressPercent ?? (durationMinutes ? Math.min(100, Math.round(readingSeconds / 60 / durationMinutes * 100)) : 0)), minutes: Math.round(readingSeconds / 60) || Number(book.estimatedMinutes || fallback.minutes), coverUrl: book.coverUrl || '' }
+  const title = book.title || book.englishTitle || '未命名读物'
+  return { ...book, id: book.id || '', title, subtitle: book.subtitle || book.description || book.series?.title || '', author: book.author || '', level: book.level || '', source, accent: book.accent || bookAccents[index % bookAccents.length], cover: String(title).slice(0, 2).toUpperCase(), progress: Number(book.progressPercent ?? (durationMinutes ? Math.min(100, Math.round(readingSeconds / 60 / durationMinutes * 100)) : 0)), minutes: Math.round(readingSeconds / 60) || Number(book.estimatedMinutes || 0), coverUrl: book.coverUrl || '' }
 }
 
 function Cover({ book, large = false }) { return <div className={`book-cover ${large ? 'book-cover-large' : ''}`} style={{ '--cover': book.accent }}><span>{book.cover}</span><small>{book.title}</small></div> }
 
 function App() {
   const [authState, setAuthState] = useState('loading')
+  const [pageLoading, setPageLoading] = useState(true)
+  const loadSequence = useRef(0)
   const [screen, setScreen] = useState(new URLSearchParams(location.search).get('screen') || 'workspace')
-  const [books, setBooks] = useState(fallbackBooks)
-  const [catalogBooks, setCatalogBooks] = useState(fallbackBooks.filter(book => book.source === '官方读物'))
-  const [libraryBooks, setLibraryBooks] = useState(fallbackBooks)
+  const [books, setBooks] = useState([])
+  const [catalogBooks, setCatalogBooks] = useState([])
+  const [libraryBooks, setLibraryBooks] = useState([])
   const [learningDays, setLearningDays] = useState([])
   const [membership, setMembership] = useState(null)
   const [membershipOrders, setMembershipOrders] = useState([])
@@ -74,13 +73,16 @@ function App() {
   const [filter, setFilter] = useState('全部')
   const [messageApi, contextHolder] = message.useMessage()
 
-  const reloadWorkspace = async () => {
-    const authResponse = await fetch('/api/auth/me', { credentials: 'include' })
-    if (authResponse.status === 401) { setAuthState('unauthenticated'); return }
-    if (!authResponse.ok) throw new Error('无法读取登录状态')
-    const userData = await authResponse.json()
-    setAuthState('authenticated')
-    setCurrentUser(userData.user || null)
+  const reloadWorkspace = async ({ silent = false } = {}) => {
+    const loadId = silent ? loadSequence.current : ++loadSequence.current
+    if (!silent) setPageLoading(true)
+    try {
+      const authResponse = await fetch('/api/auth/me', { credentials: 'include' })
+      if (authResponse.status === 401) { setAuthState('unauthenticated'); return }
+      if (!authResponse.ok) throw new Error('无法读取登录状态')
+      const userData = await authResponse.json()
+      setAuthState('authenticated')
+      setCurrentUser(userData.user || null)
     const needBooks = ['workspace', 'library', 'stats', 'vocab'].includes(screen)
     const [healthData, deviceData, workspaceData, vocabularyData, catalogData, libraryData, daysData, membershipData, membershipOrderData, rewardData, rewardsCatalogData, rewardsLedgerData, importsData, preferencesData, deletionData] = await Promise.all([
       getJson('/api/health', health),
@@ -104,9 +106,9 @@ function App() {
     setVocabulary(vocabularyData.items || [])
     setPreferences(current => ({ ...current, ...(preferencesData || {}) }))
     setDeletionStatus(deletionData || { status: 'none' })
-    const workspaceBooks = (workspaceData.books || []).map((book, i) => normalizeBook(book, fallbackBooks[i % fallbackBooks.length], '私人读物'))
-    const officialBooks = (catalogData.books || []).map((book, i) => normalizeBook(book, fallbackBooks[i % fallbackBooks.length], '官方读物'))
-    const savedBooks = (libraryData.items || []).map((book, i) => normalizeBook(book, fallbackBooks[i % fallbackBooks.length], '官方读物'))
+    const workspaceBooks = (workspaceData.books || []).map((book, i) => normalizeBook(book, i, '私人读物'))
+    const officialBooks = (catalogData.books || []).map((book, i) => normalizeBook(book, i, '官方读物'))
+    const savedBooks = (libraryData.items || []).map((book, i) => normalizeBook(book, i, '官方读物'))
     if (needBooks) setBooks(workspaceBooks)
     if (screen === 'library') setLibraryBooks([...workspaceBooks, ...savedBooks])
     if (screen === 'catalog') setCatalogBooks(officialBooks)
@@ -123,42 +125,45 @@ function App() {
       ])
       setAdminData({ dashboard: adminDashboard, users: adminUsers.users || [], audit: adminAudit.items || [], invitations: adminInvitations.invitations || [], planVersions: adminPlanVersions.planVersions || [] })
     }
+    } finally {
+      if (!silent && loadId === loadSequence.current) setPageLoading(false)
+    }
   }
   useEffect(() => { reloadWorkspace().catch(error => { messageApi.error(error.message || '工作台加载失败'); setAuthState('unauthenticated') }) }, [screen])
-  useEffect(() => { const syncRoute = () => setScreen(new URLSearchParams(location.search).get('screen') || 'workspace'); addEventListener('popstate', syncRoute); return () => removeEventListener('popstate', syncRoute) }, [])
+  useEffect(() => { const syncRoute = () => { setPageLoading(true); setScreen(new URLSearchParams(location.search).get('screen') || 'workspace') }; addEventListener('popstate', syncRoute); return () => removeEventListener('popstate', syncRoute) }, [])
   useEffect(() => {
     if (screen !== 'library' || !importTasks.some(task => ['queued', 'uploading', 'running', 'processing', 'awaiting_processor'].includes(task.status))) return undefined
-    const timer = setInterval(reloadWorkspace, 3000)
+    const timer = setInterval(() => reloadWorkspace({ silent: true }), 3000)
     return () => clearInterval(timer)
   }, [importTasks, screen])
   const catalogAction = async book => {
     try {
       const endpoint = book.inLibrary ? `/api/catalog/books/${encodeURIComponent(book.id)}/unlock` : '/api/library/items'
       await postJson(endpoint, { bookId: book.id, shelfState: 'active' })
-      await reloadWorkspace()
+      await reloadWorkspace({ silent: true })
       messageApi.success(book.inLibrary ? '读物已解锁，可以开始阅读' : '已加入我的书架')
     } catch (error) { messageApi.error(error.message || '书架操作失败') }
   }
   const cancelImport = async task => {
-    try { await postJson(`/api/workspace/imports/${encodeURIComponent(task.id)}/cancel`, {}); await reloadWorkspace(); messageApi.success('导入任务已取消') } catch (error) { messageApi.error(error.message || '取消任务失败') }
+    try { await postJson(`/api/workspace/imports/${encodeURIComponent(task.id)}/cancel`, {}); await reloadWorkspace({ silent: true }); messageApi.success('导入任务已取消') } catch (error) { messageApi.error(error.message || '取消任务失败') }
   }
   const updateUserStatus = async (user, status) => {
-    try { await postJson(`/api/admin/users/${encodeURIComponent(user.id)}/status`, { status, reason: status === 'suspended' ? '运营后台手动暂停' : '运营后台恢复账号' }); await reloadWorkspace(); messageApi.success(status === 'suspended' ? '用户已暂停' : '用户已恢复') } catch (error) { messageApi.error(error.message || '用户状态更新失败') }
+    try { await postJson(`/api/admin/users/${encodeURIComponent(user.id)}/status`, { status, reason: status === 'suspended' ? '运营后台手动暂停' : '运营后台恢复账号' }); await reloadWorkspace({ silent: true }); messageApi.success(status === 'suspended' ? '用户已暂停' : '用户已恢复') } catch (error) { messageApi.error(error.message || '用户状态更新失败') }
   }
   const createInvitation = async payload => {
-    try { const result = await postJson('/api/admin/invitations', payload); await reloadWorkspace(); const items = result.invitations || [result]; messageApi.success(items.length > 1 ? `已生成 ${items.length} 个邀请码` : `邀请码 ${items[0]?.code || ''} 已创建`); return result } catch (error) { messageApi.error(error.message || '邀请码创建失败'); throw error }
+    try { const result = await postJson('/api/admin/invitations', payload); await reloadWorkspace({ silent: true }); const items = result.invitations || [result]; messageApi.success(items.length > 1 ? `已生成 ${items.length} 个邀请码` : `邀请码 ${items[0]?.code || ''} 已创建`); return result } catch (error) { messageApi.error(error.message || '邀请码创建失败'); throw error }
   }
   const revokeDevice = async (userId, deviceId) => {
-    Modal.confirm({ title: '确认撤销该设备？', content: '撤销后，该设备的活跃会话会立即失效，需要重新登录。', okText: '确认撤销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { const response = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE', credentials: 'include', headers: csrfHeaders() }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '设备撤销失败'); await reloadWorkspace(); messageApi.success('设备已撤销') } catch (error) { messageApi.error(error.message || '设备撤销失败'); throw error } } })
+    Modal.confirm({ title: '确认撤销该设备？', content: '撤销后，该设备的活跃会话会立即失效，需要重新登录。', okText: '确认撤销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { const response = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE', credentials: 'include', headers: csrfHeaders() }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '设备撤销失败'); await reloadWorkspace({ silent: true }); messageApi.success('设备已撤销') } catch (error) { messageApi.error(error.message || '设备撤销失败'); throw error } } })
   }
   const adjustQuota = async (userId, payload) => {
-    try { await postJson('/api/admin/quotas/adjust', { ...payload, userId, idempotencyKey: `quota-${userId}-${crypto.randomUUID?.() || Date.now()}` }); await reloadWorkspace(); messageApi.success('额度调整已完成') } catch (error) { messageApi.error(error.message || '额度调整失败'); throw error }
+    try { await postJson('/api/admin/quotas/adjust', { ...payload, userId, idempotencyKey: `quota-${userId}-${crypto.randomUUID?.() || Date.now()}` }); await reloadWorkspace({ silent: true }); messageApi.success('额度调整已完成') } catch (error) { messageApi.error(error.message || '额度调整失败'); throw error }
   }
   const updateSubscription = async payload => {
-    try { await postJson('/api/admin/subscriptions', payload); await reloadWorkspace(); messageApi.success('订阅状态已更新') } catch (error) { messageApi.error(error.message || '订阅更新失败'); throw error }
+    try { await postJson('/api/admin/subscriptions', payload); await reloadWorkspace({ silent: true }); messageApi.success('订阅状态已更新') } catch (error) { messageApi.error(error.message || '订阅更新失败'); throw error }
   }
   const createManualOrder = async payload => {
-    try { await postJson('/api/admin/manual-orders', payload); await reloadWorkspace(); messageApi.success('人工订阅已创建') } catch (error) { messageApi.error(error.message || '人工订阅创建失败'); throw error }
+    try { await postJson('/api/admin/manual-orders', payload); await reloadWorkspace({ silent: true }); messageApi.success('人工订阅已创建') } catch (error) { messageApi.error(error.message || '人工订阅创建失败'); throw error }
   }
   const login = async values => { const stored = localStorage.getItem('shiyue-modern-device') || `modern-${crypto.randomUUID?.() || Date.now()}-device`; localStorage.setItem('shiyue-modern-device', stored); try { await postJson('/api/auth/login', { ...values, deviceId: stored }); setAuthState('authenticated'); await reloadWorkspace() } catch (error) { messageApi.error(error.message || '登录失败'); throw error } }
   const register = async values => { try { const result = await postJson('/api/auth/register', values); messageApi.success('账号已创建，请前往邮箱完成验证'); return result } catch (error) { messageApi.error(error.message || '注册失败'); throw error } }
@@ -167,23 +172,23 @@ function App() {
   const savePreferences = async values => { try { const result = await postJson('/api/preferences', values); setPreferences(current => ({ ...current, ...(result.preferences || result || values) })); messageApi.success('阅读偏好已保存') } catch (error) { messageApi.error(error.message || '阅读偏好保存失败'); throw error } }
   const mergePreferences = values => setPreferences(current => ({ ...current, ...values }))
   const requestDeletion = () => { Modal.confirm({ title: '确认申请注销账户？', content: '提交后会退出当前设备，并进入 7 天宽限期。宽限期内重新登录可以取消。', okText: '申请注销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { await postJson('/api/account/deletion', { reason: '用户在新版工作台申请注销' }); setAuthState('unauthenticated'); messageApi.success('注销申请已提交') } catch (error) { messageApi.error(error.message || '注销申请失败'); throw error } } }) }
-  const cancelDeletion = async () => { try { await postJson('/api/account/deletion/cancel', {}); await reloadWorkspace(); messageApi.success('注销申请已取消') } catch (error) { messageApi.error(error.message || '取消注销失败') } }
+  const cancelDeletion = async () => { try { await postJson('/api/account/deletion/cancel', {}); await reloadWorkspace({ silent: true }); messageApi.success('注销申请已取消') } catch (error) { messageApi.error(error.message || '取消注销失败') } }
   const revokeOwnDevice = async deviceId => {
-    Modal.confirm({ title: '确认撤销此设备？', content: '撤销后，该设备需要重新登录才能访问工作台。', okText: '确认撤销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { const response = await fetch(`/api/auth/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE', credentials: 'include', headers: csrfHeaders() }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '设备撤销失败'); await reloadWorkspace(); messageApi.success('设备已撤销') } catch (error) { messageApi.error(error.message || '设备撤销失败'); throw error } } })
+    Modal.confirm({ title: '确认撤销此设备？', content: '撤销后，该设备需要重新登录才能访问工作台。', okText: '确认撤销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { const response = await fetch(`/api/auth/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE', credentials: 'include', headers: csrfHeaders() }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '设备撤销失败'); await reloadWorkspace({ silent: true }); messageApi.success('设备已撤销') } catch (error) { messageApi.error(error.message || '设备撤销失败'); throw error } } })
   }
   const exportAdminSummary = async () => { try { const response = await fetch('/api/admin/exports/summary', { credentials: 'include' }); const data = await response.json(); if (!response.ok) throw new Error(data.error || '导出失败'); const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `shiyue-admin-summary-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url); messageApi.success('运营摘要已导出') } catch (error) { messageApi.error(error.message || '导出失败') } }
-  const checkIn = async () => { try { await postJson('/api/checkins', {}); await reloadWorkspace(); messageApi.success('签到成功，成长值已更新') } catch (error) { messageApi.error(error.message || '签到失败') } }
-  const redeemReward = async code => { try { await postJson('/api/rewards/redeem', { code, idempotencyKey: `redeem-${code}-${crypto.randomUUID?.() || Date.now()}` }); await reloadWorkspace(); messageApi.success('奖励兑换成功') } catch (error) { messageApi.error(error.message || '奖励兑换失败') } }
+  const checkIn = async () => { try { await postJson('/api/checkins', {}); await reloadWorkspace({ silent: true }); messageApi.success('签到成功，成长值已更新') } catch (error) { messageApi.error(error.message || '签到失败') } }
+  const redeemReward = async code => { try { await postJson('/api/rewards/redeem', { code, idempotencyKey: `redeem-${code}-${crypto.randomUUID?.() || Date.now()}` }); await reloadWorkspace({ silent: true }); messageApi.success('奖励兑换成功') } catch (error) { messageApi.error(error.message || '奖励兑换失败') } }
   const filteredBooks = useMemo(() => books.filter(book => `${book.title} ${book.subtitle} ${book.author}`.toLowerCase().includes(query.toLowerCase()) && (filter === '全部' || book.source === filter)), [books, query, filter])
 
   const nav = [{ key: 'workspace', icon: <DashboardOutlined />, label: '学习空间' }, { key: 'catalog', icon: <ShopOutlined />, label: '首页 · 书城' }, { key: 'library', icon: <BookOutlined />, label: '我的书架' }, { key: 'stats', icon: <BarChartOutlined />, label: '学习记录' }, { key: 'vocab', icon: <StarOutlined />, label: '生词复习' }, { key: 'rewards', icon: <GiftOutlined />, label: '成长奖励' }, { key: 'membership', icon: <ThunderboltFilled />, label: '会员中心' }, { key: 'admin', icon: <AppstoreOutlined />, label: '运营后台' }, { key: 'platform', icon: <SettingOutlined />, label: '平台与部署' }].filter(item => !['admin', 'platform'].includes(item.key) || currentUser?.isAdmin)
   const settings = [{ key: 'settings', icon: <SettingOutlined />, label: '系统设置' }]
-  const selectScreen = key => { setScreen(key); setMobileOpen(false); history.pushState({}, '', `${modernEntryPath()}?screen=${key}`) }
+  const selectScreen = key => { setPageLoading(true); setScreen(key); setMobileOpen(false); history.pushState({}, '', `${modernEntryPath()}?screen=${key}`) }
   const openReader = book => { const kind = book.source === '官方读物' ? 'official' : 'workspace'; location.href = `${modernEntryPath()}?screen=reader&reader=${kind}&id=${encodeURIComponent(book.id)}` }
 
   const theme = { token: { colorPrimary: '#2f6f50', colorInfo: '#2f6f50', borderRadius: 12, fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif' }, components: { Layout: { siderBg: '#17392b', headerBg: '#fbfaf7' }, Menu: { darkItemBg: '#17392b', darkItemSelectedBg: '#2b5943', darkItemHoverBg: '#234b38', itemBorderRadius: 10 } } }
   if (['/verify-email', '/reset-password'].includes(location.pathname)) return <ConfigProvider theme={theme}><AntApp>{contextHolder}<AuthActionPage path={location.pathname} /></AntApp></ConfigProvider>
-  if (authState === 'loading') return <ConfigProvider theme={theme}><AntApp>{contextHolder}<main className="modern-boot"><div className="brand-mark-modern">拾</div><Spin size="large" /><Text type="secondary">正在恢复工作区…</Text></main></AntApp></ConfigProvider>
+  if (authState === 'loading') return <ConfigProvider theme={theme}><AntApp>{contextHolder}<main className="modern-auth"><Card className="modern-auth-card"><Skeleton active avatar title paragraph={{ rows: 6 }} /></Card></main></AntApp></ConfigProvider>
   if (authState !== 'authenticated') return <ConfigProvider theme={theme}><AntApp>{contextHolder}<AuthPage loading={false} onLogin={login} onRegister={register} onForgot={forgotPassword} /></AntApp></ConfigProvider>
   return <ConfigProvider theme={theme}>
     <AntApp>{contextHolder}<Layout className={`modern-shell ${screen === 'reader' ? 'reader-shell' : ''}`}>
@@ -193,9 +198,9 @@ function App() {
       </Sider>
       <Drawer placement="left" open={mobileOpen} onClose={() => setMobileOpen(false)} closable={false} width={280} styles={{ body: { padding: 0, background: '#17392b' } }}><Brand /><SidebarMenu nav={nav} settings={settings} screen={screen} selectScreen={selectScreen} /></Drawer>
       <Layout><Header className="modern-header"><Button className="mobile-menu" type="text" icon={<MenuOutlined />} onClick={() => setMobileOpen(true)} /><div className="header-context"><Text className="eyebrow">WORKSPACE / {nav.find(n => n.key === screen)?.label || '设置'}</Text><Text className="header-status"><span className="status-dot" /> 服务正常</Text></div></Header>
-        <Content className="modern-content"><Page screen={screen} books={filteredBooks} allBooks={books} catalogBooks={catalogBooks} libraryBooks={libraryBooks} importTasks={importTasks} learningDays={learningDays} membership={membership} membershipOrders={membershipOrders} rewardStatus={rewardStatus} vocabulary={vocabulary} rewardsCatalog={rewardsCatalog} rewardsLedger={rewardsLedger} adminData={adminData} currentUser={currentUser} devices={devices} preferences={preferences} deletionStatus={deletionStatus} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} selectScreen={selectScreen} openReader={openReader} openImport={() => setImportOpen(true)} messageApi={messageApi} health={health} onRefresh={reloadWorkspace} onCatalogAction={catalogAction} onCancelImport={cancelImport} onUpdateUserStatus={updateUserStatus} onCreateInvitation={createInvitation} onRevokeDevice={revokeDevice} onAdjustQuota={adjustQuota} onUpdateSubscription={updateSubscription} onCreateManualOrder={createManualOrder} onRevokeOwnDevice={revokeOwnDevice} onExportAdminSummary={exportAdminSummary} onCheckIn={checkIn} onRedeemReward={redeemReward} onSavePreferences={savePreferences} onPreferencesChange={mergePreferences} onLogout={logout} onRequestDeletion={requestDeletion} onCancelDeletion={cancelDeletion} /></Content>
+        <Content className="modern-content"><Page loading={pageLoading} screen={screen} books={filteredBooks} allBooks={books} catalogBooks={catalogBooks} libraryBooks={libraryBooks} importTasks={importTasks} learningDays={learningDays} membership={membership} membershipOrders={membershipOrders} rewardStatus={rewardStatus} vocabulary={vocabulary} rewardsCatalog={rewardsCatalog} rewardsLedger={rewardsLedger} adminData={adminData} currentUser={currentUser} devices={devices} preferences={preferences} deletionStatus={deletionStatus} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} selectScreen={selectScreen} openReader={openReader} openImport={() => setImportOpen(true)} messageApi={messageApi} health={health} onRefresh={() => reloadWorkspace({ silent: true })} onCatalogAction={catalogAction} onCancelImport={cancelImport} onUpdateUserStatus={updateUserStatus} onCreateInvitation={createInvitation} onRevokeDevice={revokeDevice} onAdjustQuota={adjustQuota} onUpdateSubscription={updateSubscription} onCreateManualOrder={createManualOrder} onRevokeOwnDevice={revokeOwnDevice} onExportAdminSummary={exportAdminSummary} onCheckIn={checkIn} onRedeemReward={redeemReward} onSavePreferences={savePreferences} onPreferencesChange={mergePreferences} onLogout={logout} onRequestDeletion={requestDeletion} onCancelDeletion={cancelDeletion} /></Content>
       </Layout>
-    </Layout><ImportModal open={importOpen} onClose={() => setImportOpen(false)} onCreated={reloadWorkspace} messageApi={messageApi} /></AntApp>
+    </Layout><ImportModal open={importOpen} onClose={() => setImportOpen(false)} onCreated={() => reloadWorkspace({ silent: true })} messageApi={messageApi} /></AntApp>
   </ConfigProvider>
 }
 
@@ -235,7 +240,7 @@ function AuthActionPage({ path }) {
       .catch(reason => { setStatus('error'); setError(reason.message || '邮箱验证失败') })
   }, [path, token])
   const backToLogin = () => { location.href = '/' }
-  if (path === '/verify-email') return <main className="modern-auth"><Card className="modern-auth-card"><div className="modern-auth-brand"><div className="brand-mark-modern">拾</div><div><Text className="brand-name auth-brand-name">拾页</Text><Text className="brand-subtitle auth-brand-subtitle">EMAIL VERIFICATION</Text></div></div>{status === 'loading' ? <div className="auth-action-state"><Spin size="large" /><Title level={2}>正在验证邮箱</Title><Paragraph>请稍候，我们正在确认验证链接。</Paragraph></div> : status === 'success' ? <div className="auth-action-state"><CheckCircleFilled className="auth-action-success" /><Title level={2}>邮箱已激活</Title><Paragraph>现在可以使用注册邮箱和密码登录拾页。</Paragraph><Button block type="primary" size="large" onClick={backToLogin}>返回登录</Button></div> : <div className="auth-action-state"><Alert type="error" showIcon message="邮箱验证失败" description={error} /><Button block size="large" onClick={backToLogin}>返回登录</Button></div>}</Card></main>
+  if (path === '/verify-email') return <main className="modern-auth"><Card className="modern-auth-card"><div className="modern-auth-brand"><div className="brand-mark-modern">拾</div><div><Text className="brand-name auth-brand-name">拾页</Text><Text className="brand-subtitle auth-brand-subtitle">EMAIL VERIFICATION</Text></div></div>{status === 'loading' ? <div className="auth-action-state"><Skeleton active title paragraph={{ rows: 4 }} /></div> : status === 'success' ? <div className="auth-action-state"><CheckCircleFilled className="auth-action-success" /><Title level={2}>邮箱已激活</Title><Paragraph>现在可以使用注册邮箱和密码登录拾页。</Paragraph><Button block type="primary" size="large" onClick={backToLogin}>返回登录</Button></div> : <div className="auth-action-state"><Alert type="error" showIcon message="邮箱验证失败" description={error} /><Button block size="large" onClick={backToLogin}>返回登录</Button></div>}</Card></main>
   const resetPassword = async values => {
     setSubmitting(true); setError('')
     try { await postJson('/api/auth/reset-password', { token, password: values.password }); setStatus('success') }
@@ -246,7 +251,8 @@ function AuthActionPage({ path }) {
 }
 function SidebarMenu({ nav, settings, screen, selectScreen }) { return <div className="sidebar-menu-wrap"><Menu theme="dark" mode="inline" selectedKeys={[screen]} items={nav} onClick={({ key }) => selectScreen(key)} /><div className="menu-divider" /><Menu theme="dark" mode="inline" selectedKeys={[screen]} items={settings} onClick={({ key }) => selectScreen(key)} /></div> }
 
-function Page({ screen, ...props }) {
+function Page({ screen, loading, ...props }) {
+  if (loading) return <PageSkeleton reader={screen === 'reader'} />
   const pages = { workspace: <WorkspacePage {...props} />, catalog: <CatalogPage {...props} />, library: <LibraryPage {...props} />, stats: <StatsPageNew {...props} />, vocab: <VocabularyPage {...props} />, rewards: <RewardsPageNew {...props} />, membership: <MembershipPage {...props} />, admin: <AdminPage {...props} />, platform: <PlatformOperationsPage {...props} />, settings: <SettingsPage {...props} />, reader: <ReaderPage {...props} /> }
   return pages[screen] || pages.workspace
 }

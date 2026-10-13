@@ -3,10 +3,12 @@ import { Alert, Button, Card, Col, Descriptions, Empty, Form, Input, InputNumber
 import { CloudServerOutlined, DatabaseOutlined, ReloadOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 
 import { deleteJson, getJson, postJson } from '../api/client'
+import PageSkeleton from '../components/PageSkeleton'
 
 const { Paragraph, Text, Title } = Typography
 
 export default function PlatformOperationsPage({ messageApi }) {
+  const [initialLoading, setInitialLoading] = useState(true)
   const [catalog, setCatalog] = useState([])
   const [assets, setAssets] = useState([])
   const [assetTotal, setAssetTotal] = useState(0)
@@ -21,7 +23,9 @@ export default function PlatformOperationsPage({ messageApi }) {
   const [reviewForm] = Form.useForm()
   const [aiForm] = Form.useForm()
 
-  const loadPlatform = async () => {
+  const loadPlatform = async ({ initial = false } = {}) => {
+    if (initial) setInitialLoading(true)
+    try {
     const [catalogData, assetData, configData, deploymentData] = await Promise.all([
       getJson('/api/admin/catalog/sources', { sources: [] }),
       getJson('/api/admin/media-assets?limit=50', { assets: [], total: 0 }),
@@ -33,10 +37,25 @@ export default function PlatformOperationsPage({ messageApi }) {
     setAssetTotal(assetData.total || 0)
     setPlatformConfig(configData)
     setDeploy(deploymentData || { targets: [], jobs: [], status: {} })
-    if (!selectedTarget && deploymentData?.targets?.length) setSelectedTarget(deploymentData.targets[0].id)
+    const targetId = selectedTarget || deploymentData?.targets?.[0]?.id || null
+    if (!selectedTarget && targetId) setSelectedTarget(targetId)
+    if (targetId) {
+      const [code, content] = await Promise.all([
+        getJson(`/api/deployment/releases?targetId=${targetId}`, { releases: [] }),
+        getJson(`/api/deployment/content-releases?targetId=${targetId}`, { releases: [] }),
+      ])
+      setReleases(code.releases || [])
+      setContentReleases(content.releases || [])
+    } else {
+      setReleases([])
+      setContentReleases([])
+    }
+    } finally {
+      if (initial) setInitialLoading(false)
+    }
   }
 
-  useEffect(() => { loadPlatform() }, [])
+  useEffect(() => { loadPlatform({ initial: true }) }, [])
   useEffect(() => { if (platformConfig?.dioco) aiForm.setFieldsValue({ email: platformConfig.dioco.email || '', upstream: platformConfig.dioco.upstream || 'https://api-cdn-plus.dioco.io', token: '' }) }, [aiForm, platformConfig])
   useEffect(() => {
     if (!(deploy.jobs || []).some(job => ['queued', 'running'].includes(job.status))) return undefined
@@ -109,5 +128,6 @@ export default function PlatformOperationsPage({ messageApi }) {
     { key: 'config', label: '平台配置', children: <Row gutter={16}><Col span={12}><Card title="AI 服务" extra={platformConfig?.dioco?.configured ? <Tag color="success">已配置 {platformConfig.dioco.tokenMask}</Tag> : <Tag color="warning">未配置</Tag>}><Form form={aiForm} layout="vertical" onFinish={saveAiConfig}><Form.Item label="服务邮箱" name="email" rules={[{ required: true, type: 'email', message: '请输入有效服务邮箱' }]}><Input /></Form.Item><Form.Item label="Dioco Token" name="token" extra="留空保持现有 Token；浏览器不会读取已保存的完整值。"><Input.Password placeholder={platformConfig?.dioco?.configured ? '已保存，留空保持不变' : '输入平台 Token'} /></Form.Item><Form.Item label="API 地址" name="upstream" rules={[{ required: true, type: 'url', message: '请输入有效 API 地址' }]}><Input /></Form.Item><Space><Button type="primary" htmlType="submit">保存并启用</Button>{platformConfig?.dioco?.configured && <Button danger onClick={() => Modal.confirm({ title: '清除 AI Token？', content: '清除后词汇语境和 AI 句法服务将停止工作。', okButtonProps: { danger: true }, onOk: async () => saveAiConfig({ ...aiForm.getFieldsValue(), clearToken: true }) })}>清除 Token</Button>}</Space></Form><Alert style={{ marginTop: 18 }} type="info" showIcon message="超级管理员配置保存在 PostgreSQL platform_settings 中，AI 请求即时读取，无需重启或修改 environment。" /></Card></Col><Col span={12}><Card title="运维原则"><List dataSource={['所有高风险操作要求二次确认', '部署与内容回滚均产生任务记录', '媒体删除先标记，再执行可审计清理', '到期账户清理由管理员显式触发']} renderItem={item => <List.Item><SafetyCertificateOutlined style={{ color: '#2f6f50', marginRight: 8 }} />{item}</List.Item>} /></Card></Col></Row> },
   ]
 
+  if (initialLoading) return <PageSkeleton />
   return <div className="page-stack"><div className="page-intro"><div><Text className="eyebrow">PLATFORM OPERATIONS</Text><Title level={1}>平台与部署</Title><Paragraph>内容审核、媒体生命周期、账户清理和远程部署全部在 React 管理台完成。</Paragraph></div><Button icon={<ReloadOutlined />} loading={busy} onClick={refresh}>刷新</Button></div><Tabs size="large" items={items} /><Modal title={nodeForm.getFieldValue('id') ? '编辑部署节点' : '新增部署节点'} open={nodeOpen} onCancel={() => setNodeOpen(false)} onOk={() => nodeForm.submit()} okText="保存节点"><Form form={nodeForm} layout="vertical" onFinish={saveNode}><Form.Item name="id" hidden><Input /></Form.Item><Row gutter={12}><Col span={12}><Form.Item label="节点名称" name="name" rules={[{ required: true }]}><Input /></Form.Item></Col><Col span={12}><Form.Item label="SSH 地址" name="host" rules={[{ required: true }]}><Input /></Form.Item></Col><Col span={8}><Form.Item label="SSH 端口" name="port"><InputNumber min={1} max={65535} style={{ width: '100%' }} /></Form.Item></Col><Col span={8}><Form.Item label="用户名" name="username"><Input /></Form.Item></Col><Col span={8}><Form.Item label="服务端口" name="servicePort"><InputNumber min={1} max={65535} style={{ width: '100%' }} /></Form.Item></Col></Row><Form.Item label="远程目录" name="remoteRoot" rules={[{ required: true }]}><Input /></Form.Item><Form.Item label="SSH 密码（留空保持原配置）" name="password"><Input.Password /></Form.Item><Space><Form.Item label="启用 HTTPS" name="useHttps" valuePropName="checked"><Switch /></Form.Item><Form.Item label="安装录音能力" name="installRecording" valuePropName="checked"><Switch /></Form.Item></Space></Form></Modal></div>
 }

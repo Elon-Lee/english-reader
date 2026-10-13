@@ -37,7 +37,7 @@ export default defineConfig({
       input: resolve(process.cwd(), 'frontend/index.html'),
       output: {
         entryFileNames: 'assets/index.js',
-        chunkFileNames: 'assets/[name].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name][extname]',
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined
