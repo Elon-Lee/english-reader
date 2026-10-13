@@ -105,8 +105,12 @@ class MembershipService:
             plan["id"] = plan.pop("version_id")
             plan["quotas_json"] = as_json(plan["quotas_json"])
             plan["pricing_json"] = as_json(plan["pricing_json"])
-            period_key = f"subscription:{subscription['id']}"
-            starts_at, ends_at = subscription["starts_at"], subscription["ends_at"]
+            anchor = subscription["starts_at"].astimezone(timezone.utc)
+            span = timedelta(days=int(plan["period_days"]))
+            cycle = max(0, math.floor((now - anchor).total_seconds() / span.total_seconds()))
+            starts_at = anchor + span * cycle
+            ends_at = min(subscription["ends_at"], starts_at + span)
+            period_key = f"subscription:{subscription['id']}:{cycle}"
             subscription_id = subscription["id"]
         else:
             plan = self._plan(cursor, "free-v1")
@@ -401,7 +405,16 @@ class MembershipService:
     def orders(self, user_id: str) -> list[dict[str, Any]]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT * FROM manual_orders WHERE user_id=%s ORDER BY created_at DESC", (user_id,))
+                cursor.execute(
+                    """SELECT id,user_id,plan_version_id,status,starts_at,ends_at,amount_cents,currency,note,created_at,'manual' AS provider
+                    FROM manual_orders WHERE user_id=%s
+                    UNION ALL
+                    SELECT id,user_id,plan_version_id,status,starts_at,ends_at,amount_cents,currency,
+                    CASE WHEN error_message<>'' THEN error_message ELSE billing_interval END AS note,created_at,provider
+                    FROM payment_orders WHERE user_id=%s
+                    ORDER BY created_at DESC""",
+                    (user_id, user_id),
+                )
                 return [self._order(row) for row in self.accounts._many(cursor)]
 
     def _audit(self, cursor: Any, user_id: str, actor_id: str | None, action: str, payload: dict[str, Any]) -> None:
@@ -416,4 +429,4 @@ class MembershipService:
 
     @staticmethod
     def _order(row: dict[str, Any]) -> dict[str, Any]:
-        return {"id": row["id"], "planVersion": row["plan_version_id"], "status": row["status"], "startsAt": timestamp(row["starts_at"]), "endsAt": timestamp(row["ends_at"]), "amountCents": int(row["amount_cents"]), "currency": row["currency"], "note": row["note"], "createdAt": timestamp(row.get("created_at"))}
+        return {"id": row["id"], "planVersion": row["plan_version_id"], "status": row["status"], "startsAt": timestamp(row["starts_at"]), "endsAt": timestamp(row["ends_at"]), "amountCents": int(row["amount_cents"]), "currency": row["currency"], "note": row["note"], "provider": row.get("provider", "manual"), "createdAt": timestamp(row.get("created_at"))}

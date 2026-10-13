@@ -40,7 +40,10 @@ from saas_rewards import RewardService
 from saas_workspace import WorkspaceService
 from saas_imports import WorkspaceImportService
 from saas_ai import WorkspaceAIService
+from saas_billing import PaddleBillingService
 from saas_cache import SaaSCache
+from saas_commerce import CommerceService
+from saas_mbdpay import MbdPayService
 from youtube_subtitles import has_translated_english_track,select_chinese_track,select_native_english_track
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -82,13 +85,16 @@ ACCOUNTS=AccountLifecycleService(SAAS)
 WORKSPACE=WorkspaceService(SAAS)
 WORKSPACE_IMPORTS=WorkspaceImportService(SAAS,MEMBERSHIPS,MEDIA)
 WORKSPACE_AI=WorkspaceAIService(SAAS,MEMBERSHIPS)
+BILLING=PaddleBillingService(SAAS,MEMBERSHIPS)
+COMMERCE=CommerceService(SAAS)
+MBDPAY=MbdPayService(SAAS,MEMBERSHIPS)
 CACHE_SERVICE=SaaSCache()
 RATE_LIMIT_LOCK=threading.Lock()
 RATE_LIMIT_BUCKETS=defaultdict(deque)
 RATE_LIMIT_RULES={
     "/api/auth/login":(10,300),"/api/auth/register":(8,3600),"/api/auth/forgot-password":(5,3600),
     "/api/auth/reset-password":(8,3600),"/api/checkins":(30,3600),"/api/word-context":(60,3600),"/api/sentence-grammar":(60,3600),
-    "/api/word-hover":(300,3600),"/api/word-dictionary":(120,3600),
+    "/api/word-hover":(300,3600),"/api/word-dictionary":(120,3600),"/api/commerce/webhooks/mbdpay":(120,300),
 }
 
 def run_import_process(job_id,command,log_path):
@@ -198,7 +204,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Cross-Origin-Opener-Policy","same-origin")
         self.send_header("Cross-Origin-Resource-Policy","same-origin")
         if SAAS.enabled:
-            self.send_header("Content-Security-Policy","default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+            self.send_header("Content-Security-Policy","default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://openapi.alipay.com")
         if urlsplit(getattr(self,"path","")).path.lower().endswith((".mp3",".wav",".m4a",".ogg")):
             self.send_header("Accept-Ranges","bytes")
         super().end_headers()
@@ -223,6 +229,19 @@ class Handler(SimpleHTTPRequestHandler):
             self.debug_browser_login(route);return
         if route.path.startswith("/api/auth/"):
             self.auth_get(route.path); return
+        if SAAS.enabled and (route.path=="/api/commerce/products" or route.path.startswith("/api/commerce/products/")):
+            try:
+                if route.path=="/api/commerce/products":self.reply(COMMERCE.public_catalog(),cache_control="public, max-age=60");return
+                self.reply(COMMERCE.product(unquote(route.path.rsplit("/",1)[1])),cache_control="public, max-age=60");return
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"commerce_unavailable","error":str(exc)},503)
+            return
+        if SAAS.enabled and route.path.startswith("/api/commerce/orders/"):
+            if not self.require_saas_user(verified=True):return
+            try:self.reply(MBDPAY.order(str(self._saas_session["id"]),unquote(route.path.rsplit("/",1)[1])))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"commerce_unavailable","error":str(exc)},503)
+            return
         if SAAS.enabled and (route.path=="/api/workspace/imports" or route.path.startswith("/api/workspace/imports/")):
             if not self.require_saas_user(verified=True):return
             self.workspace_import_get(route);return
@@ -255,6 +274,9 @@ class Handler(SimpleHTTPRequestHandler):
         if SAAS.enabled and route.path=="/api/admin/catalog/sources":
             if not self.require_saas_user():return
             self.catalog_admin_get();return
+        if SAAS.enabled and route.path=="/api/billing/config":
+            if not self.require_saas_user(verified=True):return
+            self.reply(BILLING.public_config());return
         if SAAS.enabled and route.path in {"/api/membership","/api/membership/usage","/api/membership/orders","/api/membership/plans","/api/membership/requests"}:
             if not self.require_saas_user(): return
             self.membership_get(route.path); return
@@ -320,14 +342,15 @@ class Handler(SimpleHTTPRequestHandler):
         if SAAS.enabled:
             if route.path=="/modern.html" or route.path.startswith("/modern-assets"):
                 self.send_response(308);self.send_header("Location","/");self.send_header("Content-Length","0");self.end_headers();return
-            if route.path in {"/", "/verify-email", "/reset-password"} or route.path.startswith("/assets/"):
+            if route.path in {"/", "/app", "/pricing", "/login", "/register", "/support", "/verify-email", "/reset-password"} or route.path.startswith("/purchase/") or route.path.startswith("/assets/") or route.path.startswith("/product/"):
                 if self.serve_saas_site(route):return
         range_header=self.headers.get("Range")
         if range_header and self.serve_range(range_header): return
         if self.serve_reader_asset(route):return
         super().do_GET()
     def serve_saas_site(self,route):
-        relative="index.html" if route.path in {"/", "/verify-email", "/reset-password"} else unquote(route.path).lstrip("/")
+        spa_routes={"/", "/app", "/pricing", "/login", "/register", "/support", "/verify-email", "/reset-password"}
+        relative="index.html" if route.path in spa_routes or route.path.startswith("/purchase/") else unquote(route.path).lstrip("/")
         path=(SITE/relative).resolve()
         try:path.relative_to(SITE.resolve())
         except ValueError:self.send_error(403);return True
@@ -417,6 +440,25 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         route=urlsplit(self.path)
         if not self.rate_limit(route.path):return
+        if SAAS.enabled and route.path=="/api/commerce/webhooks/mbdpay":
+            try:
+                item=self.json_body(max_length=2*1024*1024)
+                if not isinstance(item,dict):raise SaaSError("invalid_mbdpay_event","面包多通知格式无效。")
+                self.reply(MBDPAY.handle_webhook(item))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"commerce_unavailable","error":str(exc)},503)
+            except Exception:self.reply({"code":"commerce_webhook_failed","error":"支付通知处理失败，等待渠道重试。"},500)
+            return
+        if SAAS.enabled and route.path=="/api/billing/webhooks/paddle":
+            length=int(self.headers.get("Content-Length","0") or 0)
+            if length<=0 or length>2*1024*1024:
+                self.reply({"code":"invalid_paddle_event","error":"Paddle webhook 请求体无效。"},400);return
+            raw_body=self.rfile.read(length)
+            try:self.reply(BILLING.handle_webhook(raw_body,self.headers.get("Paddle-Signature","")))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"billing_unavailable","error":str(exc)},503)
+            except Exception:self.reply({"code":"billing_webhook_failed","error":"支付通知处理失败，Paddle 将自动重试。"},500)
+            return
         if route.path.startswith("/api/auth/"):
             self.auth_post(route.path); return
         if SAAS.enabled and (route.path=="/api/workspace/imports" or route.path.startswith("/api/workspace/imports/")):
@@ -455,6 +497,24 @@ class Handler(SimpleHTTPRequestHandler):
                 item=self.json_body();self.reply(MEMBERSHIPS.request_change(str(self._saas_session["id"]),str(item.get("planVersion","")).strip(),str(item.get("note","")or"")),201)
             except SaaSError as exc:self.reply(exc.payload(),exc.status)
             except SaaSConfigurationError as exc:self.reply({"code":"membership_unavailable","error":str(exc)},503)
+            return
+        if SAAS.enabled and route.path=="/api/commerce/orders":
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                item=self.json_body();self.reply(MBDPAY.create_order(str(self._saas_session["id"]),item.get("slug"),item.get("idempotencyKey")),201)
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"commerce_unavailable","error":str(exc)},503)
+            return
+        if SAAS.enabled and route.path in {"/api/billing/checkout","/api/billing/manage"}:
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                item=self.json_body() if int(self.headers.get("Content-Length","0") or 0)>0 else {}
+                user_id=str(self._saas_session["id"])
+                if route.path=="/api/billing/checkout":
+                    self.reply(BILLING.create_checkout(user_id,item.get("planVersion"),item.get("billingInterval"),item.get("idempotencyKey")),201);return
+                self.reply(BILLING.management_links(user_id));return
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"billing_unavailable","error":str(exc)},503)
             return
         if SAAS.enabled and route.path.startswith("/api/"):
             must_verify=route.path.startswith("/api/import") or route.path in {"/api/word-context","/api/sentence-grammar"}
@@ -723,6 +783,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.reply(ADMIN.user_detail(unquote(path.rsplit("/",1)[1])));return
             if path=="/api/admin/invitations":self.reply(ADMIN.invitations((query.get("limit")or[100])[0],(query.get("q")or[""])[0],(query.get("offset")or[0])[0]));return
             if path=="/api/admin/plan-versions":self.reply(ADMIN.plan_versions());return
+            if path=="/api/admin/commerce/products":self.reply(COMMERCE.admin_catalog());return
             if path=="/api/admin/catalog/sources":self.reply(CATALOG.review_sources());return
             if path=="/api/admin/audit":self.reply(ADMIN.audit((query.get("limit")or[100])[0],(query.get("q")or[""])[0],(query.get("action")or[""])[0]));return
             if path=="/api/admin/platform-config":self.reply(ADMIN.platform_config());return
@@ -764,6 +825,14 @@ class Handler(SimpleHTTPRequestHandler):
                 if action=="create":
                     result=MEMBERSHIPS.create_manual_order(actor_id,str(item.get("userId","")).strip(),str(item.get("planVersion","")).strip(),item.get("startsAt"),item.get("endsAt"),str(item.get("note","")or""),item.get("amountCents",0));REWARDS.on_first_paid(str(item.get("userId","")).strip());ADMIN.record_action(actor_id,"manual_subscription_created",str(item.get("userId","")).strip(),str(item.get("note","")or""),{"subscriptionId":result["subscription"]["id"]});self.reply(result,201);return
                 result=MEMBERSHIPS.update_subscription(actor_id,str(item.get("subscriptionId","")).strip(),action,item.get("endsAt"),str(item.get("note","")or""));ADMIN.record_action(actor_id,f"subscription_{action}",None,str(item.get("note","")or""),{"subscriptionId":item.get("subscriptionId")});self.reply(result);return
+            if path=="/api/admin/commerce/products":
+                self.reply(COMMERCE.create_product(actor_id,item.get("slug"),item.get("family"),item.get("displayOrder",100)),201);return
+            if path.startswith("/api/admin/commerce/products/") and path.endswith("/versions"):
+                product_id=unquote(path[len("/api/admin/commerce/products/"):-len("/versions")].rstrip("/"));self.reply(COMMERCE.create_version(actor_id,product_id,item),201);return
+            if path.startswith("/api/admin/commerce/products/") and path.endswith("/status"):
+                product_id=unquote(path[len("/api/admin/commerce/products/"):-len("/status")].rstrip("/"));self.reply(COMMERCE.set_product_active(actor_id,product_id,bool(item.get("active"))));return
+            if path.startswith("/api/admin/commerce/versions/") and path.endswith("/publish"):
+                version_id=unquote(path[len("/api/admin/commerce/versions/"):-len("/publish")].rstrip("/"));self.reply(COMMERCE.publish_version(actor_id,version_id));return
             if path.startswith("/api/admin/users/") and path.endswith("/status"):
                 user_id=unquote(path[len("/api/admin/users/"):-len("/status")].rstrip("/"));self.reply(ADMIN.set_user_status(actor_id,user_id,str(item.get("status","")).strip(),str(item.get("reason","")or"")));return
             self.reply({"error":"not found"},404)

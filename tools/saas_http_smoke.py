@@ -56,6 +56,8 @@ def main()->int:
             except Exception:time.sleep(.1)
         else:raise RuntimeError("SaaS reader did not become healthy")
         check("SaaS health",health.get("saasEnabled") is True,health);check("CSP","content-security-policy" in headers,headers)
+        _,_,commerce=request("/api/commerce/products");check("public commerce catalog",len(commerce.get("products",[]))>=4 and commerce.get("payment",{}).get("automaticRenewal") is False,commerce)
+        _,_,homepage=request("/");check("public product homepage",isinstance(homepage,bytes) and "把英语材料真正读懂".encode() in homepage)
         status,_,_=request("/api/workspace/books",expected=(401,));check("unauthenticated isolation",status==401)
         try:
             from saas_auth import SaaSService

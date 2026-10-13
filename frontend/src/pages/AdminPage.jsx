@@ -4,13 +4,14 @@ import { Button, Card, Col, DatePicker, Descriptions, Drawer, Dropdown, Empty, F
 import { FileTextOutlined, PlusOutlined } from '@ant-design/icons'
 
 import { getJson } from '../api/client'
+import CommerceAdmin from '../components/CommerceAdmin'
 
 const { Paragraph, Text, Title } = Typography
 const { RangePicker } = DatePicker
 
 const durations = { week: 7, month: 30, quarter: 90, year: 365 }
 
-export default function AdminPage({ adminData, onUpdateUserStatus, onCreateInvitation, onRevokeDevice, onAdjustQuota, onUpdateSubscription, onCreateManualOrder, onExportAdminSummary }) {
+export default function AdminPage({ adminData, onUpdateUserStatus, onCreateInvitation, onRevokeDevice, onAdjustQuota, onUpdateSubscription, onCreateManualOrder, onCreateCommerceProduct, onCreateCommerceVersion, onPublishCommerceVersion, onSetCommerceProductActive, onExportAdminSummary }) {
   const [detailOpen, setDetailOpen] = useState(false)
   const [detail, setDetail] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -78,6 +79,7 @@ export default function AdminPage({ adminData, onUpdateUserStatus, onCreateInvit
   return <div className="page-stack">
     <div className="page-intro"><div><Text className="eyebrow">OPERATIONS</Text><Title level={1}>运营后台</Title><Paragraph>用户、订阅、邀请码与审计操作的商业工作区。</Paragraph></div><Space><Button icon={<FileTextOutlined />} onClick={onExportAdminSummary}>导出数据</Button><Button onClick={openOrder}>创建人工订阅</Button><Button type="primary" icon={<PlusOutlined />} onClick={() => setInviteOpen(true)}>创建邀请码</Button></Space></div>
     <Row gutter={[16, 16]}><Col span={6}><Card><Text>用户总数</Text><Title level={2}>{count('total')}</Title><Text type="secondary">活跃 {count('active')} 人</Text></Card></Col><Col span={6}><Card><Text>已验证用户</Text><Title level={2}>{count('verified')}</Title><Text type="secondary">暂停 {count('suspended')} 人</Text></Card></Col><Col span={6}><Card><Text>有效订阅</Text><Title level={2}>{dashboard?.activeSubscriptions ?? '—'}</Title><Text type="secondary">邀请码 {dashboard?.activeInvitations ?? '—'}</Text></Card></Col><Col span={6}><Card><Text>书城内容</Text><Title level={2}>{dashboard?.catalog?.published ?? '—'}</Title><Text type="secondary">总内容 {dashboard?.catalog?.total ?? '—'} 本</Text></Card></Col></Row>
+    <CommerceAdmin products={adminData?.commerceProducts || []} planVersions={adminData?.planVersions || []} onCreateProduct={onCreateCommerceProduct} onCreateVersion={onCreateCommerceVersion} onPublishVersion={onPublishCommerceVersion} onSetProductActive={onSetCommerceProductActive} />
     <Card title="用户与订阅"><Table rowKey="id" columns={columns} dataSource={users} pagination={{ pageSize: 8 }} scroll={{ x: 860 }} /></Card>
     <Row gutter={[20, 20]}><Col span={12}><Card title="最近邀请码" extra={<Input.Search allowClear size="small" placeholder="查询邀请码、备注或渠道" value={inviteQuery} onChange={event => { setInviteQuery(event.target.value); setInvitePage(1) }} style={{ width: 230 }} />}><List dataSource={inviteData.invitations || []} locale={{ emptyText: '暂无邀请码' }} renderItem={item => <List.Item actions={[<Button key="copy" size="small" onClick={() => navigator.clipboard?.writeText(item.code)}>复制</Button>]}><List.Item.Meta title={<Text code>{item.code}</Text>} description={`${item.usedCount}/${item.maxUses} 次 · 激活邮件 ${item.verificationEmailCount || 0}/${item.verificationEmailLimit || 3} · ${item.status} · ${item.note || '无备注'}`} /></List.Item>} />{inviteData.total > invitePageSize && <Pagination size="small" current={invitePage} pageSize={invitePageSize} total={inviteData.total} showSizeChanger={false} onChange={setInvitePage} />}</Card></Col><Col span={12}><Card title="最近审计操作" extra={<Input.Search allowClear size="small" placeholder="搜索操作" value={auditQuery} onChange={event => setAuditQuery(event.target.value)} style={{ width: 200 }} />}><List dataSource={auditItems.slice(0, 10)} locale={{ emptyText: '暂无审计记录' }} renderItem={item => <List.Item><List.Item.Meta title={item.action} description={`${item.actor || '系统'} · ${item.reason || '未填写原因'}`} /><Text type="secondary">{item.createdAt ? new Date(item.createdAt).toLocaleString('zh-CN') : '—'}</Text></List.Item>} /></Card></Col></Row>
     {detailDrawer}

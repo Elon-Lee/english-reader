@@ -1,6 +1,6 @@
 # 拾页 AI 共享上下文
 
-更新时间：2026-10-12（Asia/Shanghai）
+更新时间：2026-10-13（Asia/Shanghai）
 
 这是后续 AI 的最小全局上下文。只读取与当前任务相关的任务文档。
 
@@ -24,12 +24,13 @@
 - PC 主要 API 已真实接入；刷新路由、认证闪屏、分页、热力图、任务轮询、批量邀请码和数据库 AI 配置已修正。
 - 阅读器已改为旧版语义的媒体/字幕/释义三栏交互，并保留快捷键、护眼和专注模式。
 - 京东云旧 reader 服务已被根路径 React SaaS 替换；生产 PostgreSQL、Redis、SaaS 容器和已公开书籍增量同步已实机验收。
+- 本地已增加公开产品官网、数据库套餐页、固定期限购买确认、不可变商品版本后台和面包多 Pay 订单/查单/回调开通；正式本地数据库已迁移，生产尚未部署。
 - 最新构建与测试通过，最近 PC 浏览器验收目录：`.local/debug/modern-walkthrough/20261011T135345Z`。
 
 ## 全局未完成
 
 - 移动端展示、底部操作区、手势和弹层交互尚未进入正式优化阶段。
-- 真实支付网关、支付回调和自动开通尚未接入；当前只有套餐变更申请和后台人工订阅。
+- 面包多 Pay 支付闭环已实现并通过模拟集成测试；尚缺审核通过后的真实 `app_id/app_key` 和端到端实付验收。
 - 大文件上传已避免 `arrayBuffer()` 内存复制，但尚未实现可恢复分片上传。
 - 京东云 SaaS 完整部署和公开资源增量同步已验收；生产回滚、卸载等高风险动作尚未执行。
 - Dioco 完整词典接口 `base_dict_getFullDict_8` 尚未按用户提供的请求正式接入；当前词汇 AI 走 `/api/word-context`。
@@ -43,6 +44,7 @@
 | PC 页面、路由、分页、工作台视觉 | `tasks/pc-workspace/HANDOFF.md` |
 | 阅读器、媒体、字幕、快捷键、词典 | `tasks/reader/HANDOFF.md` |
 | 账号、会员、数据库、API、安全 | `tasks/backend-saas/HANDOFF.md` |
+| 公开产品官网、商品版本、套餐购买、面包多支付 | `tasks/public-commerce/HANDOFF.md` |
 | 文件/YouTube 导入、任务进度、媒体处理 | `tasks/import-media/HANDOFF.md` |
 | 运营后台、AI 配置、远程部署 | `tasks/platform-operations/HANDOFF.md` |
 | 移动端适配与触摸交互 | `tasks/mobile/HANDOFF.md` |

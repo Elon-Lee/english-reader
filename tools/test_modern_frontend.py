@@ -46,6 +46,8 @@ def main() -> int:
     check("/api/workspace/annotations" in entry and "MediaRecorder" in entry, "desktop reader parity controls missing")
     check("/api/word-tts" in entry and "controlsList" in entry, "reader pronunciation or protected media controls missing")
     check("/api/admin/catalog/sources" in entry and "/api/deployment/config" in entry, "platform operations migration missing")
+    check("/api/commerce/products" in entry and "/api/commerce/orders" in entry, "public commerce integration missing")
+    check("不是看过" in entry and "固定期限" in entry and "289614546" in entry, "public product or compliance copy missing")
     check("/api/workspace/books/" in entry and "confirmTitle" in entry, "private book lifecycle integration missing")
     reader_page = READER_PAGE.read_text(encoding="utf-8")
     modern_styles = MODERN_STYLES.read_text(encoding="utf-8")

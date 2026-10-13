@@ -24,13 +24,14 @@ import StatsPageNew from './pages/StatsPage'
 import VocabularyPage from './pages/VocabularyPage'
 import WorkspacePage from './pages/WorkspacePage'
 import PageSkeleton from './components/PageSkeleton'
+import PublicSite, { PurchasePage } from './pages/PublicSite'
 import './styles.css'
 
 const { Header, Sider, Content } = Layout
 const { Title, Text, Paragraph } = Typography
 
 function modernEntryPath() {
-  return '/'
+  return '/app'
 }
 
 const bookAccents = ['#d9eadf', '#f5dfba', '#d8e1ef', '#ecd8d0']
@@ -46,6 +47,12 @@ function normalizeBook(book, index = 0, source = '私人读物') {
 function Cover({ book, large = false }) { return <div className={`book-cover ${large ? 'book-cover-large' : ''}`} style={{ '--cover': book.accent }}><span>{book.cover}</span><small>{book.title}</small></div> }
 
 function App() {
+  const routePath = location.pathname
+  const routeParams = new URLSearchParams(location.search)
+  const legacyConsoleRoute = routeParams.has('screen')
+  const consoleRoute = routePath === '/app' || legacyConsoleRoute
+  const publicPage = legacyConsoleRoute ? '' : routePath === '/' ? 'home' : routePath === '/pricing' ? 'pricing' : routePath === '/support' ? 'support' : ''
+  const purchaseRoute = routePath.startsWith('/purchase/')
   const [authState, setAuthState] = useState('loading')
   const [pageLoading, setPageLoading] = useState(true)
   const loadSequence = useRef(0)
@@ -72,6 +79,9 @@ function App() {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('全部')
   const [messageApi, contextHolder] = message.useMessage()
+  useEffect(() => {
+    document.title = publicPage ? '拾页 · 把英语材料真正读懂' : purchaseRoute ? '确认学习方案 · 拾页' : '拾页 · 英语学习工作台'
+  }, [publicPage, purchaseRoute])
 
   const reloadWorkspace = async ({ silent = false } = {}) => {
     const loadId = silent ? loadSequence.current : ++loadSequence.current
@@ -83,6 +93,7 @@ function App() {
       const userData = await authResponse.json()
       setAuthState('authenticated')
       setCurrentUser(userData.user || null)
+    if (!consoleRoute) return
     const needBooks = ['workspace', 'library', 'stats', 'vocab'].includes(screen)
     const [healthData, deviceData, workspaceData, vocabularyData, catalogData, libraryData, daysData, membershipData, membershipOrderData, rewardData, rewardsCatalogData, rewardsLedgerData, importsData, preferencesData, deletionData] = await Promise.all([
       getJson('/api/health', health),
@@ -120,10 +131,10 @@ function App() {
     setRewardsLedger(rewardsLedgerData.items || [])
     setImportTasks(importsData.tasks || [])
     if (screen === 'admin' && userData.user?.isAdmin) {
-      const [adminDashboard, adminUsers, adminAudit, adminInvitations, adminPlanVersions] = await Promise.all([
-        getJson('/api/admin/dashboard', null), getJson('/api/admin/users?limit=50', { users: [] }), getJson('/api/admin/audit?limit=20', { items: [] }), getJson('/api/admin/invitations?limit=20', { invitations: [] }), getJson('/api/admin/plan-versions', { planVersions: [] }),
+      const [adminDashboard, adminUsers, adminAudit, adminInvitations, adminPlanVersions, adminCommerce] = await Promise.all([
+        getJson('/api/admin/dashboard', null), getJson('/api/admin/users?limit=50', { users: [] }), getJson('/api/admin/audit?limit=20', { items: [] }), getJson('/api/admin/invitations?limit=20', { invitations: [] }), getJson('/api/admin/plan-versions', { planVersions: [] }), getJson('/api/admin/commerce/products', { products: [] }),
       ])
-      setAdminData({ dashboard: adminDashboard, users: adminUsers.users || [], audit: adminAudit.items || [], invitations: adminInvitations.invitations || [], planVersions: adminPlanVersions.planVersions || [] })
+      setAdminData({ dashboard: adminDashboard, users: adminUsers.users || [], audit: adminAudit.items || [], invitations: adminInvitations.invitations || [], planVersions: adminPlanVersions.planVersions || [], commerceProducts: adminCommerce.products || [] })
     }
     } finally {
       if (!silent && loadId === loadSequence.current) setPageLoading(false)
@@ -165,7 +176,11 @@ function App() {
   const createManualOrder = async payload => {
     try { await postJson('/api/admin/manual-orders', payload); await reloadWorkspace({ silent: true }); messageApi.success('人工订阅已创建') } catch (error) { messageApi.error(error.message || '人工订阅创建失败'); throw error }
   }
-  const login = async values => { const stored = localStorage.getItem('shiyue-modern-device') || `modern-${crypto.randomUUID?.() || Date.now()}-device`; localStorage.setItem('shiyue-modern-device', stored); try { await postJson('/api/auth/login', { ...values, deviceId: stored }); setAuthState('authenticated'); await reloadWorkspace() } catch (error) { messageApi.error(error.message || '登录失败'); throw error } }
+  const createCommerceProduct = async payload => { try { await postJson('/api/admin/commerce/products', payload); await reloadWorkspace({ silent: true }); messageApi.success('商品已创建') } catch (error) { messageApi.error(error.message || '商品创建失败'); throw error } }
+  const createCommerceVersion = async (productId, payload) => { try { await postJson(`/api/admin/commerce/products/${encodeURIComponent(productId)}/versions`, payload); await reloadWorkspace({ silent: true }); messageApi.success('商品新版本已保存为草稿') } catch (error) { messageApi.error(error.message || '商品版本创建失败'); throw error } }
+  const publishCommerceVersion = async versionId => { try { await postJson(`/api/admin/commerce/versions/${encodeURIComponent(versionId)}/publish`, {}); await reloadWorkspace({ silent: true }); messageApi.success('商品版本已发布，旧版本已停止新售') } catch (error) { messageApi.error(error.message || '商品版本发布失败'); throw error } }
+  const setCommerceProductActive = async (productId, active) => { try { await postJson(`/api/admin/commerce/products/${encodeURIComponent(productId)}/status`, { active }); await reloadWorkspace({ silent: true }); messageApi.success(active ? '商品已恢复销售' : '商品已停止新售') } catch (error) { messageApi.error(error.message || '商品状态更新失败'); throw error } }
+  const login = async values => { const stored = localStorage.getItem('shiyue-modern-device') || `modern-${crypto.randomUUID?.() || Date.now()}-device`; localStorage.setItem('shiyue-modern-device', stored); try { const result = await postJson('/api/auth/login', { ...values, deviceId: stored }); setAuthState('authenticated'); return result } catch (error) { messageApi.error(error.message || '登录失败'); throw error } }
   const register = async values => { try { const result = await postJson('/api/auth/register', values); messageApi.success('账号已创建，请前往邮箱完成验证'); return result } catch (error) { messageApi.error(error.message || '注册失败'); throw error } }
   const forgotPassword = async values => { try { const result = await postJson('/api/auth/forgot-password', values); messageApi.success('如果账号存在，重置邮件已发送'); return result } catch (error) { messageApi.error(error.message || '发送失败'); throw error } }
   const logout = async () => { try { await postJson('/api/auth/logout', {}); setCurrentUser(null); setAuthState('unauthenticated') } catch (error) { messageApi.error(error.message || '退出登录失败') } }
@@ -189,7 +204,14 @@ function App() {
   const theme = { token: { colorPrimary: '#2f6f50', colorInfo: '#2f6f50', borderRadius: 12, fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif' }, components: { Layout: { siderBg: '#17392b', headerBg: '#fbfaf7' }, Menu: { darkItemBg: '#17392b', darkItemSelectedBg: '#2b5943', darkItemHoverBg: '#234b38', itemBorderRadius: 10 } } }
   if (['/verify-email', '/reset-password'].includes(location.pathname)) return <ConfigProvider theme={theme}><AntApp>{contextHolder}<AuthActionPage path={location.pathname} /></AntApp></ConfigProvider>
   if (authState === 'loading') return <ConfigProvider theme={theme}><AntApp>{contextHolder}<main className="modern-auth"><Card className="modern-auth-card"><Skeleton active avatar title paragraph={{ rows: 6 }} /></Card></main></AntApp></ConfigProvider>
-  if (authState !== 'authenticated') return <ConfigProvider theme={theme}><AntApp>{contextHolder}<AuthPage loading={false} onLogin={login} onRegister={register} onForgot={forgotPassword} /></AntApp></ConfigProvider>
+  if (publicPage) return <ConfigProvider theme={theme}><AntApp>{contextHolder}<PublicSite authenticated={authState === 'authenticated'} page={publicPage} /></AntApp></ConfigProvider>
+  if (purchaseRoute) return <ConfigProvider theme={theme}><AntApp>{contextHolder}<PurchasePage authenticated={authState === 'authenticated'} /></AntApp></ConfigProvider>
+  if (routePath === '/login' || routePath === '/register') {
+    const next = routeParams.get('next') || '/app'
+    if (authState === 'authenticated') { location.replace(next); return null }
+    return <ConfigProvider theme={theme}><AntApp>{contextHolder}<AuthPage loading={false} initialMode={routePath === '/register' ? 'register' : 'login'} next={next} onLogin={login} onRegister={register} onForgot={forgotPassword} /></AntApp></ConfigProvider>
+  }
+  if (authState !== 'authenticated') return <ConfigProvider theme={theme}><AntApp>{contextHolder}<AuthPage loading={false} next="/app" onLogin={login} onRegister={register} onForgot={forgotPassword} /></AntApp></ConfigProvider>
   return <ConfigProvider theme={theme}>
     <AntApp>{contextHolder}<Layout className={`modern-shell ${screen === 'reader' ? 'reader-shell' : ''}`}>
       <Sider className="modern-sider" width={248} breakpoint="lg" collapsedWidth={0} trigger={null} onBreakpoint={broken => { if (broken) setMobileOpen(false) }}>
@@ -198,21 +220,21 @@ function App() {
       </Sider>
       <Drawer placement="left" open={mobileOpen} onClose={() => setMobileOpen(false)} closable={false} width={280} styles={{ body: { padding: 0, background: '#17392b' } }}><Brand /><SidebarMenu nav={nav} settings={settings} screen={screen} selectScreen={selectScreen} /></Drawer>
       <Layout><Header className="modern-header"><Button className="mobile-menu" type="text" icon={<MenuOutlined />} onClick={() => setMobileOpen(true)} /><div className="header-context"><Text className="eyebrow">WORKSPACE / {nav.find(n => n.key === screen)?.label || '设置'}</Text><Text className="header-status"><span className="status-dot" /> 服务正常</Text></div></Header>
-        <Content className="modern-content"><Page loading={pageLoading} screen={screen} books={filteredBooks} allBooks={books} catalogBooks={catalogBooks} libraryBooks={libraryBooks} importTasks={importTasks} learningDays={learningDays} membership={membership} membershipOrders={membershipOrders} rewardStatus={rewardStatus} vocabulary={vocabulary} rewardsCatalog={rewardsCatalog} rewardsLedger={rewardsLedger} adminData={adminData} currentUser={currentUser} devices={devices} preferences={preferences} deletionStatus={deletionStatus} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} selectScreen={selectScreen} openReader={openReader} openImport={() => setImportOpen(true)} messageApi={messageApi} health={health} onRefresh={() => reloadWorkspace({ silent: true })} onCatalogAction={catalogAction} onCancelImport={cancelImport} onUpdateUserStatus={updateUserStatus} onCreateInvitation={createInvitation} onRevokeDevice={revokeDevice} onAdjustQuota={adjustQuota} onUpdateSubscription={updateSubscription} onCreateManualOrder={createManualOrder} onRevokeOwnDevice={revokeOwnDevice} onExportAdminSummary={exportAdminSummary} onCheckIn={checkIn} onRedeemReward={redeemReward} onSavePreferences={savePreferences} onPreferencesChange={mergePreferences} onLogout={logout} onRequestDeletion={requestDeletion} onCancelDeletion={cancelDeletion} /></Content>
+        <Content className="modern-content"><Page loading={pageLoading} screen={screen} books={filteredBooks} allBooks={books} catalogBooks={catalogBooks} libraryBooks={libraryBooks} importTasks={importTasks} learningDays={learningDays} membership={membership} membershipOrders={membershipOrders} rewardStatus={rewardStatus} vocabulary={vocabulary} rewardsCatalog={rewardsCatalog} rewardsLedger={rewardsLedger} adminData={adminData} currentUser={currentUser} devices={devices} preferences={preferences} deletionStatus={deletionStatus} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} selectScreen={selectScreen} openReader={openReader} openImport={() => setImportOpen(true)} messageApi={messageApi} health={health} onRefresh={() => reloadWorkspace({ silent: true })} onCatalogAction={catalogAction} onCancelImport={cancelImport} onUpdateUserStatus={updateUserStatus} onCreateInvitation={createInvitation} onRevokeDevice={revokeDevice} onAdjustQuota={adjustQuota} onUpdateSubscription={updateSubscription} onCreateManualOrder={createManualOrder} onCreateCommerceProduct={createCommerceProduct} onCreateCommerceVersion={createCommerceVersion} onPublishCommerceVersion={publishCommerceVersion} onSetCommerceProductActive={setCommerceProductActive} onRevokeOwnDevice={revokeOwnDevice} onExportAdminSummary={exportAdminSummary} onCheckIn={checkIn} onRedeemReward={redeemReward} onSavePreferences={savePreferences} onPreferencesChange={mergePreferences} onLogout={logout} onRequestDeletion={requestDeletion} onCancelDeletion={cancelDeletion} /></Content>
       </Layout>
     </Layout><ImportModal open={importOpen} onClose={() => setImportOpen(false)} onCreated={() => reloadWorkspace({ silent: true })} messageApi={messageApi} /></AntApp>
   </ConfigProvider>
 }
 
 function Brand() { return <div className="modern-brand"><div className="brand-mark-modern">拾</div><div><Text className="brand-name">拾页</Text><Text className="brand-subtitle">ENGLISH WORKSPACE</Text></div></div> }
-function AuthPage({ loading, onLogin, onRegister, onForgot }) {
+function AuthPage({ loading, initialMode = 'login', next = '/app', onLogin, onRegister, onForgot }) {
   const [form] = Form.useForm()
-  const [mode, setMode] = useState('login')
+  const [mode, setMode] = useState(initialMode)
   const [submitting, setSubmitting] = useState(false)
   const submit = async values => {
     setSubmitting(true)
     try {
-      if (mode === 'login') await onLogin(values)
+      if (mode === 'login') { await onLogin(values); location.href = next }
       else if (mode === 'register') {
         await onRegister({ invitationCode: values.invitationCode, email: values.email, password: values.password })
         setMode('login')
