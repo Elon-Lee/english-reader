@@ -196,7 +196,7 @@ class RewardService:
                     cursor.execute("SELECT 1 FROM invitations WHERE code=%s",(code,))
                     if not cursor.fetchone():break
                 else:raise RuntimeError("unable to create invitation code")
-                invitation_id,member_id=new_id(),new_id();cursor.execute("UPDATE member_invite_allowances SET quantity_remaining=quantity_remaining-1 WHERE id=%s",(allowance["id"],));cursor.execute("INSERT INTO invitations(id,code,max_uses,created_by,note) VALUES(%s,%s,1,%s,'会员邀请')",(invitation_id,code,user_id));cursor.execute("INSERT INTO member_invites(id,inviter_id,invitation_id) VALUES(%s,%s,%s)",(member_id,user_id,invitation_id))
+                invitation_id,member_id,batch_id=new_id(),new_id(),"invite-batch-"+new_id();cursor.execute("UPDATE member_invite_allowances SET quantity_remaining=quantity_remaining-1 WHERE id=%s",(allowance["id"],));cursor.execute("INSERT INTO invitation_batches(id,requested_count,max_uses,created_by,note,channel) VALUES(%s,1,1,%s,'会员邀请','member')",(batch_id,user_id));cursor.execute("INSERT INTO invitations(id,code,max_uses,created_by,note,channel,batch_id) VALUES(%s,%s,1,%s,'会员邀请','member',%s)",(invitation_id,code,user_id,batch_id));cursor.execute("INSERT INTO member_invites(id,inviter_id,invitation_id) VALUES(%s,%s,%s)",(member_id,user_id,invitation_id))
                 return {"id":member_id,"code":code,"status":"active"}
 
     def status(self,user_id:str)->dict[str,Any]:

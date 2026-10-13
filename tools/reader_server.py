@@ -585,6 +585,17 @@ class Handler(SimpleHTTPRequestHandler):
             self.reply({"error":str(exc)},500)
     def do_DELETE(self):
         route=urlsplit(self.path)
+        if SAAS.enabled and route.path.startswith("/api/admin/invitation-batches/") and route.path.endswith("/invitations"):
+            if not self.require_saas_user() or not self.require_csrf():return
+            if not self._saas_session.get("is_admin"):
+                self.reply({"code":"admin_required","error":"该操作仅允许管理员执行。"},403);return
+            batch_id=unquote(route.path[len("/api/admin/invitation-batches/"):-len("/invitations")].rstrip("/"))
+            try:
+                item=self.json_body() if int(self.headers.get("Content-Length","0") or 0)>0 else {}
+                self.reply(ADMIN.delete_unused_invitations(str(self._saas_session["id"]),batch_id,item.get("invitationIds",[])))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"admin_unavailable","error":str(exc)},503)
+            return
         if SAAS.enabled and route.path.startswith("/api/admin/users/") and "/devices/" in route.path:
             if not self.require_saas_user() or not self.require_csrf():return
             if not self._saas_session.get("is_admin"):
@@ -782,6 +793,8 @@ class Handler(SimpleHTTPRequestHandler):
             if path.startswith("/api/admin/users/"):
                 self.reply(ADMIN.user_detail(unquote(path.rsplit("/",1)[1])));return
             if path=="/api/admin/invitations":self.reply(ADMIN.invitations((query.get("limit")or[100])[0],(query.get("q")or[""])[0],(query.get("offset")or[0])[0]));return
+            if path=="/api/admin/invitation-batches":self.reply(ADMIN.invitation_batches((query.get("limit")or[50])[0],(query.get("q")or[""])[0],(query.get("offset")or[0])[0]));return
+            if path.startswith("/api/admin/invitation-batches/"):self.reply(ADMIN.invitation_batch_detail(unquote(path.rsplit("/",1)[1])));return
             if path=="/api/admin/plan-versions":self.reply(ADMIN.plan_versions());return
             if path=="/api/admin/commerce/products":self.reply(COMMERCE.admin_catalog());return
             if path=="/api/admin/commerce/entitlements":self.reply(COMMERCE.entitlement_catalog());return

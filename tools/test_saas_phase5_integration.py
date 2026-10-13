@@ -36,7 +36,7 @@ class PhaseFivePostgresTests(unittest.TestCase):
             with connection.cursor() as cursor:
                 cursor.execute("""TRUNCATE TABLE admin_audit_logs,platform_settings,member_invite_rewards,member_invites,member_invite_allowances,reward_activity_events,reward_daily_activity,reward_redemptions,reward_ledger,checkins,
                 official_book_unlocks,user_library,catalog_book_tags,catalog_books,catalog_tags,catalog_series,membership_audit,usage_ledger,quota_reservations,usage_periods,subscriptions,manual_orders,assets,
-                content_sentence_grammar,content_learning_daily,content_word_annotations,content_vocabulary,content_books,invitation_uses,invitations,password_reset_tokens,email_verifications,user_sessions,devices,user_roles,users,roles RESTART IDENTITY CASCADE""")
+                content_sentence_grammar,content_learning_daily,content_word_annotations,content_vocabulary,content_books,invitation_uses,invitations,invitation_batches,password_reset_tokens,email_verifications,user_sessions,devices,user_roles,users,roles RESTART IDENTITY CASCADE""")
                 cursor.execute("DELETE FROM plan_versions WHERE id='advanced-v2'")
         self.admin=self.accounts.bootstrap_admin();assert self.admin
         invitation=self.accounts.create_invitation("ADMIN-TEST",max_uses=10,created_by=str(self.admin["id"]))
@@ -60,6 +60,21 @@ class PhaseFivePostgresTests(unittest.TestCase):
         self.assertTrue(any(row["email"]=="operator-user@local.test" for row in users))
         self.assertNotIn("passwordHash",users[0])
         exported=self.admin_service.export_summary();self.assertIn("dashboard",exported);self.assertTrue(all("password" not in key.casefold() for row in exported["users"] for key in row))
+
+    def test_invitation_batches_detail_and_delete_only_unused(self):
+        actor=str(self.admin["id"]);created=self.admin_service.create_invitations(actor,"",1,3,None,"batch summary","admin")
+        batch_id=created["batch"]["id"];batches=self.admin_service.invitation_batches()["batches"]
+        self.assertEqual(sum(1 for row in batches if row["id"]==batch_id),1)
+        self.assertEqual(next(row for row in batches if row["id"]==batch_id)["count"],3)
+        used_code=created["invitations"][0]["code"]
+        self.accounts.register("batch-user@local.test","batch user password",used_code)
+        detail=self.admin_service.invitation_batch_detail(batch_id);self.assertEqual(len(detail["invitations"]),3)
+        deletable=[row["id"] for row in detail["invitations"] if row["deletable"]]
+        self.assertEqual(len(deletable),2)
+        deleted=self.admin_service.delete_unused_invitations(actor,batch_id,deletable);self.assertEqual(deleted["deleted"],2);self.assertEqual(deleted["remaining"],1)
+        used_id=next(row["id"] for row in detail["invitations"] if row["code"]==used_code)
+        with self.assertRaises(SaaSError) as blocked:self.admin_service.delete_unused_invitations(actor,batch_id,[used_id])
+        self.assertEqual(blocked.exception.code,"invitation_in_use")
 
     def test_adjustments_allowances_status_and_audit(self):
         actor,user_id=str(self.admin["id"]),str(self.user["id"])

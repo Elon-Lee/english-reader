@@ -48,6 +48,7 @@ def main() -> int:
     check("/api/admin/catalog/sources" in entry and "/api/deployment/config" in entry, "platform operations migration missing")
     check("/api/commerce/products" in entry and "/api/commerce/orders" in entry, "public commerce integration missing")
     check("/api/admin/commerce/entitlements" in entry and "套餐内容" in entry and "历史套餐" in entry, "commerce administration tabs or entitlement catalog missing")
+    check("/api/admin/invitation-batches" in entry and "邀请码创建记录" in entry and "删除所选未使用码" in entry, "invitation batch administration missing")
     check("不是看过" in entry and "固定期限" in entry and "289614546" in entry, "public product or compliance copy missing")
     check("/api/workspace/books/" in entry and "confirmTitle" in entry, "private book lifecycle integration missing")
     reader_page = READER_PAGE.read_text(encoding="utf-8")

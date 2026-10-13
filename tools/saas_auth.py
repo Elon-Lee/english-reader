@@ -294,10 +294,13 @@ class SaaSService:
             raise SaaSError("invalid_invitation", "邀请码使用次数无效。")
         with self.transaction() as connection:
             with connection.cursor() as cursor:
+                batch_id="invite-batch-"+new_id()
+                cursor.execute("""INSERT INTO invitation_batches(id,requested_count,max_uses,expires_at,created_by,note,channel)
+                VALUES(%s,1,%s,%s,%s,%s,%s)""",(batch_id,max_uses,expires_at,created_by,str(note or "")[:1000],str(channel or "")[:100]))
                 cursor.execute(
-                    """INSERT INTO invitations(id,code,max_uses,expires_at,created_by,note,channel)
-                    VALUES(%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
-                    (new_id(), normalized, max_uses, expires_at, created_by, str(note or "")[:1000], str(channel or "")[:100]),
+                    """INSERT INTO invitations(id,code,max_uses,expires_at,created_by,note,channel,batch_id)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+                    (new_id(), normalized, max_uses, expires_at, created_by, str(note or "")[:1000], str(channel or "")[:100],batch_id),
                 )
                 return self._one(cursor) or {}
 

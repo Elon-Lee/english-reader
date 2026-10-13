@@ -10,7 +10,7 @@ import {
   CustomerServiceOutlined, DashboardOutlined, FileTextOutlined, MenuOutlined, MoreOutlined,
   PlusOutlined, ReadOutlined, SettingOutlined, ShopOutlined, StarOutlined, GiftOutlined, ThunderboltFilled, UserOutlined,
 } from '@ant-design/icons'
-import { csrfHeaders, getJson, postJson } from './api/client'
+import { csrfHeaders, deleteJson, getJson, postJson } from './api/client'
 import { DEFAULT_PREFERENCES } from './config/preferences'
 import CatalogPage from './pages/CatalogPage'
 import AdminPage from './pages/AdminPage'
@@ -83,34 +83,36 @@ function App() {
     document.title = publicPage ? '拾页 · 把英语材料真正读懂' : purchaseRoute ? '确认学习方案 · 拾页' : '拾页 · 英语学习工作台'
   }, [publicPage, purchaseRoute])
 
-  const reloadWorkspace = async ({ silent = false } = {}) => {
+  const reloadWorkspace = async ({ silent = false, targetScreen = screen } = {}) => {
     const loadId = silent ? loadSequence.current : ++loadSequence.current
     if (!silent) setPageLoading(true)
+    let authenticated = false
     try {
       const authResponse = await fetch('/api/auth/me', { credentials: 'include' })
       if (authResponse.status === 401) { setAuthState('unauthenticated'); return }
       if (!authResponse.ok) throw new Error('无法读取登录状态')
       const userData = await authResponse.json()
+      authenticated = true
       setAuthState('authenticated')
       setCurrentUser(userData.user || null)
     if (!consoleRoute) return
-    const needBooks = ['workspace', 'library', 'stats', 'vocab'].includes(screen)
+    const needBooks = ['workspace', 'library', 'stats', 'vocab'].includes(targetScreen)
     const [healthData, deviceData, workspaceData, vocabularyData, catalogData, libraryData, daysData, membershipData, membershipOrderData, rewardData, rewardsCatalogData, rewardsLedgerData, importsData, preferencesData, deletionData] = await Promise.all([
       getJson('/api/health', health),
-      screen === 'settings' ? getJson('/api/auth/devices', { devices: [] }) : Promise.resolve({ devices }),
+      targetScreen === 'settings' ? getJson('/api/auth/devices', { devices: [] }) : Promise.resolve({ devices }),
       needBooks ? getJson('/api/workspace/books', { books: [] }) : Promise.resolve({ books: [] }),
-      screen === 'vocab' ? getJson('/api/workspace/vocabulary', { items: [] }) : Promise.resolve({ items: vocabulary }),
-      screen === 'catalog' ? getJson('/api/catalog?limit=60', { books: [] }) : Promise.resolve({ books: [] }),
-      screen === 'library' ? getJson('/api/library', { items: [] }) : Promise.resolve({ items: [] }),
-      ['workspace', 'stats'].includes(screen) ? getJson('/api/workspace/learning-days?limit=365', { days: [] }) : Promise.resolve({ days: learningDays }),
-      screen === 'membership' ? getJson('/api/membership/usage', null) : Promise.resolve(membership),
-      screen === 'membership' ? getJson('/api/membership/orders', { orders: [] }) : Promise.resolve({ orders: membershipOrders }),
-      ['workspace', 'rewards'].includes(screen) ? getJson('/api/rewards/status', null) : Promise.resolve(rewardStatus),
-      screen === 'rewards' ? getJson('/api/rewards/catalog', { rewards: [] }) : Promise.resolve({ rewards: rewardsCatalog }),
-      screen === 'rewards' ? getJson('/api/rewards/ledger', { items: [] }) : Promise.resolve({ items: rewardsLedger }),
-      screen === 'library' ? getJson('/api/workspace/imports', { tasks: [] }) : Promise.resolve({ tasks: importTasks }),
-      ['settings', 'reader'].includes(screen) ? getJson('/api/preferences', preferences) : Promise.resolve(preferences),
-      screen === 'settings' ? getJson('/api/account/deletion-status', { status: 'none' }) : Promise.resolve(deletionStatus),
+      targetScreen === 'vocab' ? getJson('/api/workspace/vocabulary', { items: [] }) : Promise.resolve({ items: vocabulary }),
+      targetScreen === 'catalog' ? getJson('/api/catalog?limit=60', { books: [] }) : Promise.resolve({ books: [] }),
+      targetScreen === 'library' ? getJson('/api/library', { items: [] }) : Promise.resolve({ items: [] }),
+      ['workspace', 'stats'].includes(targetScreen) ? getJson('/api/workspace/learning-days?limit=365', { days: [] }) : Promise.resolve({ days: learningDays }),
+      targetScreen === 'membership' ? getJson('/api/membership/usage', null) : Promise.resolve(membership),
+      targetScreen === 'membership' ? getJson('/api/membership/orders', { orders: [] }) : Promise.resolve({ orders: membershipOrders }),
+      ['workspace', 'rewards'].includes(targetScreen) ? getJson('/api/rewards/status', null) : Promise.resolve(rewardStatus),
+      targetScreen === 'rewards' ? getJson('/api/rewards/catalog', { rewards: [] }) : Promise.resolve({ rewards: rewardsCatalog }),
+      targetScreen === 'rewards' ? getJson('/api/rewards/ledger', { items: [] }) : Promise.resolve({ items: rewardsLedger }),
+      targetScreen === 'library' ? getJson('/api/workspace/imports', { tasks: [] }) : Promise.resolve({ tasks: importTasks }),
+      ['settings', 'reader'].includes(targetScreen) ? getJson('/api/preferences', preferences) : Promise.resolve(preferences),
+      targetScreen === 'settings' ? getJson('/api/account/deletion-status', { status: 'none' }) : Promise.resolve(deletionStatus),
     ])
     setHealth(healthData)
     setDevices(deviceData.devices || [])
@@ -121,8 +123,8 @@ function App() {
     const officialBooks = (catalogData.books || []).map((book, i) => normalizeBook(book, i, '官方读物'))
     const savedBooks = (libraryData.items || []).map((book, i) => normalizeBook(book, i, '官方读物'))
     if (needBooks) setBooks(workspaceBooks)
-    if (screen === 'library') setLibraryBooks([...workspaceBooks, ...savedBooks])
-    if (screen === 'catalog') setCatalogBooks(officialBooks)
+    if (targetScreen === 'library') setLibraryBooks([...workspaceBooks, ...savedBooks])
+    if (targetScreen === 'catalog') setCatalogBooks(officialBooks)
     setLearningDays(daysData.days || [])
     setMembership(membershipData)
     setMembershipOrders(membershipOrderData.orders || [])
@@ -130,18 +132,21 @@ function App() {
     setRewardsCatalog(rewardsCatalogData.rewards || [])
     setRewardsLedger(rewardsLedgerData.items || [])
     setImportTasks(importsData.tasks || [])
-    if (screen === 'admin' && userData.user?.isAdmin) {
-      const [adminDashboard, adminUsers, adminAudit, adminInvitations, adminPlanVersions, adminCommerce, adminEntitlements] = await Promise.all([
-        getJson('/api/admin/dashboard', null), getJson('/api/admin/users?limit=50', { users: [] }), getJson('/api/admin/audit?limit=20', { items: [] }), getJson('/api/admin/invitations?limit=20', { invitations: [] }), getJson('/api/admin/plan-versions', { planVersions: [] }), getJson('/api/admin/commerce/products', { products: [] }), getJson('/api/admin/commerce/entitlements', { builtIn: [], configured: [] }),
+    if (targetScreen === 'admin' && userData.user?.isAdmin) {
+      const [adminDashboard, adminUsers, adminPlanVersions, adminCommerce, adminEntitlements] = await Promise.all([
+        getJson('/api/admin/dashboard', null), getJson('/api/admin/users?limit=50', { users: [] }), getJson('/api/admin/plan-versions', { planVersions: [] }), getJson('/api/admin/commerce/products', { products: [] }), getJson('/api/admin/commerce/entitlements', { builtIn: [], configured: [] }),
       ])
-      setAdminData({ dashboard: adminDashboard, users: adminUsers.users || [], audit: adminAudit.items || [], invitations: adminInvitations.invitations || [], planVersions: adminPlanVersions.planVersions || [], commerceProducts: adminCommerce.products || [], commerceEntitlements: adminEntitlements })
+      setAdminData({ dashboard: adminDashboard, users: adminUsers.users || [], audit: [], planVersions: adminPlanVersions.planVersions || [], commerceProducts: adminCommerce.products || [], commerceEntitlements: adminEntitlements })
     }
+    } catch (error) {
+      error.afterAuthentication = authenticated
+      throw error
     } finally {
       if (!silent && loadId === loadSequence.current) setPageLoading(false)
     }
   }
-  useEffect(() => { reloadWorkspace().catch(error => { messageApi.error(error.message || '工作台加载失败'); setAuthState('unauthenticated') }) }, [screen])
-  useEffect(() => { const syncRoute = () => { setPageLoading(true); setScreen(new URLSearchParams(location.search).get('screen') || 'workspace') }; addEventListener('popstate', syncRoute); return () => removeEventListener('popstate', syncRoute) }, [])
+  useEffect(() => { reloadWorkspace({ targetScreen: screen }).catch(error => { messageApi.error(error.message || '工作台加载失败'); if (!error.afterAuthentication) setAuthState('unauthenticated') }) }, [screen])
+  useEffect(() => { const syncRoute = () => { const next = new URLSearchParams(location.search).get('screen') || 'workspace'; if (next === screen) reloadWorkspace({ targetScreen: next }).catch(error => messageApi.error(error.message || '页面刷新失败')); else { setPageLoading(true); setScreen(next) } }; addEventListener('popstate', syncRoute); return () => removeEventListener('popstate', syncRoute) }, [screen])
   useEffect(() => {
     if (screen !== 'library' || !importTasks.some(task => ['queued', 'uploading', 'running', 'processing', 'awaiting_processor'].includes(task.status))) return undefined
     const timer = setInterval(() => reloadWorkspace({ silent: true }), 3000)
@@ -164,6 +169,7 @@ function App() {
   const createInvitation = async payload => {
     try { const result = await postJson('/api/admin/invitations', payload); await reloadWorkspace({ silent: true }); const items = result.invitations || [result]; messageApi.success(items.length > 1 ? `已生成 ${items.length} 个邀请码` : `邀请码 ${items[0]?.code || ''} 已创建`); return result } catch (error) { messageApi.error(error.message || '邀请码创建失败'); throw error }
   }
+  const deleteUnusedInvitations = async (batchId, invitationIds) => { try { const result = await deleteJson(`/api/admin/invitation-batches/${encodeURIComponent(batchId)}/invitations`, { invitationIds }); await reloadWorkspace({ silent: true, targetScreen: 'admin' }); messageApi.success(`已删除 ${result.deleted || 0} 个未使用邀请码`); return result } catch (error) { messageApi.error(error.message || '删除邀请码失败'); throw error } }
   const revokeDevice = async (userId, deviceId) => {
     Modal.confirm({ title: '确认撤销该设备？', content: '撤销后，该设备的活跃会话会立即失效，需要重新登录。', okText: '确认撤销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { const response = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE', credentials: 'include', headers: csrfHeaders() }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '设备撤销失败'); await reloadWorkspace({ silent: true }); messageApi.success('设备已撤销') } catch (error) { messageApi.error(error.message || '设备撤销失败'); throw error } } })
   }
@@ -200,7 +206,7 @@ function App() {
 
   const nav = [{ key: 'workspace', icon: <DashboardOutlined />, label: '学习空间' }, { key: 'catalog', icon: <ShopOutlined />, label: '首页 · 书城' }, { key: 'library', icon: <BookOutlined />, label: '我的书架' }, { key: 'stats', icon: <BarChartOutlined />, label: '学习记录' }, { key: 'vocab', icon: <StarOutlined />, label: '生词复习' }, { key: 'rewards', icon: <GiftOutlined />, label: '成长奖励' }, { key: 'membership', icon: <ThunderboltFilled />, label: '会员中心' }, { key: 'admin', icon: <AppstoreOutlined />, label: '运营后台' }, { key: 'platform', icon: <SettingOutlined />, label: '平台与部署' }].filter(item => !['admin', 'platform'].includes(item.key) || currentUser?.isAdmin)
   const settings = [{ key: 'settings', icon: <SettingOutlined />, label: '系统设置' }]
-  const selectScreen = key => { setPageLoading(true); setScreen(key); setMobileOpen(false); history.pushState({}, '', `${modernEntryPath()}?screen=${key}`) }
+  const selectScreen = key => { setMobileOpen(false); if (key === screen) { if (pageLoading) reloadWorkspace({ targetScreen: key }).catch(error => messageApi.error(error.message || '页面刷新失败')); return } setPageLoading(true); setScreen(key); history.pushState({}, '', `${modernEntryPath()}?screen=${key}`) }
   const openReader = book => { const kind = book.source === '官方读物' ? 'official' : 'workspace'; location.href = `${modernEntryPath()}?screen=reader&reader=${kind}&id=${encodeURIComponent(book.id)}` }
 
   const theme = { token: { colorPrimary: '#2f6f50', colorInfo: '#2f6f50', borderRadius: 12, fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif' }, components: { Layout: { siderBg: '#17392b', headerBg: '#fbfaf7' }, Menu: { darkItemBg: '#17392b', darkItemSelectedBg: '#2b5943', darkItemHoverBg: '#234b38', itemBorderRadius: 10 } } }
@@ -222,7 +228,7 @@ function App() {
       </Sider>
       <Drawer placement="left" open={mobileOpen} onClose={() => setMobileOpen(false)} closable={false} width={280} styles={{ body: { padding: 0, background: '#17392b' } }}><Brand /><SidebarMenu nav={nav} settings={settings} screen={screen} selectScreen={selectScreen} /></Drawer>
       <Layout><Header className="modern-header"><Button className="mobile-menu" type="text" icon={<MenuOutlined />} onClick={() => setMobileOpen(true)} /><div className="header-context"><Text className="eyebrow">WORKSPACE / {nav.find(n => n.key === screen)?.label || '设置'}</Text><Text className="header-status"><span className="status-dot" /> 服务正常</Text></div></Header>
-        <Content className="modern-content"><Page loading={pageLoading} screen={screen} books={filteredBooks} allBooks={books} catalogBooks={catalogBooks} libraryBooks={libraryBooks} importTasks={importTasks} learningDays={learningDays} membership={membership} membershipOrders={membershipOrders} rewardStatus={rewardStatus} vocabulary={vocabulary} rewardsCatalog={rewardsCatalog} rewardsLedger={rewardsLedger} adminData={adminData} currentUser={currentUser} devices={devices} preferences={preferences} deletionStatus={deletionStatus} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} selectScreen={selectScreen} openReader={openReader} openImport={() => setImportOpen(true)} messageApi={messageApi} health={health} onRefresh={() => reloadWorkspace({ silent: true })} onCatalogAction={catalogAction} onCancelImport={cancelImport} onUpdateUserStatus={updateUserStatus} onCreateInvitation={createInvitation} onRevokeDevice={revokeDevice} onAdjustQuota={adjustQuota} onUpdateSubscription={updateSubscription} onCreateManualOrder={createManualOrder} onCreateCommerceProduct={createCommerceProduct} onCreateCommerceVersion={createCommerceVersion} onPublishCommerceVersion={publishCommerceVersion} onSetCommerceProductActive={setCommerceProductActive} onCreateConfiguredBenefit={createConfiguredBenefit} onUpdateConfiguredBenefit={updateConfiguredBenefit} onRevokeOwnDevice={revokeOwnDevice} onExportAdminSummary={exportAdminSummary} onCheckIn={checkIn} onRedeemReward={redeemReward} onSavePreferences={savePreferences} onPreferencesChange={mergePreferences} onLogout={logout} onRequestDeletion={requestDeletion} onCancelDeletion={cancelDeletion} /></Content>
+        <Content className="modern-content"><Page loading={pageLoading} screen={screen} books={filteredBooks} allBooks={books} catalogBooks={catalogBooks} libraryBooks={libraryBooks} importTasks={importTasks} learningDays={learningDays} membership={membership} membershipOrders={membershipOrders} rewardStatus={rewardStatus} vocabulary={vocabulary} rewardsCatalog={rewardsCatalog} rewardsLedger={rewardsLedger} adminData={adminData} currentUser={currentUser} devices={devices} preferences={preferences} deletionStatus={deletionStatus} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} selectScreen={selectScreen} openReader={openReader} openImport={() => setImportOpen(true)} messageApi={messageApi} health={health} onRefresh={() => reloadWorkspace({ silent: true, targetScreen: screen })} onCatalogAction={catalogAction} onCancelImport={cancelImport} onUpdateUserStatus={updateUserStatus} onCreateInvitation={createInvitation} onDeleteUnusedInvitations={deleteUnusedInvitations} onRevokeDevice={revokeDevice} onAdjustQuota={adjustQuota} onUpdateSubscription={updateSubscription} onCreateManualOrder={createManualOrder} onCreateCommerceProduct={createCommerceProduct} onCreateCommerceVersion={createCommerceVersion} onPublishCommerceVersion={publishCommerceVersion} onSetCommerceProductActive={setCommerceProductActive} onCreateConfiguredBenefit={createConfiguredBenefit} onUpdateConfiguredBenefit={updateConfiguredBenefit} onRevokeOwnDevice={revokeOwnDevice} onExportAdminSummary={exportAdminSummary} onCheckIn={checkIn} onRedeemReward={redeemReward} onSavePreferences={savePreferences} onPreferencesChange={mergePreferences} onLogout={logout} onRequestDeletion={requestDeletion} onCancelDeletion={cancelDeletion} /></Content>
       </Layout>
     </Layout><ImportModal open={importOpen} onClose={() => setImportOpen(false)} onCreated={() => reloadWorkspace({ silent: true })} messageApi={messageApi} /></AntApp>
   </ConfigProvider>

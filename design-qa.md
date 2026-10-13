@@ -126,3 +126,29 @@ There are no remaining actionable P0, P1, or P2 findings in the verified PC publ
 - Fresh final operations-browser console had no errors or warnings.
 - Final result for this iteration: passed.
 
+## Operations overview, invitation batches, and navigation stability
+
+### Evidence
+
+- Overview status icons: `.local/debug/product-design/admin-invites-20261013/03-overview-icons.png` — 1862 × 968.
+- Invitation batch summary list: `.local/debug/product-design/admin-invites-20261013/01-batch-list.png` — 1862 × 968.
+- Invitation batch detail and multi-select state: `.local/debug/product-design/admin-invites-20261013/02-batch-detail-selection.png` — 1862 × 968.
+
+### Findings and fixes
+
+- P2: Overview metrics were text-only and difficult to scan by operational meaning.
+  - Fix: added Ant Design semantic icons and restrained green, blue, orange, and purple icon fields for users, verification, subscriptions, and catalog content.
+- P1: Creating several invitations produced several top-level rows, obscuring the fact that they came from one operation.
+  - Fix: each create action now persists one invitation batch record. The list renders one summary row with requested/remaining counts, usage summary, expiry, channel, and status.
+- P1: Operators could not inspect or safely clean up a partially used invitation creation.
+  - Fix: detail drawer lists individual codes and registration emails, supports copying, enables selection only for deletable unused codes, and exposes a destructive batch-delete confirmation. Used or reward-linked invitations are rejected server-side.
+- P1: rapid sidebar switching could leave the shared page skeleton visible when requests overlapped or a post-auth page request failed.
+  - Fix: loads now take an explicit target screen; only the latest foreground load clears the skeleton; authenticated data failures no longer log the user out; clicking the currently selected menu while loading triggers a retry; admin invitation/audit data is loaded lazily inside its tab, reducing initial request fan-out.
+
+### Verification
+
+- Rapidly switched Catalog → Stats → Membership → Operations in one interaction sequence; the final Operations page recovered without refresh.
+- Fresh final browser console contained no errors or warnings.
+- Invitation service tests verify one row per batch, detail contents, deletion of unused codes, and rejection of used-code deletion.
+- Final result for this iteration: passed.
+

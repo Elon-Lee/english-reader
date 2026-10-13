@@ -9,7 +9,7 @@ import secrets
 from datetime import datetime
 from typing import Any
 
-from saas_auth import SaaSError, SaaSService, new_id
+from saas_auth import SaaSError, SaaSService, new_id, utcnow
 from saas_membership import FEATURES, MembershipService, as_json, parse_time, timestamp
 
 
@@ -122,8 +122,78 @@ class AdminService:
         try:quantity=max(1,min(100,int(count)))
         except (TypeError,ValueError) as exc:raise SaaSError("invalid_invitation","生成数量无效。",400) from exc
         if str(code or "").strip() and quantity>1:raise SaaSError("invalid_invitation","指定邀请码时只能生成一个；批量生成请留空邀请码。",400)
-        invitations=[self.create_invitation(actor_id,code if index==0 else "",max_uses,expires_at,note,channel) for index in range(quantity)]
-        return {**(invitations[0] if len(invitations)==1 else {}),"invitations":invitations,"count":len(invitations)}
+        try:uses=int(max_uses)
+        except (TypeError,ValueError) as exc:raise SaaSError("invalid_invitation","邀请码使用次数无效。",400) from exc
+        if uses<1 or uses>1_000_000:raise SaaSError("invalid_invitation","邀请码使用次数无效。",400)
+        expiry=parse_time(expires_at,"expiresAt") if expires_at else None
+        normalized=re.sub(r"\s+","",str(code or "").upper());batch_id="invite-batch-"+new_id();items=[]
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""INSERT INTO invitation_batches(id,requested_count,max_uses,expires_at,created_by,note,channel)
+                VALUES(%s,%s,%s,%s,%s,%s,%s)""",(batch_id,quantity,uses,expiry,actor_id,str(note or "")[:1000],str(channel or "")[:100]))
+                for index in range(quantity):
+                    candidate=normalized if index==0 and normalized else f"SHIYUE-{secrets.token_hex(5).upper()}"
+                    if not re.fullmatch(r"[A-Z0-9_-]{4,64}",candidate):raise SaaSError("invalid_invitation","邀请码需为 4～64 位的大写字母、数字、下划线或连字符。")
+                    invitation_id=new_id();cursor.execute("""INSERT INTO invitations(id,code,max_uses,expires_at,created_by,note,channel,batch_id)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",(invitation_id,candidate,uses,expiry,actor_id,str(note or "")[:1000],str(channel or "")[:100],batch_id))
+                    items.append({"id":invitation_id,"code":candidate,"maxUses":uses,"usedCount":0,"status":"active","deletable":True})
+                self._audit(cursor,actor_id,"invitation_batch_created",None,note,{"batchId":batch_id,"count":quantity,"maxUses":uses,"channel":channel})
+        result={"batch":{"id":batch_id,"count":quantity,"unusedCount":quantity,"usedCount":0,"maxUses":uses,"expiresAt":timestamp(expiry),"note":str(note or "")[:1000],"channel":str(channel or "")[:100],"createdAt":timestamp(utcnow())},"invitations":items,"count":quantity}
+        if quantity==1:result.update({"id":items[0]["id"],"code":items[0]["code"],"channel":str(channel or "")[:100],"maxUses":uses,"expiresAt":timestamp(expiry)})
+        return result
+
+    def invitation_batches(self,limit:Any=50,query:str="",offset:Any=0)->dict[str,Any]:
+        size=max(1,min(200,int(limit)));start=max(0,int(offset));term=str(query or "").strip();values=[]
+        where=""
+        if term:
+            where="WHERE (b.note ILIKE %s OR b.channel ILIKE %s OR EXISTS(SELECT 1 FROM invitations ix WHERE ix.batch_id=b.id AND ix.code ILIKE %s))"
+            values=[f"%{term}%"]*3
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT COUNT(*) AS total FROM invitation_batches b {where}",values);total=int((self.accounts._one(cursor)or{"total":0})["total"])
+                cursor.execute(f"""SELECT b.*,u.email AS creator_email,COUNT(i.id) AS actual_count,
+                COUNT(i.id) FILTER(WHERE i.used_count=0) AS unused_count,COUNT(i.id) FILTER(WHERE i.used_count>0) AS used_count,
+                COALESCE(SUM(i.used_count),0) AS registrations
+                FROM invitation_batches b LEFT JOIN invitations i ON i.batch_id=b.id LEFT JOIN users u ON u.id=b.created_by
+                {where} GROUP BY b.id,u.email ORDER BY b.created_at DESC LIMIT %s OFFSET %s""",(*values,size,start))
+                batches=[]
+                for row in self.accounts._many(cursor):
+                    expired=bool(row["expires_at"] and row["expires_at"]<=datetime.now().astimezone())
+                    actual=int(row["actual_count"]);unused=int(row["unused_count"]);used=int(row["used_count"])
+                    status="expired" if expired else "empty" if actual==0 else "unused" if used==0 else "partial" if unused>0 else "used"
+                    batches.append({"id":row["id"],"count":actual,"requestedCount":int(row["requested_count"]),"unusedCount":unused,"usedCount":used,"registrations":int(row["registrations"]),"maxUses":int(row["max_uses"]),"expiresAt":timestamp(row["expires_at"]),"note":row["note"],"channel":row["channel"],"createdBy":row["creator_email"],"createdAt":timestamp(row["created_at"]),"status":status})
+                return {"batches":batches,"total":total,"limit":size,"offset":start}
+
+    def invitation_batch_detail(self,batch_id:str)->dict[str,Any]:
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT b.*,u.email AS creator_email FROM invitation_batches b LEFT JOIN users u ON u.id=b.created_by WHERE b.id=%s",(batch_id,));batch=self.accounts._one(cursor)
+                if not batch:raise SaaSError("invitation_batch_not_found","邀请码批次不存在。",404)
+                cursor.execute("""SELECT i.*,NOT EXISTS(SELECT 1 FROM invitation_uses iu WHERE iu.invitation_id=i.id)
+                AND NOT EXISTS(SELECT 1 FROM member_invites mi WHERE mi.invitation_id=i.id) AS deletable
+                FROM invitations i WHERE i.batch_id=%s ORDER BY i.created_at,i.code""",(batch_id,));codes=[]
+                for row in self.accounts._many(cursor):
+                    cursor.execute("SELECT email,used_at FROM invitation_uses WHERE invitation_id=%s ORDER BY used_at",(row["id"],));uses=[{"email":item["email"],"usedAt":timestamp(item["used_at"])} for item in self.accounts._many(cursor)]
+                    codes.append({"id":row["id"],"code":row["code"],"status":row["status"],"maxUses":int(row["max_uses"]),"usedCount":int(row["used_count"]),"verificationEmailCount":int(row["verification_email_count"]),"deletable":bool(row["deletable"] and int(row["used_count"])==0),"uses":uses})
+                return {"batch":{"id":batch["id"],"requestedCount":int(batch["requested_count"]),"maxUses":int(batch["max_uses"]),"expiresAt":timestamp(batch["expires_at"]),"note":batch["note"],"channel":batch["channel"],"createdBy":batch["creator_email"],"createdAt":timestamp(batch["created_at"])},"invitations":codes}
+
+    def delete_unused_invitations(self,actor_id:str,batch_id:str,invitation_ids:Any)->dict[str,Any]:
+        ids=[str(item).strip() for item in (invitation_ids or []) if str(item).strip()]
+        if not ids:raise SaaSError("invitation_selection_required","请选择要删除的未使用邀请码。",400)
+        if len(ids)>100:raise SaaSError("invalid_invitation_selection","单次最多删除 100 个邀请码。",400)
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""SELECT i.id,i.code,i.used_count,EXISTS(SELECT 1 FROM invitation_uses iu WHERE iu.invitation_id=i.id) AS has_uses,
+                EXISTS(SELECT 1 FROM member_invites mi WHERE mi.invitation_id=i.id) AS has_referral
+                FROM invitations i WHERE i.batch_id=%s AND i.id=ANY(%s) FOR UPDATE""",(batch_id,ids));rows=self.accounts._many(cursor)
+                if len(rows)!=len(set(ids)):raise SaaSError("invalid_invitation_selection","部分邀请码不存在或不属于该批次。",400)
+                blocked=[row["code"] for row in rows if int(row["used_count"])>0 or row["has_uses"] or row["has_referral"]]
+                if blocked:raise SaaSError("invitation_in_use","已使用或关联邀请奖励的邀请码不能删除。",409,{"codes":blocked})
+                cursor.execute("DELETE FROM invitations WHERE batch_id=%s AND id=ANY(%s)",(batch_id,ids));deleted=cursor.rowcount
+                cursor.execute("SELECT COUNT(*) AS total FROM invitations WHERE batch_id=%s",(batch_id,));remaining=int((self.accounts._one(cursor)or{"total":0})["total"])
+                if remaining==0:cursor.execute("DELETE FROM invitation_batches WHERE id=%s",(batch_id,))
+                self._audit(cursor,actor_id,"unused_invitations_deleted",None,"批量删除未使用邀请码",{"batchId":batch_id,"invitationIds":ids,"deleted":deleted})
+                return {"batchId":batch_id,"deleted":int(deleted),"remaining":remaining,"batchDeleted":remaining==0}
 
     def adjust_quota(self, actor_id: str, user_id: str, feature: str, quantity: Any, reason: str, idempotency_key: str) -> dict[str, Any]:
         if not str(reason or "").strip():raise SaaSError("audit_reason_required","调整额度需要填写原因。",400)
