@@ -22,6 +22,18 @@ FEATURES = (
     "devices",
 )
 
+FEATURE_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "official_library_capacity": {"name": "官方书架容量", "unit": "本", "default": 30, "minimum": 0, "control": "加入官方书架时校验当前容量"},
+    "official_unlocks": {"name": "学习材料使用额度", "unit": "次/30天", "default": 12, "minimum": 0, "control": "解锁公版及授权学习材料时预占并结算"},
+    "ai_context_generations": {"name": "词汇语境分析", "unit": "次/30天", "default": 300, "minimum": 0, "control": "生成词汇语境前预占额度，失败自动释放"},
+    "ai_grammar_generations": {"name": "句法分析", "unit": "次/30天", "default": 100, "minimum": 0, "control": "生成句法分析前预占额度，失败自动释放"},
+    "mp3_imports": {"name": "MP3 学习导入", "unit": "次/30天", "default": 5, "minimum": 0, "control": "创建 MP3 导入任务时预占额度"},
+    "video_imports": {"name": "视频学习导入", "unit": "次/30天", "default": 3, "minimum": 0, "control": "创建视频导入任务时预占额度"},
+    "youtube_imports": {"name": "在线视频学习导入", "unit": "次/30天", "default": 5, "minimum": 0, "control": "创建在线视频导入任务时预占额度"},
+    "storage_bytes": {"name": "私人学习空间", "unit": "GB", "default": 20, "minimum": 0, "storage": True, "control": "上传原文件和生成媒体变体时按字节结算"},
+    "devices": {"name": "登录设备", "unit": "台", "default": 2, "minimum": 1, "required": True, "control": "新设备登录时校验活跃设备数量"},
+}
+
 
 def as_json(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):

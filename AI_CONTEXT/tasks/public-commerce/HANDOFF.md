@@ -16,6 +16,8 @@
 - 年卡额度每 30 天重置；V1 年卡已 retired，V2 已 published，旧版本仍可查询。
 - 正式本地库与隔离测试库已应用 `0018`–`0022`；京东云生产尚未应用或部署。
 - Product Design PC 验收通过：`design-qa.md`；截图目录：`.local/debug/product-design/public-commerce-20261013/`。
+- 运营后台已改为 Tab：概览、套餐管理、套餐内容、用户与订阅、邀请码、审计记录。套餐管理为列表布局，行操作菜单提供查看、新版本、历史套餐和停售/恢复；套餐内容区分系统受控内置项与展示型配置项。
+- 新套餐版本不再接受任意权益文案或选择旧权益版本：只能勾选服务器权益注册表中的真实功能并设置限制，后台自动生成独立会员权益版本。运行时额度拦截已通过集成测试。
 
 ## 用户已确认的产品要求
 
@@ -71,6 +73,7 @@
 
 - `tools/saas_billing.py`
 - `tools/saas_migrations/0018_paddle_billing.sql`
+- `tools/saas_migrations/0023_commerce_entitlement_catalog.sql`
 - `tools/test_paddle_billing.py`
 - `tools/test_saas_billing_integration.py`
 - `frontend/src/pages/MembershipPage.jsx` 中的 Paddle Checkout/自动续费 UI
@@ -162,7 +165,7 @@
 ## 已执行验证
 
 - Paddle webhook 单元测试通过；面包多官方 MD5 签名单元测试通过。
-- 隔离 PostgreSQL 商品版本、年卡周期和面包多查单幂等开通测试通过。
+- 隔离 PostgreSQL 商品版本、权益内容库、运行时额度限制、年卡周期和面包多查单幂等开通测试通过。
 - SaaS 阶段 9 集成测试、公开商品 smoke、认证/CSRF/工作区 smoke 通过。
 - `npm run build:modern`、`npm run test:modern`、`npm run test:ui`、`npm run check:js` 通过。
 - `python3 -m py_compile tools/reader_server.py tools/saas_*.py` 通过。

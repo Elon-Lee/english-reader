@@ -784,6 +784,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path=="/api/admin/invitations":self.reply(ADMIN.invitations((query.get("limit")or[100])[0],(query.get("q")or[""])[0],(query.get("offset")or[0])[0]));return
             if path=="/api/admin/plan-versions":self.reply(ADMIN.plan_versions());return
             if path=="/api/admin/commerce/products":self.reply(COMMERCE.admin_catalog());return
+            if path=="/api/admin/commerce/entitlements":self.reply(COMMERCE.entitlement_catalog());return
             if path=="/api/admin/catalog/sources":self.reply(CATALOG.review_sources());return
             if path=="/api/admin/audit":self.reply(ADMIN.audit((query.get("limit")or[100])[0],(query.get("q")or[""])[0],(query.get("action")or[""])[0]));return
             if path=="/api/admin/platform-config":self.reply(ADMIN.platform_config());return
@@ -827,6 +828,10 @@ class Handler(SimpleHTTPRequestHandler):
                 result=MEMBERSHIPS.update_subscription(actor_id,str(item.get("subscriptionId","")).strip(),action,item.get("endsAt"),str(item.get("note","")or""));ADMIN.record_action(actor_id,f"subscription_{action}",None,str(item.get("note","")or""),{"subscriptionId":item.get("subscriptionId")});self.reply(result);return
             if path=="/api/admin/commerce/products":
                 self.reply(COMMERCE.create_product(actor_id,item.get("slug"),item.get("family"),item.get("displayOrder",100)),201);return
+            if path=="/api/admin/commerce/configured-benefits":
+                self.reply(COMMERCE.create_configured_benefit(actor_id,item),201);return
+            if path.startswith("/api/admin/commerce/configured-benefits/"):
+                benefit_id=unquote(path.rsplit("/",1)[1]);self.reply(COMMERCE.update_configured_benefit(actor_id,benefit_id,item));return
             if path.startswith("/api/admin/commerce/products/") and path.endswith("/versions"):
                 product_id=unquote(path[len("/api/admin/commerce/products/"):-len("/versions")].rstrip("/"));self.reply(COMMERCE.create_version(actor_id,product_id,item),201);return
             if path.startswith("/api/admin/commerce/products/") and path.endswith("/status"):

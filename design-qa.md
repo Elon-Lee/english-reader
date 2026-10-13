@@ -98,3 +98,31 @@ This is not a pixel-clone comparison against an external mock. It is a product-s
 
 There are no remaining actionable P0, P1, or P2 findings in the verified PC public-commerce flow. The remaining items are intentionally deferred P3 visual refinement or the separate mobile phase.
 
+## Operations package-management iteration
+
+### Source and implementation evidence
+
+- Earlier card-heavy administration source: `.local/debug/product-design/public-commerce-20261013/05-admin-products.png` — 1862 × 912.
+- Final package list: `.local/debug/product-design/admin-commerce-20261013/01-plan-list.png` — 1862 × 968.
+- Final version drawer: `.local/debug/product-design/admin-commerce-20261013/02-version-drawer.png` — 1862 × 968.
+- Final entitlement catalog: `.local/debug/product-design/admin-commerce-20261013/03-entitlements.png` — 1862 × 968.
+
+### Findings and fixes
+
+- P1: Package cards expanded every version and pushed users, invitations, and audits far below the fold.
+  - Fix: operations is split into six tabs; package management uses a compact searchable table.
+- P1: Package actions were exposed as several competing inline buttons.
+  - Fix: each row has one action menu containing current version, new version, historical packages, and stop/resume sales.
+- P0: Free-text benefit entry could promise features that the product did not enforce.
+  - Fix: built-in entitlements are sourced from the nine server-enforced feature keys only. New versions use checkboxes plus validated numeric limits, and publishing activates a dedicated immutable `plan_version` whose `quotas_json` is used by runtime reservations, storage checks, login-device checks, imports, and catalog limits.
+- P1: Operational service promises and enforced quotas were mixed together.
+  - Fix: a dedicated Package Content tab separates built-in system-controlled items from configurable display-only items. Configured items are snapshotted into product versions but never written into quota ledgers.
+- P2: Creating or editing a version in a modal was too dense for nine feature controls.
+  - Fix: version creation uses a wide drawer with grouped basic information, built-in feature controls, and configurable benefits.
+
+### Interaction and console verification
+
+- Tab switching, package filters, row action menu, new-version drawer, entitlement selection, history entry points, and configured-benefit management were visually inspected.
+- Fresh final operations-browser console had no errors or warnings.
+- Final result for this iteration: passed.
+

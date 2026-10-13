@@ -4,7 +4,7 @@
 
 - 主服务：`tools/reader_server.py`。
 - PostgreSQL 服务模块：`tools/saas_auth.py`、`saas_membership.py`、`saas_catalog.py`、`saas_workspace.py`、`saas_imports.py`、`saas_ai.py`、`saas_admin.py` 等。
-- 最新 migration：`0022_mbdpay_events.sql`；`0018`–`0022` 已应用正式本地库和隔离测试库，京东云生产库尚未应用。新增不可变商品版本、固定期限订单快照、年卡 30 天额度周期和面包多事件账本。
+- 最新 migration：`0023_commerce_entitlement_catalog.sql`；`0018`–`0023` 已应用正式本地库和隔离测试库，京东云生产库尚未应用。`0023` 增加配置权益内容库与商品版本配置权益快照。
 - 认证使用数据库会话 Cookie 和 CSRF；所有写接口必须校验 CSRF。
 - 测试库名称必须以 `_test` 结尾。
 - 京东云生产运行 PostgreSQL 16 Bookworm、Redis 7 Bookworm 和 `shiyue-saas-runtime:20261012-1`；数据库和 Redis 端口仅绑定 `127.0.0.1`，应用通过 host network 访问。
@@ -27,6 +27,7 @@
 - 2026-10-13 本地修复管理员用户详情查询：人工订单表字段应为 `plan_version_id`，此前错误查询 `plan_version` 会令存在人工订单的用户详情返回失败。阶段 5 测试和隔离浏览器验收均通过；未部署远程。
 - 2026-10-13 已完成 Paddle Billing 本地第一版：新增 `tools/saas_billing.py` 和 migration `0018`；会员页可创建 Paddle Transaction、加载官方 overlay Checkout、展示 Paddle/人工订单，并通过客户门户更新付款方式或取消自动续费。`/api/billing/webhooks/paddle` 保留原始请求体验签，按 Paddle event ID 幂等处理交易与订阅生命周期，只在 `transaction.completed` 或有效订阅状态同步后创建/更新本地会员权益。API Key、webhook secret 仅从环境变量读取，浏览器只获取 Paddle client-side token。已完成 webhook 单元测试、隔离 PostgreSQL 自动开通/重复事件测试和现有阶段 2 回归。Paddle 正式账号已由用户注册；切换 sandbox 时 Paddle 要求为沙盒账号单独重置密码，目前等待用户完成邮件中的沙盒密码设置，然后才能创建沙盒产品、价格、API Key、客户端 Token 和 webhook。
 - 2026-10-13 已实现面包多固定期限支付闭环：本地不可变商品订单、官方 MD5 签名、支付宝安全表单、webhook 幂等、服务端主动查单、金额核验、同套餐顺延或新开会员、前端订单轮询。未配置密钥时不创建订单或展示可点击支付按钮。长期会员按套餐 `period_days` 重置额度，当前付费套餐每 30 天生成新 `usage_period`。
+- 2026-10-13 套餐版本改为从服务器权益注册表创建：内置权益只包含 9 个现有运行时真实受控功能；运营勾选并设置限制后，后台自动创建独立不可变 `plan_version`，发布时激活。存储 GB 转换为字节，AI/导入/解锁/书架/设备限制继续由现有运行时校验。配置权益另存为版本快照，只用于展示，不进入额度账本。
 
 ## 未完成
 

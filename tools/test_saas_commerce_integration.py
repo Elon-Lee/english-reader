@@ -8,7 +8,7 @@ from datetime import timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from saas_auth import SaaSService, new_id, token_hash, utcnow
+from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
 from saas_commerce import CommerceService
 from saas_mbdpay import MbdPayService
 from saas_membership import MembershipService
@@ -45,14 +45,17 @@ class CommercePostgresTests(unittest.TestCase):
                 migrations = Path(__file__).with_name("saas_migrations")
                 cursor.execute((migrations / "0020_restore_public_commerce_seed.sql").read_text(encoding="utf-8"))
                 cursor.execute((migrations / "0021_annual_products_monthly_allowances.sql").read_text(encoding="utf-8"))
-                cursor.execute("DELETE FROM commerce_product_versions WHERE product_id IN (SELECT id FROM commerce_products WHERE slug='commerce-test-90')")
-                cursor.execute("DELETE FROM commerce_products WHERE slug='commerce-test-90'")
+                cursor.execute((migrations / "0023_commerce_entitlement_catalog.sql").read_text(encoding="utf-8"))
                 cursor.execute("DELETE FROM external_subscriptions WHERE user_id IN (SELECT id FROM users WHERE email='commerce-cycle@local.test')")
                 cursor.execute("DELETE FROM payment_orders WHERE user_id IN (SELECT id FROM users WHERE email='commerce-cycle@local.test')")
                 cursor.execute("DELETE FROM subscriptions WHERE user_id IN (SELECT id FROM users WHERE email='commerce-cycle@local.test')")
                 cursor.execute("DELETE FROM manual_orders WHERE user_id IN (SELECT id FROM users WHERE email='commerce-cycle@local.test')")
                 cursor.execute("DELETE FROM users WHERE email='commerce-cycle@local.test'")
                 cursor.execute("DELETE FROM invitations WHERE code='COMMERCE-CYCLE-TEST'")
+                cursor.execute("DELETE FROM commerce_product_versions WHERE product_id IN (SELECT id FROM commerce_products WHERE slug='commerce-test-90')")
+                cursor.execute("DELETE FROM plan_versions WHERE id LIKE 'commerce-commerce-test-90-v%'")
+                cursor.execute("DELETE FROM commerce_products WHERE slug='commerce-test-90'")
+                cursor.execute("DELETE FROM commerce_configured_benefits WHERE code='commerce-test-support'")
 
     def create_verified_user(self):
         invite = self.accounts.create_invitation("COMMERCE-CYCLE-TEST", max_uses=1, created_by=str(self.admin["id"]))
@@ -66,14 +69,16 @@ class CommercePostgresTests(unittest.TestCase):
 
     def test_new_version_retires_previous_without_rewriting_it(self):
         product = self.commerce.create_product(str(self.admin["id"]), "commerce-test-90", "advanced", 999)
+        configured = self.commerce.create_configured_benefit(str(self.admin["id"]), {"code": "commerce-test-support", "name": "测试客服权益", "description": "仅展示，不参与额度控制", "defaultText": "测试客服支持"})
+        limits = {"official_library_capacity": 20, "official_unlocks": 8, "ai_context_generations": 120, "ai_grammar_generations": 60, "mp3_imports": 3, "video_imports": 2, "youtube_imports": 2, "storage_bytes": 10, "devices": 2}
         first = self.commerce.create_version(str(self.admin["id"]), product["id"], {
             "name": "测试会员 90 天", "shortName": "测试 90 天", "tagline": "第一版卖点", "description": "第一版商品说明",
-            "durationDays": 90, "amountCents": 9900, "planVersion": "advanced-v1", "benefits": ["权益一", "权益二", "权益三"],
+            "durationDays": 90, "amountCents": 9900, "featureLimits": limits, "configuredBenefitIds": [configured["id"]],
         })
         self.commerce.publish_version(str(self.admin["id"]), first["id"])
         second = self.commerce.create_version(str(self.admin["id"]), product["id"], {
             "name": "测试会员 90 天新版", "shortName": "测试 90 天", "tagline": "第二版卖点", "description": "第二版商品说明",
-            "durationDays": 90, "amountCents": 10900, "planVersion": "advanced-v1", "benefits": ["权益一新版", "权益二", "权益三"], "featured": True,
+            "durationDays": 90, "amountCents": 10900, "featureLimits": {**limits, "ai_context_generations": 240}, "configuredBenefitIds": [configured["id"]], "featured": True,
         })
         self.commerce.publish_version(str(self.admin["id"]), second["id"])
         public = self.commerce.product("commerce-test-90")["product"]
@@ -82,6 +87,33 @@ class CommercePostgresTests(unittest.TestCase):
         admin = next(item for item in self.commerce.admin_catalog()["products"] if item["id"] == product["id"])
         self.assertEqual([item["status"] for item in admin["versions"]], ["published", "retired"])
         self.assertEqual(admin["versions"][1]["amountCents"], 9900)
+        self.assertEqual(admin["versions"][0]["featureLimits"]["ai_context_generations"], 240)
+        self.assertEqual(admin["versions"][0]["configuredBenefits"][0]["text"], "测试客服支持")
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT quotas_json->>'ai_context_generations',quotas_json->>'storage_bytes',quotas_json->>'devices',active FROM plan_versions WHERE id=%s", (admin["versions"][0]["planVersion"],))
+                self.assertEqual(cursor.fetchone(), ("240", str(10 * 1024**3), "2", True))
+
+    def test_entitlement_catalog_only_exposes_enforced_features(self):
+        catalog = self.commerce.entitlement_catalog()
+        self.assertEqual({item["key"] for item in catalog["builtIn"]}, {"official_library_capacity", "official_unlocks", "ai_context_generations", "ai_grammar_generations", "mp3_imports", "video_imports", "youtube_imports", "storage_bytes", "devices"})
+        self.assertTrue(all(item["enforced"] and item["control"] for item in catalog["builtIn"]))
+        self.assertIn("support-7x8", {item["code"] for item in catalog["configured"]})
+
+    def test_published_feature_limits_control_runtime_usage(self):
+        product = self.commerce.create_product(str(self.admin["id"]), "commerce-test-90", "advanced", 999)
+        limits = {"official_library_capacity": 3, "official_unlocks": 1, "ai_context_generations": 2, "ai_grammar_generations": 1, "mp3_imports": 0, "video_imports": 0, "youtube_imports": 0, "storage_bytes": 2, "devices": 1}
+        version = self.commerce.create_version(str(self.admin["id"]), product["id"], {"name": "运行时限制测试", "shortName": "限制测试", "tagline": "验证真实额度控制", "description": "用于验证新套餐的功能限制会进入运行时额度系统。", "durationDays": 30, "amountCents": 100, "featureLimits": limits, "configuredBenefitIds": []})
+        self.commerce.publish_version(str(self.admin["id"]), version["id"])
+        plan_version = self.commerce.product("commerce-test-90")["product"]["planVersion"]
+        user = self.create_verified_user()
+        self.memberships.create_manual_order(str(self.admin["id"]), str(user["id"]), plan_version, utcnow() - timedelta(minutes=1), utcnow() + timedelta(days=30), amount_cents=100)
+        self.memberships.reserve(str(user["id"]), "ai_context_generations", "runtime-limit-1")
+        self.memberships.reserve(str(user["id"]), "ai_context_generations", "runtime-limit-2")
+        with self.assertRaises(SaaSError) as exceeded:
+            self.memberships.reserve(str(user["id"]), "ai_context_generations", "runtime-limit-3")
+        self.assertEqual(exceeded.exception.code, "quota_exceeded")
+        self.assertEqual(exceeded.exception.details["limit"], 2)
 
     def test_seeded_catalog_has_fixed_term_products(self):
         products = self.commerce.public_catalog()["products"]
