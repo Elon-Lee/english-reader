@@ -23,7 +23,7 @@ from saas_membership import MembershipService, as_json, timestamp
 from youtube_subtitles import has_translated_english_track, select_chinese_track, select_native_english_track
 
 
-IMPORT_FEATURES={"mp3":"mp3_imports","video":"video_imports","youtube":"youtube_imports"}
+IMPORT_FEATURES={}
 UPLOAD_LIMITS={"text":20*1024*1024,"document":100*1024*1024,"mp3":2*1024*1024*1024,"video":20*1024*1024*1024}
 
 
@@ -345,6 +345,11 @@ class WorkspaceImportService:
                     current=self._task(cursor,user_id,task_id)
                     if current["status"]=="complete":return {"task":self._public(current),"idempotent":True}
                     if current["status"]!="running":raise SaaSError("import_task_terminal","任务在处理期间已取消或结束。",409)
+                    cursor.execute("SELECT id FROM users WHERE id=%s AND status='active' FOR UPDATE",(user_id,))
+                    if not self.accounts._one(cursor):raise SaaSError("account_unavailable","账号不可用。",403)
+                    context=self.memberships._context(cursor,user_id,lock_user=False)
+                    media_kind="video" if source_type in {"video","youtube"} else "audio" if source_type=="audio" else ""
+                    self.memberships.assert_media_capacity(cursor,user_id,context,media_kind)
                     cursor.execute("""INSERT INTO content_books(id,owner_id,title,english_title,series,level,source_type,source_path,status,visibility,cover_url,page_base_url,audio_url,pdf_url,video_url,duration,alignment,data_json,quality_json,created_at,updated_at)
                     VALUES(%s,%s,%s,%s,'私人导入','',%s,%s,'ready','private',%s,'',%s,'',%s,%s,%s,%s::jsonb,'{}'::jsonb,NOW(),NOW())""",(book_id,user_id,title,title,source_type,f"workspace/{user_id}/{task_id}",str(data.get("cover","")or""),str(data.get("audio","")or""),str(data.get("video","")or""),float(data.get("duration",0)or 0),str(data.get("alignment","")or""),json.dumps(data,ensure_ascii=False)))
                     cursor.execute("UPDATE media_assets SET content_book_id=%s,kind=%s WHERE id=%s",(book_id,source_type,work["source_asset_id"]))

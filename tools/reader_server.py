@@ -43,7 +43,7 @@ from saas_ai import WorkspaceAIService
 from saas_billing import PaddleBillingService
 from saas_cache import SaaSCache
 from saas_commerce import CommerceService
-from saas_mbdpay import MbdPayService
+from saas_redemptions import RedemptionService
 from youtube_subtitles import has_translated_english_track,select_chinese_track,select_native_english_track
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -87,14 +87,14 @@ WORKSPACE_IMPORTS=WorkspaceImportService(SAAS,MEMBERSHIPS,MEDIA)
 WORKSPACE_AI=WorkspaceAIService(SAAS,MEMBERSHIPS)
 BILLING=PaddleBillingService(SAAS,MEMBERSHIPS)
 COMMERCE=CommerceService(SAAS)
-MBDPAY=MbdPayService(SAAS,MEMBERSHIPS)
+REDEMPTIONS=RedemptionService(SAAS,MEMBERSHIPS)
 CACHE_SERVICE=SaaSCache()
 RATE_LIMIT_LOCK=threading.Lock()
 RATE_LIMIT_BUCKETS=defaultdict(deque)
 RATE_LIMIT_RULES={
     "/api/auth/login":(10,300),"/api/auth/register":(8,3600),"/api/auth/forgot-password":(5,3600),
     "/api/auth/reset-password":(8,3600),"/api/checkins":(30,3600),"/api/word-context":(60,3600),"/api/sentence-grammar":(60,3600),
-    "/api/word-hover":(300,3600),"/api/word-dictionary":(120,3600),"/api/commerce/webhooks/mbdpay":(120,300),
+    "/api/word-hover":(300,3600),"/api/word-dictionary":(120,3600),"/api/membership/redeem":(10,300),
 }
 
 def run_import_process(job_id,command,log_path):
@@ -204,7 +204,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Cross-Origin-Opener-Policy","same-origin")
         self.send_header("Cross-Origin-Resource-Policy","same-origin")
         if SAAS.enabled:
-            self.send_header("Content-Security-Policy","default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://openapi.alipay.com")
+            self.send_header("Content-Security-Policy","default-src 'self'; img-src 'self' data:; media-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
         if urlsplit(getattr(self,"path","")).path.lower().endswith((".mp3",".wav",".m4a",".ogg")):
             self.send_header("Accept-Ranges","bytes")
         super().end_headers()
@@ -237,10 +237,7 @@ class Handler(SimpleHTTPRequestHandler):
             except SaaSConfigurationError as exc:self.reply({"code":"commerce_unavailable","error":str(exc)},503)
             return
         if SAAS.enabled and route.path.startswith("/api/commerce/orders/"):
-            if not self.require_saas_user(verified=True):return
-            try:self.reply(MBDPAY.order(str(self._saas_session["id"]),unquote(route.path.rsplit("/",1)[1])))
-            except SaaSError as exc:self.reply(exc.payload(),exc.status)
-            except SaaSConfigurationError as exc:self.reply({"code":"commerce_unavailable","error":str(exc)},503)
+            self.reply({"code":"payment_provider_retired","error":"支付订单接口已停用；请通过云猫购买并在拾页兑换。"},410)
             return
         if SAAS.enabled and (route.path=="/api/workspace/imports" or route.path.startswith("/api/workspace/imports/")):
             if not self.require_saas_user(verified=True):return
@@ -277,7 +274,7 @@ class Handler(SimpleHTTPRequestHandler):
         if SAAS.enabled and route.path=="/api/billing/config":
             if not self.require_saas_user(verified=True):return
             self.reply(BILLING.public_config());return
-        if SAAS.enabled and route.path in {"/api/membership","/api/membership/usage","/api/membership/orders","/api/membership/plans","/api/membership/requests"}:
+        if SAAS.enabled and (route.path in {"/api/membership","/api/membership/usage","/api/membership/orders","/api/membership/plans","/api/membership/requests","/api/membership/change-orders","/api/membership/change-preview","/api/admin/commerce/redemption-batches"} or route.path.startswith("/api/membership/change-orders/")):
             if not self.require_saas_user(): return
             self.membership_get(route.path); return
         if SAAS.enabled and route.path in {"/api/word-hover","/api/word-dictionary","/api/word-tts"}:
@@ -441,14 +438,7 @@ class Handler(SimpleHTTPRequestHandler):
         route=urlsplit(self.path)
         if not self.rate_limit(route.path):return
         if SAAS.enabled and route.path=="/api/commerce/webhooks/mbdpay":
-            try:
-                item=self.json_body(max_length=2*1024*1024)
-                if not isinstance(item,dict):raise SaaSError("invalid_mbdpay_event","面包多通知格式无效。")
-                self.reply(MBDPAY.handle_webhook(item))
-            except SaaSError as exc:self.reply(exc.payload(),exc.status)
-            except SaaSConfigurationError as exc:self.reply({"code":"commerce_unavailable","error":str(exc)},503)
-            except Exception:self.reply({"code":"commerce_webhook_failed","error":"支付通知处理失败，等待渠道重试。"},500)
-            return
+            self.reply({"code":"payment_provider_retired","error":"该支付通知接口已停用。"},410);return
         if SAAS.enabled and route.path=="/api/billing/webhooks/paddle":
             length=int(self.headers.get("Content-Length","0") or 0)
             if length<=0 or length>2*1024*1024:
@@ -498,13 +488,22 @@ class Handler(SimpleHTTPRequestHandler):
             except SaaSError as exc:self.reply(exc.payload(),exc.status)
             except SaaSConfigurationError as exc:self.reply({"code":"membership_unavailable","error":str(exc)},503)
             return
-        if SAAS.enabled and route.path=="/api/commerce/orders":
+        if SAAS.enabled and route.path=="/api/membership/redeem":
             if not self.require_saas_user(verified=True) or not self.require_csrf():return
             try:
-                item=self.json_body();self.reply(MBDPAY.create_order(str(self._saas_session["id"]),item.get("slug"),item.get("idempotencyKey")),201)
+                item=self.json_body()
+                self.reply(REDEMPTIONS.redeem(str(self._saas_session["id"]),item.get("code"),item.get("idempotencyKey")))
             except SaaSError as exc:self.reply(exc.payload(),exc.status)
-            except SaaSConfigurationError as exc:self.reply({"code":"commerce_unavailable","error":str(exc)},503)
+            except SaaSConfigurationError as exc:self.reply({"code":"membership_unavailable","error":str(exc)},503)
             return
+        if SAAS.enabled and route.path=="/api/membership/change-orders":
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                item=self.json_body(); self.reply(MEMBERSHIPS.cancel_change_order(str(self._saas_session["id"]), str(item.get("id", "")).strip()))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            return
+        if SAAS.enabled and route.path=="/api/commerce/orders":
+            self.reply({"code":"payment_provider_retired","error":"请通过云猫购买并在拾页兑换。"},410);return
         if SAAS.enabled and route.path in {"/api/billing/checkout","/api/billing/manage"}:
             if not self.require_saas_user(verified=True) or not self.require_csrf():return
             try:
@@ -585,6 +584,14 @@ class Handler(SimpleHTTPRequestHandler):
             self.reply({"error":str(exc)},500)
     def do_DELETE(self):
         route=urlsplit(self.path)
+        if SAAS.enabled and route.path.startswith("/api/membership/change-orders/"):
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                change_id=unquote(route.path.rsplit("/",1)[1])
+                self.reply(MEMBERSHIPS.cancel_change_order(str(self._saas_session["id"]), change_id))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"membership_unavailable","error":str(exc)},503)
+            return
         if SAAS.enabled and route.path.startswith("/api/admin/invitation-batches/") and route.path.endswith("/invitations"):
             if not self.require_saas_user() or not self.require_csrf():return
             if not self._saas_session.get("is_admin"):
@@ -740,6 +747,14 @@ class Handler(SimpleHTTPRequestHandler):
             if path=="/api/membership": self.reply(MEMBERSHIPS.membership(user_id));return
             if path=="/api/membership/usage": self.reply(MEMBERSHIPS.usage(user_id));return
             if path=="/api/membership/orders": self.reply({"orders":MEMBERSHIPS.orders(user_id)});return
+            if path=="/api/membership/change-orders": self.reply({"changeOrders":MEMBERSHIPS.change_orders(user_id)});return
+            if path=="/api/membership/change-preview":
+                target=(parse_qs(urlsplit(self.path).query).get("targetPlan") or [""])[0]
+                self.reply(MEMBERSHIPS.change_preview(user_id, unquote(target)));return
+            if path=="/api/admin/commerce/redemption-batches":
+                if not self._saas_session.get("is_admin"):
+                    self.reply({"code":"admin_required","error":"该操作仅允许管理员执行。"},403);return
+                self.reply(REDEMPTIONS.batches(parse_qs(urlsplit(self.path).query).get("limit",[100])[0]));return
             if path=="/api/membership/plans":self.reply(MEMBERSHIPS.plans());return
             if path=="/api/membership/requests":self.reply(MEMBERSHIPS.change_requests(user_id));return
             self.reply({"error":"not found"},404)
@@ -841,6 +856,10 @@ class Handler(SimpleHTTPRequestHandler):
                 result=MEMBERSHIPS.update_subscription(actor_id,str(item.get("subscriptionId","")).strip(),action,item.get("endsAt"),str(item.get("note","")or""));ADMIN.record_action(actor_id,f"subscription_{action}",None,str(item.get("note","")or""),{"subscriptionId":item.get("subscriptionId")});self.reply(result);return
             if path=="/api/admin/commerce/products":
                 self.reply(COMMERCE.create_product(actor_id,item.get("slug"),item.get("family"),item.get("displayOrder",100)),201);return
+            if path=="/api/admin/commerce/redemption-batches":
+                self.reply(REDEMPTIONS.generate(actor_id,item.get("productVersionId"),item.get("count"),item.get("note","")),201);return
+            if path=="/api/admin/commerce/redemption-codes/revoke":
+                self.reply(REDEMPTIONS.revoke(actor_id,item.get("code"),item.get("reason")));return
             if path=="/api/admin/commerce/configured-benefits":
                 self.reply(COMMERCE.create_configured_benefit(actor_id,item),201);return
             if path.startswith("/api/admin/commerce/configured-benefits/"):
@@ -851,6 +870,8 @@ class Handler(SimpleHTTPRequestHandler):
                 product_id=unquote(path[len("/api/admin/commerce/products/"):-len("/status")].rstrip("/"));self.reply(COMMERCE.set_product_active(actor_id,product_id,bool(item.get("active"))));return
             if path.startswith("/api/admin/commerce/versions/") and path.endswith("/publish"):
                 version_id=unquote(path[len("/api/admin/commerce/versions/"):-len("/publish")].rstrip("/"));self.reply(COMMERCE.publish_version(actor_id,version_id));return
+            if path.startswith("/api/admin/commerce/versions/") and path.endswith("/purchase-link"):
+                version_id=unquote(path[len("/api/admin/commerce/versions/"):-len("/purchase-link")].rstrip("/"));self.reply(COMMERCE.update_draft_purchase_url(actor_id,version_id,item.get("purchaseUrl")));return
             if path.startswith("/api/admin/users/") and path.endswith("/status"):
                 user_id=unquote(path[len("/api/admin/users/"):-len("/status")].rstrip("/"));self.reply(ADMIN.set_user_status(actor_id,user_id,str(item.get("status","")).strip(),str(item.get("reason","")or"")));return
             self.reply({"error":"not found"},404)

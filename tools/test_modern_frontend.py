@@ -13,6 +13,8 @@ ASSETS = SITE / "assets"
 READER_PAGE = ROOT / "frontend" / "src" / "pages" / "ReaderPage.jsx"
 MODERN_STYLES = ROOT / "frontend" / "src" / "styles.css"
 MODERN_SOURCE = ROOT / "frontend" / "src" / "main.jsx"
+PUBLIC_SITE = ROOT / "frontend" / "src" / "pages" / "PublicSite.jsx"
+MEMBERSHIP_PAGE = ROOT / "frontend" / "src" / "pages" / "MembershipPage.jsx"
 PAGE_SKELETON = ROOT / "frontend" / "src" / "components" / "PageSkeleton.jsx"
 
 
@@ -46,9 +48,20 @@ def main() -> int:
     check("/api/workspace/annotations" in entry and "MediaRecorder" in entry, "desktop reader parity controls missing")
     check("/api/word-tts" in entry and "controlsList" in entry, "reader pronunciation or protected media controls missing")
     check("/api/admin/catalog/sources" in entry and "/api/deployment/config" in entry, "platform operations migration missing")
-    check("/api/commerce/products" in entry and "/api/commerce/orders" in entry, "public commerce integration missing")
+    check("/api/commerce/products" in entry and "/api/membership/redeem" in entry and "purchaseUrl" in entry, "CloudCat commerce redemption integration missing")
+    check("购买 / 兑换" in entry and "打开云猫购买" in entry and "已有兑换码？" in entry, "CloudCat purchase flow must open an in-place purchase and redemption dialog")
+    check("public-purchase-modal" in entry and "云猫兑换码" in entry, "in-place CloudCat redemption dialog missing")
+    public_site = PUBLIC_SITE.read_text(encoding="utf-8")
+    check(re.search(r"import\s*\{[^}]*\bInput\b[^}]*\}\s*from\s*['\"]antd['\"]", public_site, re.S), "purchase redemption input must be imported from Ant Design")
+    check("onClick={() => onPurchase(product)}" in public_site and "purchaseHref" not in public_site, "pricing purchase CTA must open an in-place dialog rather than navigate to an intermediate page")
+    membership_page = MEMBERSHIP_PAGE.read_text(encoding="utf-8")
+    check("<CloudCatPurchaseModal" in membership_page and "onClick={() => openPurchase(product)}" in membership_page, "membership upgrade must use the current-page CloudCat purchase dialog")
+    check("/purchase/${product.slug}" not in membership_page, "membership upgrade must not navigate to the intermediate purchase page")
+    check("<PageErrorBoundary key={routePath}><PurchasePage" in MODERN_SOURCE.read_text(encoding="utf-8"), "purchase route must show a recoverable render error instead of going blank")
+    check("/api/admin/commerce/redemption-batches" in entry and "兑换码库存" in entry, "redemption inventory administration missing")
     check("/api/admin/commerce/entitlements" in entry and "套餐内容" in entry and "历史套餐" in entry, "commerce administration tabs or entitlement catalog missing")
     check("/api/admin/invitation-batches" in entry and "邀请码创建记录" in entry and "删除所选未使用码" in entry, "invitation batch administration missing")
+    check("membership.subscription.endsAt" in MEMBERSHIP_PAGE.read_text(encoding="utf-8") and "queuedSubscriptions" not in MEMBERSHIP_PAGE.read_text(encoding="utf-8"), "membership page must show the current expiry without presenting renewal schedules")
     check("不是看过" in entry and "固定期限" in entry and "289614546" in entry, "public product or compliance copy missing")
     check("/api/workspace/books/" in entry and "confirmTitle" in entry, "private book lifecycle integration missing")
     reader_page = READER_PAGE.read_text(encoding="utf-8")

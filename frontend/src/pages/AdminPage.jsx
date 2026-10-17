@@ -6,6 +6,7 @@ import { BookOutlined, CheckCircleOutlined, CrownOutlined, FileTextOutlined, Plu
 import { getJson } from '../api/client'
 import BenefitAdmin from '../components/BenefitAdmin'
 import CommerceAdmin from '../components/CommerceAdmin'
+import RedemptionAdmin from '../components/RedemptionAdmin'
 
 const { Paragraph, Text, Title } = Typography
 const { RangePicker } = DatePicker
@@ -83,6 +84,7 @@ export default function AdminPage({ adminData, onUpdateUserStatus, onCreateInvit
   const tabItems = [
     { key: 'overview', label: '概览', children: <Space direction="vertical" size={20} style={{ width: '100%' }}>{metrics}<Card title="快捷操作"><Space wrap><Button type="primary" onClick={() => setActiveTab('plans')}>管理套餐</Button><Button onClick={openOrder}>创建人工订阅</Button><Button onClick={() => setInviteOpen(true)}>创建邀请码</Button><Button icon={<FileTextOutlined />} onClick={onExportAdminSummary}>导出数据</Button></Space></Card></Space> },
     { key: 'plans', label: '套餐管理', children: <Card><CommerceAdmin products={adminData?.commerceProducts || []} entitlements={adminData?.commerceEntitlements || { builtIn: [], configured: [] }} onCreateProduct={onCreateCommerceProduct} onCreateVersion={onCreateCommerceVersion} onPublishVersion={onPublishCommerceVersion} onSetProductActive={onSetCommerceProductActive} /></Card> },
+    { key: 'redemptions', label: '兑换码库存', children: <RedemptionAdmin products={adminData?.commerceProducts || []} /> },
     { key: 'benefits', label: '套餐内容', children: <BenefitAdmin entitlements={adminData?.commerceEntitlements || { builtIn: [], configured: [] }} onCreate={onCreateConfiguredBenefit} onUpdate={onUpdateConfiguredBenefit} /> },
     { key: 'users', label: '用户与订阅', children: <Card title="用户与订阅" extra={<Button onClick={openOrder}>创建人工订阅</Button>}><Table rowKey="id" columns={columns} dataSource={users} pagination={{ pageSize: 8 }} scroll={{ x: 860 }} /></Card> },
     { key: 'invites', label: '邀请码', children: <Card title="邀请码创建记录" extra={<Space><Input.Search allowClear placeholder="搜索批次备注、渠道或邀请码" value={inviteQuery} onChange={event => { setInviteQuery(event.target.value); setInvitePage(1) }} style={{ width: 290 }} /><Button type="primary" icon={<PlusOutlined />} onClick={() => setInviteOpen(true)}>创建邀请码</Button></Space>}><Table rowKey="id" columns={invitationColumns} dataSource={inviteData.batches || []} pagination={false} locale={{ emptyText: <Empty description="暂无邀请码创建记录" /> }} />{inviteData.total > invitePageSize && <Pagination className="admin-invite-pagination" current={invitePage} pageSize={invitePageSize} total={inviteData.total} showSizeChanger={false} onChange={setInvitePage} />}</Card> },

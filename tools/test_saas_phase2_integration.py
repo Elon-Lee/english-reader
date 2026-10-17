@@ -68,14 +68,14 @@ class PhaseTwoPostgresTests(unittest.TestCase):
 
     def test_default_plan_and_period_are_immutable_snapshot(self):
         membership = self.memberships.membership(str(self.user["id"]), include_usage=True)
-        self.assertEqual(membership["plan"]["id"], "free-v1")
-        self.assertEqual(membership["plan"]["quotas"]["ai_context_generations"], 20)
-        self.assertEqual(len(membership["usage"]), 9)
+        self.assertEqual(membership["plan"]["id"], "free-v2")
+        self.assertEqual(membership["plan"]["quotas"]["ai_context_generations"], 50)
+        self.assertEqual(len(membership["usage"]), 11)
         self.assertEqual(next(item for item in membership["usage"] if item["feature"] == "storage_bytes")["limit"], 1024**3)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT limits_json->>'ai_context_generations' FROM usage_periods WHERE user_id=%s", (self.user["id"],))
-                self.assertEqual(cursor.fetchone()[0], "20")
+                self.assertEqual(cursor.fetchone()[0], "50")
 
     def test_concurrent_reservation_cannot_overspend_and_duplicate_is_idempotent(self):
         user_id = str(self.user["id"])
@@ -91,10 +91,10 @@ class PhaseTwoPostgresTests(unittest.TestCase):
             results = list(workers.map(reserve, range(25)))
         reservations = [item for item in results if isinstance(item, dict)]
         errors = [item for item in results if isinstance(item, SaaSError)]
-        self.assertEqual(len(reservations), 20)
-        self.assertEqual(len(errors), 5)
+        self.assertEqual(len(reservations), 25)
+        self.assertEqual(len(errors), 0)
         self.assertTrue(all(item.code == "quota_exceeded" for item in errors))
-        self.assertTrue(all(item.details["limit"] == 20 and item.details["used"] == 0 for item in errors))
+        self.assertTrue(all(item.details["limit"] == 50 and item.details["used"] == 0 for item in errors))
         first = reservations[0]
         repeated = self.memberships.reserve(user_id, "ai_context_generations", first["idempotencyKey"])
         self.assertTrue(repeated["idempotent"])
@@ -104,18 +104,41 @@ class PhaseTwoPostgresTests(unittest.TestCase):
         usage = self.memberships.usage(user_id)
         context = next(item for item in usage["usage"] if item["feature"] == "ai_context_generations")
         self.assertEqual(context["used"], 1)
-        self.assertEqual(context["reserved"], 19)
+        self.assertEqual(context["reserved"], 24)
+
+    def test_free_ai_limits_are_daily_and_paid_ai_is_unlimited(self):
+        user_id = str(self.user["id"])
+        for index in range(50):
+            self.memberships.reserve(user_id, "ai_context_generations", f"daily-context-{index}")
+        with self.assertRaises(SaaSError) as exceeded:
+            self.memberships.reserve(user_id, "ai_context_generations", "daily-context-50")
+        self.assertEqual(exceeded.exception.code, "quota_exceeded")
+        self.assertEqual(exceeded.exception.details["limit"], 50)
+        self.assertTrue(str(exceeded.exception.details["resetAt"]).endswith("+08:00"))
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM usage_periods WHERE user_id=%s AND period_key LIKE 'ai-day:%%'", (user_id,))
+                self.assertEqual(cursor.fetchone()[0], 1)
+        self.memberships.create_manual_order(str(self.admin["id"]), user_id, "advanced-v1", utcnow(), utcnow() + timedelta(days=30), "paid AI unlimited", 1900)
+        paid = self.memberships.membership(user_id, include_usage=True)
+        context = next(item for item in paid["usage"] if item["feature"] == "ai_context_generations")
+        grammar = next(item for item in paid["usage"] if item["feature"] == "ai_grammar_generations")
+        self.assertTrue(context["unlimited"])
+        self.assertTrue(grammar["unlimited"])
+        for index in range(60):
+            result = self.memberships.reserve(user_id, "ai_context_generations", f"paid-context-{index}")["reservation"]
+            self.assertEqual(result["state"], "settled")
 
     def test_release_returns_reserved_quota_and_credit_is_atomic(self):
         user_id = str(self.user["id"])
-        reservation = self.memberships.reserve(user_id, "youtube_imports", "cancelled-youtube")["reservation"]
+        reservation = self.memberships.reserve(user_id, "ai_context_generations", "cancelled-context")["reservation"]
         self.memberships.release(user_id, reservation["id"])
-        again = self.memberships.reserve(user_id, "youtube_imports", "second-youtube")["reservation"]
+        again = self.memberships.reserve(user_id, "ai_context_generations", "second-context")["reservation"]
         self.assertEqual(again["state"], "reserved")
         before = self.memberships.credit(user_id, "ai_grammar_generations", 5, "support-credit-1", str(self.admin["id"]), "support")
         duplicate = self.memberships.credit(user_id, "ai_grammar_generations", 5, "support-credit-1", str(self.admin["id"]), "support")
-        self.assertEqual(before["available"], 15)
-        self.assertEqual(duplicate["available"], 15)
+        self.assertEqual(before["available"], 25)
+        self.assertEqual(duplicate["available"], 25)
 
     def test_manual_order_updates_membership_and_suspend_reverts_to_free(self):
         user_id = str(self.user["id"])
@@ -129,7 +152,7 @@ class PhaseTwoPostgresTests(unittest.TestCase):
         self.assertEqual(orders[0]["amountCents"], 3900)
         suspended = self.memberships.update_subscription(str(self.admin["id"]), created["subscription"]["id"], "suspend", note="manual pause")
         self.assertEqual(suspended["subscription"]["status"], "suspended")
-        self.assertEqual(suspended["membership"]["plan"]["id"], "free-v1")
+        self.assertEqual(suspended["membership"]["plan"]["id"], "free-v2")
         activated = self.memberships.update_subscription(str(self.admin["id"]), created["subscription"]["id"], "activate")
         self.assertEqual(activated["membership"]["plan"]["id"], "advanced-v1")
         extended = self.memberships.update_subscription(str(self.admin["id"]), created["subscription"]["id"], "extend", utcnow() + timedelta(days=60))
@@ -149,7 +172,7 @@ class PhaseTwoPostgresTests(unittest.TestCase):
         user_id=str(self.user["id"])
         created=self.memberships.create_manual_order(str(self.admin["id"]),user_id,"pro-v1",utcnow()-timedelta(days=40),utcnow()-timedelta(days=1),"expired acceptance")
         membership=self.memberships.membership(user_id)
-        self.assertEqual(membership["plan"]["id"],"free-v1")
+        self.assertEqual(membership["plan"]["id"],"free-v2")
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT status FROM subscriptions WHERE id=%s",(created["subscription"]["id"],))

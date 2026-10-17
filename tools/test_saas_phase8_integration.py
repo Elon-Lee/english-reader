@@ -79,7 +79,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         owner,other=str(self.owner["id"]),str(self.other["id"])
         created=self.imports.create(owner,"text","我的测试文本","lesson.md","text-task-1")
         duplicate=self.imports.create(owner,"text","ignored","lesson.md","text-task-1")
-        self.assertFalse(created["idempotent"]);self.assertTrue(duplicate["idempotent"]);self.assertEqual(created["task"]["id"],duplicate["task"]["id"]);self.assertEqual(created["task"]["planVersion"],"free-v1")
+        self.assertFalse(created["idempotent"]);self.assertTrue(duplicate["idempotent"]);self.assertEqual(created["task"]["id"],duplicate["task"]["id"]);self.assertEqual(created["task"]["planVersion"],"free-v2")
         task_id=created["task"]["id"]
         uploaded=self.imports.upload(owner,task_id,"lesson.md",b"First private sentence.\n\nSecond private sentence!","text/markdown")
         self.assertEqual(uploaded["status"],"queued")
@@ -98,7 +98,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         owner=str(self.owner["id"])
         created=self.imports.create(owner,"mp3","试听","sample.mp3","mp3-task-1")
         task_id=created["task"]["id"]
-        usage=self.memberships.usage(owner);mp3=next(row for row in usage["usage"] if row["feature"]=="mp3_imports");self.assertEqual(mp3["reserved"],1)
+        usage=self.memberships.usage(owner);mp3=next(row for row in usage["usage"] if row["feature"]=="mp3_imports");self.assertEqual(mp3["reserved"],0)
         self.imports.upload(owner,task_id,"sample.mp3",b"not-a-real-mp3","audio/mpeg")
         cancelled=self.imports.cancel(owner,task_id);self.assertEqual(cancelled["task"]["status"],"cancelled")
         usage=self.memberships.usage(owner);mp3=next(row for row in usage["usage"] if row["feature"]=="mp3_imports");storage=next(row for row in usage["usage"] if row["feature"]=="storage_bytes")
@@ -117,7 +117,8 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         self.assertEqual([sentence["text"] for sentence in reader["sentences"]],["Hello private audio.","Second audio sentence!"])
         self.assertTrue(reader["sentences"][0]["words"][0]["start"]>=0)
         usage=self.memberships.usage(owner);mp3=next(row for row in usage["usage"] if row["feature"]=="mp3_imports")
-        self.assertEqual(mp3["used"],1);self.assertEqual(mp3["reserved"],0)
+        self.assertEqual(mp3["used"],0);self.assertEqual(mp3["reserved"],0)
+        self.assertEqual(next(row for row in usage["usage"] if row["feature"]=="audio_library_capacity")["used"],1)
 
     def test_pdf_document_uses_native_ocr_processor_and_creates_private_book(self):
         owner=str(self.owner["id"])
@@ -145,9 +146,10 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         self.assertEqual(denied.exception.code,"media_access_denied")
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT variant_name FROM asset_variants WHERE asset_id=%s AND deleted_at IS NULL ORDER BY variant_name",(asset_id,));self.assertEqual([row["variant_name"] for row in self.accounts._many(cursor)],["audio","cover"])
+                cursor.execute("SELECT variant_name FROM asset_variants WHERE asset_id=%s AND deleted_at IS NULL ORDER BY variant_name",(asset_id,));self.assertEqual([row["variant_name"] for row in self.accounts._many(cursor)],["audio","cover","low"])
         usage=self.memberships.usage(owner);video=next(row for row in usage["usage"] if row["feature"]=="video_imports");storage=next(row for row in usage["usage"] if row["feature"]=="storage_bytes")
-        self.assertEqual(video["used"],1);self.assertEqual(video["reserved"],0);self.assertGreater(storage["used"],sample.stat().st_size)
+        self.assertEqual(video["used"],0);self.assertEqual(video["reserved"],0);self.assertGreater(storage["used"],sample.stat().st_size)
+        self.assertEqual(next(row for row in usage["usage"] if row["feature"]=="video_library_capacity")["used"],1)
 
     def test_video_processing_failure_releases_quota_and_source_space(self):
         owner=str(self.owner["id"]);created=self.video_imports.create(owner,"video","损坏视频","broken.mp4","broken-video-task");task_id=created["task"]["id"]
@@ -167,7 +169,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         created=self.youtube_imports.create(owner,"youtube","","","native-youtube-task",url);completed=self.youtube_imports.complete(owner,created["task"]["id"])
         self.assertEqual(completed["task"]["status"],"complete");asset_id=completed["task"]["sourceAssetId"]
         reader=self.workspace.reader(owner,completed["task"]["outputBookId"])["book"];self.assertEqual(reader["resourceType"],"youtube");self.assertEqual(reader["title"],"Private YouTube")
-        variants=reader["mediaAssets"][0]["variants"];self.assertEqual([item["name"] for item in variants],["audio","cover","subtitles-en","subtitles-zh-CN"])
+        variants=reader["mediaAssets"][0]["variants"];self.assertEqual([item["name"] for item in variants],["audio","cover","low","subtitles-en","subtitles-zh-CN"])
         self.assertTrue(self.media.stream(owner,asset_id,"subtitles-en")["path"].is_file())
         with self.assertRaises(SaaSError) as denied:self.media.stream(other,asset_id,"subtitles-zh-CN")
         self.assertEqual(denied.exception.code,"media_access_denied")
@@ -176,7 +178,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
                 cursor.execute("SELECT data_json FROM content_books WHERE id=%s",(completed["task"]["outputBookId"],));data=(self.accounts._one(cursor)or{})["data_json"]
         data=data if isinstance(data,dict) else json.loads(data);self.assertEqual(data["youtube"]["youtubeId"],"fake123");self.assertTrue(data["youtube"]["youtubeSubtitleDownloaded"]);self.assertTrue(data["youtube"]["youtubeChineseSubtitleDownloaded"])
         usage=self.memberships.usage(owner);youtube=next(row for row in usage["usage"] if row["feature"]=="youtube_imports");video=next(row for row in usage["usage"] if row["feature"]=="video_imports")
-        self.assertEqual(youtube["used"],1);self.assertEqual(youtube["reserved"],0);self.assertEqual(video["used"],0)
+        self.assertEqual(youtube["used"],0);self.assertEqual(youtube["reserved"],0);self.assertEqual(video["used"],0)
 
     def test_youtube_download_failure_releases_reservation(self):
         owner=str(self.owner["id"]);url="https://youtu.be/failure"

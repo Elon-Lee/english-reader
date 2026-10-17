@@ -92,7 +92,7 @@ class PhaseThreePostgresTests(unittest.TestCase):
         self.assertEqual(len(self.catalog.library(str(self.bob["id"]))["items"]),0)
         self.assertNotEqual(first,second)
 
-    def test_capacity_unlock_and_readd_rules_are_atomic(self):
+    def test_official_library_and_material_access_are_not_metered_by_usage_count(self):
         books=[self.publish(index) for index in range(10,16)]
         user_id=str(self.alice["id"])
         def add(book_id:str):
@@ -100,24 +100,24 @@ class PhaseThreePostgresTests(unittest.TestCase):
             except SaaSError as exc:return exc
         with ThreadPoolExecutor(max_workers=6) as pool: results=list(pool.map(add,books))
         successes=[value for value in results if isinstance(value,dict)];errors=[value for value in results if isinstance(value,SaaSError)]
-        self.assertEqual(len(successes),5);self.assertEqual(len(errors),1);self.assertEqual(errors[0].code,"quota_exceeded");self.assertEqual(errors[0].details["feature"],"official_library_capacity")
+        self.assertEqual(len(successes),6);self.assertEqual(errors,[])
         chosen=successes[0]["bookId"]
         first=self.catalog.add_or_unlock(user_id,chosen,True);self.assertTrue(first["unlocked"])
         self.catalog.remove(user_id,chosen)
         readd=self.catalog.add_or_unlock(user_id,chosen,True);self.assertTrue(readd["unlocked"])
         membership=self.memberships.usage(user_id)
         unlock=next(row for row in membership["usage"] if row["feature"]=="official_unlocks")
-        self.assertEqual(unlock["used"],1)
+        self.assertEqual(unlock["used"],0)
 
-    def test_two_unlocks_succeed_and_third_is_quota_exceeded(self):
+    def test_multiple_public_materials_can_be_unlocked_without_a_count_cap(self):
         books=[self.publish(index) for index in range(30,33)];user_id=str(self.alice["id"])
         for book in books:self.catalog.add_or_unlock(user_id,book,False)
         def unlock(book_id:str):
             try:return self.catalog.add_or_unlock(user_id,book_id,True)
             except SaaSError as exc:return exc
         with ThreadPoolExecutor(max_workers=3) as pool: results=list(pool.map(unlock,books))
-        self.assertEqual(len([row for row in results if isinstance(row,dict)]),2)
-        failed=next(row for row in results if isinstance(row,SaaSError));self.assertEqual(failed.code,"quota_exceeded");self.assertEqual(failed.details["feature"],"official_unlocks")
+        self.assertEqual(len([row for row in results if isinstance(row,dict)]),3)
+        self.assertEqual([row for row in results if isinstance(row,SaaSError)],[])
 
     def test_http_catalog_and_library_endpoints(self):
         book_id=self.publish(50)

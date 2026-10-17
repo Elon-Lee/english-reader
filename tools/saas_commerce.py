@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 from saas_auth import SaaSError, SaaSService, new_id
 from saas_membership import FEATURE_DEFINITIONS, FEATURES, as_json, timestamp
@@ -65,8 +66,36 @@ class CommerceService:
         shown = stored_value // (1024**3) if definition.get("storage") else stored_value
         return f"{definition['name']} {shown} {definition['unit']}"
 
+    @staticmethod
+    def _included_benefits(value: Any) -> list[str]:
+        quotas = as_json(value)
+        context = int(quotas.get("ai_context_generations", 0) or 0)
+        grammar = int(quotas.get("ai_grammar_generations", 0) or 0)
+        devices = int(quotas.get("devices", 1) or 1)
+        return [
+            "免费包含：公版及授权学习材料不限次使用",
+            "免费包含：公版书架收藏不限量",
+            f"免费包含：词汇语境分析 {context} 次/30天",
+            f"免费包含：句法分析 {grammar} 次/30天",
+            "免费包含：音频、视频及在线视频导入，不按导入次数收费",
+            f"免费包含：最多同时登录 {devices} 台设备",
+        ]
+
     @classmethod
     def _version(cls, row: dict[str, Any], include_internal: bool = False) -> dict[str, Any]:
+        benefits = cls._benefits(row["benefits_json"])
+        if row["family_slug"] == "free":
+            benefits = [
+                "免费包含：词汇语境分析每天最多 50 次" if "词汇语境分析" in item else
+                "免费包含：句法分析每天最多 20 次" if "句法分析" in item else item
+                for item in benefits
+            ]
+        else:
+            benefits = [
+                "免费包含：词汇语境分析不限次数" if "词汇语境分析" in item else
+                "免费包含：句法分析不限次数" if "句法分析" in item else item
+                for item in benefits
+            ]
         result = {
             "id": row["id"],
             "productId": row["product_id"],
@@ -78,11 +107,14 @@ class CommerceService:
             "shortName": row["short_name"],
             "tagline": row["tagline"],
             "description": row["description"],
-            "durationDays": int(row["duration_days"]),
+            "durationDays": 0 if row["family_slug"] == "free" else int(row["duration_days"]),
             "amountCents": int(row["amount_cents"]),
             "currency": row["currency"],
-            "benefits": cls._benefits(row["benefits_json"]),
+            "originalAmountCents": int(row.get("original_amount_cents", row["amount_cents"]) or 0),
+            "discountPercent": int(row.get("discount_percent", 100) or 100),
+            "benefits": benefits,
             "featureLimits": cls._display_limits(row.get("limits_json")),
+            "purchaseUrl": str(row.get("purchase_url", "") or ""),
             "configuredBenefits": cls._configured_benefits(row.get("configured_benefits_json")),
             "featured": bool(row["featured"]),
             "status": row["status"],
@@ -105,17 +137,14 @@ class CommerceService:
                     ORDER BY cp.display_order,cpv.amount_cents"""
                 )
                 products = [self._version(row) for row in self.accounts._many(cursor)]
-        app_id = str(self.accounts.environment.get("MBDPAY_APP_ID", "")).strip()
-        app_key = str(self.accounts.environment.get("MBDPAY_APP_KEY", "")).strip()
-        base_url = str(self.accounts.environment.get("APP_BASE_URL", "")).strip()
         return {
             "products": products,
             "support": {"type": "QQ", "value": "289614546", "response": "1 个工作日内响应"},
             "payment": {
-                "configured": bool(app_id and app_key and base_url.startswith(("http://", "https://"))),
-                "methods": ["alipay"],
+                "configured": any(item["purchaseUrl"] for item in products),
+                "methods": ["cloudcat"],
                 "automaticRenewal": False,
-                "notice": "单次购买固定期限权益，不自动续费。",
+                "notice": "通过云猫寄售单次购买，获得兑换码后在拾页开通固定期限权益；不自动续费。",
             },
         }
 
@@ -151,6 +180,8 @@ class CommerceService:
         built_in = []
         for key in FEATURES:
             definition = FEATURE_DEFINITIONS[key]
+            if not definition.get("sellable", True):
+                continue
             built_in.append({"key": key, "type": "built_in", "name": definition["name"], "unit": definition["unit"], "defaultLimit": int(definition["default"]), "minimum": int(definition["minimum"]), "required": bool(definition.get("required")), "control": definition["control"], "enforced": True})
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
@@ -204,33 +235,51 @@ class CommerceService:
         normalized: dict[str, int] = {}
         for feature in FEATURES:
             definition = FEATURE_DEFINITIONS[feature]
-            raw = incoming_limits.get(feature, 0)
-            try:
-                amount = int(raw)
-            except (TypeError, ValueError) as exc:
-                raise SaaSError("invalid_product_version", f"{definition['name']} 的限制无效。") from exc
-            minimum = int(definition["minimum"])
-            if amount < minimum or amount > 10**12:
-                raise SaaSError("invalid_product_version", f"{definition['name']} 的限制超出允许范围。")
+            if not definition.get("sellable", True):
+                amount = int(definition.get("default", 0))
+            else:
+                raw = incoming_limits.get(feature, 0)
+                try:
+                    amount = int(raw)
+                except (TypeError, ValueError) as exc:
+                    raise SaaSError("invalid_product_version", f"{definition['name']} 的限制无效。") from exc
+                minimum = int(definition["minimum"])
+                if amount < minimum or amount > 10**12:
+                    raise SaaSError("invalid_product_version", f"{definition['name']} 的限制超出允许范围。")
             normalized[feature] = amount * (1024**3) if definition.get("storage") else amount
-        if normalized["devices"] < 1:
-            raise SaaSError("invalid_product_version", "登录设备是必选的内置权益，限制不能低于 1。")
-        if sum(1 for value in normalized.values() if value > 0) < 3:
-            raise SaaSError("invalid_product_version", "至少启用 3 项真实受控功能。")
+        if sum(1 for key in ("video_library_capacity", "audio_library_capacity", "storage_bytes") if normalized[key] > 0) < 3:
+            raise SaaSError("invalid_product_version", "请配置视频上限、音频上限和私人空间。")
         try:
             duration_days = int(payload.get("durationDays"))
-            amount_cents = int(payload.get("amountCents"))
+            original_amount_cents = int(payload.get("originalAmountCents", payload.get("amountCents")))
+            discount_percent = int(payload.get("discountPercent", 100))
         except (TypeError, ValueError) as exc:
             raise SaaSError("invalid_product_version", "商品期限或价格无效。") from exc
-        if duration_days < 1 or duration_days > 3660 or amount_cents < 0:
+        if duration_days < 1 or duration_days > 3660 or original_amount_cents < 0 or not 1 <= discount_percent <= 100:
             raise SaaSError("invalid_product_version", "商品期限或价格超出允许范围。")
+        amount_cents = (original_amount_cents * discount_percent + 50) // 100
         featured = bool(payload.get("featured", False))
+        purchase_url = str(payload.get("purchaseUrl", "") or "").strip()
+        if len(purchase_url) > 1000:
+            raise SaaSError("invalid_product_version", "云猫商品链接过长。")
+        if purchase_url:
+            parsed_url = urlsplit(purchase_url)
+            if parsed_url.scheme != "https" or parsed_url.hostname not in {"catfk.com", "www.catfk.com"}:
+                raise SaaSError("invalid_product_version", "云猫商品链接必须使用 catfk.com 的 HTTPS 地址。")
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT id,slug,family_slug FROM commerce_products WHERE id=%s FOR UPDATE", (product_id,))
                 product = self.accounts._one(cursor)
                 if not product:
                     raise SaaSError("product_not_found", "商品不存在。", 404)
+                if product["family_slug"] == "free":
+                    normalized["ai_context_generations"] = 50
+                    normalized["ai_grammar_generations"] = 20
+                    normalized["devices"] = 1
+                else:
+                    normalized["ai_context_generations"] = 300
+                    normalized["ai_grammar_generations"] = 100
+                    normalized["devices"] = 2
                 cursor.execute("SELECT id FROM plans WHERE slug=%s AND active=TRUE FOR UPDATE", (product["family_slug"],))
                 plan = self.accounts._one(cursor)
                 if not plan:
@@ -247,16 +296,17 @@ class CommerceService:
                 plan_version = f"commerce-{product['slug']}-v{version_number}"
                 cursor.execute("SELECT COALESCE(MAX(rank),0) AS rank FROM plan_versions WHERE plan_id=%s", (plan["id"],))
                 rank = max(1, int((self.accounts._one(cursor) or {"rank": 1})["rank"]))
-                pricing = {"currency": "CNY", "amount_cents": amount_cents, "duration_days": duration_days, "commerce_product_version": version_id}
+                pricing = {"currency": "CNY", "amount_cents": amount_cents, "original_amount_cents": original_amount_cents, "discount_percent": discount_percent, "duration_days": duration_days, "commerce_product_version": version_id}
                 cursor.execute("""INSERT INTO plan_versions(id,plan_id,display_name,rank,period_days,quotas_json,pricing_json,active)
                 VALUES(%s,%s,%s,%s,30,%s::jsonb,%s::jsonb,FALSE)""", (plan_version, plan["id"], name, rank, json.dumps(normalized), json.dumps(pricing)))
-                benefits = [self._benefit_text(feature, normalized[feature]) for feature in FEATURES if normalized[feature] > 0] + [item["text"] for item in configured]
+                benefits = [self._benefit_text(feature, normalized[feature]) for feature in FEATURES if FEATURE_DEFINITIONS[feature].get("sellable", True) and normalized[feature] > 0] + self._included_benefits(normalized) + [item["text"] for item in configured]
+                benefits = benefits[:12]
                 cursor.execute(
                     """INSERT INTO commerce_product_versions(
                     id,product_id,version_number,plan_version_id,display_name,short_name,tagline,description,
-                    duration_days,amount_cents,currency,benefits_json,configured_benefits_json,featured,created_by)
-                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'CNY',%s::jsonb,%s::jsonb,%s,%s)""",
-                    (version_id, product_id, version_number, plan_version, name, short_name, tagline, description, duration_days, amount_cents, json.dumps(benefits), json.dumps(configured), featured, actor_id),
+                    duration_days,amount_cents,original_amount_cents,discount_percent,currency,benefits_json,configured_benefits_json,featured,created_by,purchase_url)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'CNY',%s::jsonb,%s::jsonb,%s,%s,%s)""",
+                    (version_id, product_id, version_number, plan_version, name, short_name, tagline, description, duration_days, amount_cents, original_amount_cents, discount_percent, json.dumps(benefits), json.dumps(configured), featured, actor_id, purchase_url),
                 )
                 self._audit(cursor, actor_id, "commerce_product_version_created", {"productId": product_id, "versionId": version_id, "version": version_number})
         return {"id": version_id, "productId": product_id, "version": version_number, "status": "draft"}
@@ -282,6 +332,28 @@ class CommerceService:
                 cursor.execute("UPDATE plan_versions SET active=TRUE WHERE id=%s", (version["plan_version_id"],))
                 self._audit(cursor, actor_id, "commerce_product_version_published", {"productId": version["product_id"], "versionId": version_id})
         return {"id": version_id, "status": "published", "idempotent": False}
+
+    def update_draft_purchase_url(self, actor_id: str, version_id: str, purchase_url: Any) -> dict[str, Any]:
+        value = str(purchase_url or "").strip()
+        parsed = urlsplit(value)
+        if parsed.scheme != "https" or parsed.hostname not in {"catfk.com", "www.catfk.com"}:
+            raise SaaSError("invalid_purchase_link", "请输入 HTTPS 云猫商品链接。", 400)
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT id,status FROM commerce_product_versions WHERE id=%s FOR UPDATE", (str(version_id or "").strip(),))
+                version = self.accounts._one(cursor)
+                if not version:
+                    raise SaaSError("product_version_not_found", "商品版本不存在。", 404)
+                if version["status"] not in {"draft", "published"}:
+                    raise SaaSError("immutable_product_version", "历史版本不可修改。", 409)
+                if version["status"] == "published":
+                    cursor.execute("SELECT purchase_url FROM commerce_product_versions WHERE id=%s", (version["id"],))
+                    current = self.accounts._one(cursor)
+                    if str((current or {}).get("purchase_url", "") or "").strip():
+                        raise SaaSError("immutable_product_version", "已配置购买链接的版本不可修改。请创建新版本。", 409)
+                cursor.execute("UPDATE commerce_product_versions SET purchase_url=%s WHERE id=%s", (value, version["id"]))
+                self._audit(cursor, actor_id, "commerce_purchase_link_updated", {"versionId": version["id"], "host": parsed.hostname})
+                return {"id": version["id"], "purchaseUrl": value, "status": "draft"}
 
     def set_product_active(self, actor_id: str, product_id: str, active: bool) -> dict[str, Any]:
         product_id = str(product_id or "").strip()

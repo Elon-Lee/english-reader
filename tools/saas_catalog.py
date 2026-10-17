@@ -153,32 +153,22 @@ class CatalogService:
     def _consume_unlock(self,cursor:Any,user_id:str,context:dict[str,Any],book_id:str)->None:
         cursor.execute("SELECT * FROM official_book_unlocks WHERE user_id=%s AND catalog_book_id=%s FOR UPDATE",(user_id,book_id))
         if self.accounts._one(cursor):return
-        feature="official_unlocks";summary=self.memberships._feature_summary(cursor,context,feature)
-        if summary["available"]<1:
-            plan=context["plan"]["id"]
-            raise SaaSError("quota_exceeded","当前套餐的该项额度已用完。",409,{"feature":feature,"plan":plan,"used":summary["used"],"limit":summary["limit"],"resetAt":timestamp(context["period"]["ends_at"]),"recommendedPlan":self.memberships._recommended_plan(plan)})
-        reservation_id=new_id();key=f"official-unlock:{book_id}"
-        cursor.execute("""INSERT INTO quota_reservations(id,user_id,usage_period_id,feature,idempotency_key,quantity,state,metadata_json,settled_at)
-        VALUES(%s,%s,%s,%s,%s,1,'settled',%s::jsonb,NOW()) ON CONFLICT (user_id,feature,idempotency_key) DO NOTHING""",(reservation_id,user_id,context["period"]["id"],feature,key,json.dumps({"catalogBookId":book_id})))
-        cursor.execute("SELECT id FROM quota_reservations WHERE user_id=%s AND feature=%s AND idempotency_key=%s",(user_id,feature,key));reserved=self.accounts._one(cursor)
-        reservation_id=reserved["id"]
-        cursor.execute("""INSERT INTO usage_ledger(id,user_id,usage_period_id,feature,quantity,reason,reservation_id,idempotency_key,metadata_json)
-        VALUES(%s,%s,%s,%s,1,'consumption',%s,%s,%s::jsonb) ON CONFLICT (reservation_id) DO NOTHING""",(new_id(),user_id,context["period"]["id"],feature,reservation_id,key,json.dumps({"catalogBookId":book_id})))
         cursor.execute("""INSERT INTO official_book_unlocks(id,user_id,catalog_book_id,usage_period_id,reservation_id)
-        VALUES(%s,%s,%s,%s,%s) ON CONFLICT (user_id,catalog_book_id) DO NOTHING""",(new_id(),user_id,book_id,context["period"]["id"],reservation_id))
+        VALUES(%s,%s,%s,%s,NULL) ON CONFLICT (user_id,catalog_book_id) DO NOTHING""",(new_id(),user_id,book_id,context["period"]["id"]))
 
     def add_or_unlock(self,user_id:str,catalog_book_id:str,unlock:bool=True,shelf_state:str="active")->dict[str,Any]:
         if shelf_state not in SHELF_STATES:raise SaaSError("invalid_shelf_state","书架状态无效。",400)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                self._published_book(cursor,catalog_book_id);context=self.memberships._context(cursor,user_id)
+                self._published_book(cursor,catalog_book_id)
+                cursor.execute("SELECT id FROM users WHERE id=%s AND status='active' FOR UPDATE",(user_id,))
+                if not self.accounts._one(cursor):raise SaaSError("account_unavailable","账号不可用。",403)
+                context=self.memberships._context(cursor,user_id,lock_user=False)
                 cursor.execute("SELECT * FROM user_library WHERE user_id=%s AND catalog_book_id=%s FOR UPDATE",(user_id,catalog_book_id));existing=self.accounts._one(cursor)
                 if not existing:
-                    limits=as_json(context["period"]["limits_json"]);limit=int(limits.get("official_library_capacity",0))
-                    cursor.execute("SELECT COUNT(*) AS total FROM user_library WHERE user_id=%s",(user_id,));used=int((self.accounts._one(cursor)or{"total":0})["total"])
-                    if used>=limit:
-                        plan=context["plan"]["id"]
-                        raise SaaSError("quota_exceeded","官方书架容量已满。",409,{"feature":"official_library_capacity","plan":plan,"used":used,"limit":limit,"resetAt":timestamp(context["period"]["ends_at"]),"recommendedPlan":self.memberships._recommended_plan(plan)})
+                    cursor.execute("SELECT resource_type FROM catalog_books WHERE id=%s",(catalog_book_id,));resource=self.accounts._one(cursor) or {}
+                    kind="video" if resource.get("resource_type") in {"video","youtube"} else "audio" if resource.get("resource_type")=="audio" else ""
+                    self.memberships.assert_media_capacity(cursor,user_id,context,kind)
                     cursor.execute("INSERT INTO user_library(id,user_id,catalog_book_id,shelf_state) VALUES(%s,%s,%s,%s)",(new_id(),user_id,catalog_book_id,shelf_state))
                 if unlock:self._consume_unlock(cursor,user_id,context,catalog_book_id)
                 self.memberships._audit(cursor,user_id,None,"catalog_library_add",{"catalogBookId":catalog_book_id,"unlock":unlock})

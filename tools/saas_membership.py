@@ -6,6 +6,7 @@ import json
 import math
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from saas_auth import SaaSError, SaaSConfigurationError, SaaSService, new_id, utcnow
 
@@ -13,6 +14,8 @@ from saas_auth import SaaSError, SaaSConfigurationError, SaaSService, new_id, ut
 FEATURES = (
     "official_library_capacity",
     "official_unlocks",
+    "video_library_capacity",
+    "audio_library_capacity",
     "ai_context_generations",
     "ai_grammar_generations",
     "mp3_imports",
@@ -22,16 +25,22 @@ FEATURES = (
     "devices",
 )
 
+AI_FEATURES = {"ai_context_generations", "ai_grammar_generations"}
+DAILY_AI_LIMITS = {"ai_context_generations": 50, "ai_grammar_generations": 20}
+SHANGHAI = ZoneInfo("Asia/Shanghai")
+
 FEATURE_DEFINITIONS: dict[str, dict[str, Any]] = {
-    "official_library_capacity": {"name": "官方书架容量", "unit": "本", "default": 30, "minimum": 0, "control": "加入官方书架时校验当前容量"},
-    "official_unlocks": {"name": "学习材料使用额度", "unit": "次/30天", "default": 12, "minimum": 0, "control": "解锁公版及授权学习材料时预占并结算"},
-    "ai_context_generations": {"name": "词汇语境分析", "unit": "次/30天", "default": 300, "minimum": 0, "control": "生成词汇语境前预占额度，失败自动释放"},
-    "ai_grammar_generations": {"name": "句法分析", "unit": "次/30天", "default": 100, "minimum": 0, "control": "生成句法分析前预占额度，失败自动释放"},
-    "mp3_imports": {"name": "MP3 学习导入", "unit": "次/30天", "default": 5, "minimum": 0, "control": "创建 MP3 导入任务时预占额度"},
-    "video_imports": {"name": "视频学习导入", "unit": "次/30天", "default": 3, "minimum": 0, "control": "创建视频导入任务时预占额度"},
-    "youtube_imports": {"name": "在线视频学习导入", "unit": "次/30天", "default": 5, "minimum": 0, "control": "创建在线视频导入任务时预占额度"},
+    "official_library_capacity": {"name": "官方书架容量", "unit": "本", "default": 0, "minimum": 0, "control": "已停止按官方书架总量限制", "sellable": False},
+    "official_unlocks": {"name": "学习材料使用额度", "unit": "次/30天", "default": 0, "minimum": 0, "control": "公版及已授权材料不再按次数扣减", "sellable": False},
+    "video_library_capacity": {"name": "视频收藏上限", "unit": "个（公版+私人）", "default": 2, "minimum": 0, "control": "加入公版书架或完成私人视频导入时合并校验", "capacity": "video"},
+    "audio_library_capacity": {"name": "音频收藏上限", "unit": "个（公版+私人）", "default": 5, "minimum": 0, "control": "加入公版书架或完成私人音频导入时合并校验", "capacity": "audio"},
+    "ai_context_generations": {"name": "词汇语境分析", "unit": "次/天（免费版）", "default": 50, "minimum": 0, "control": "免费版按 Asia/Shanghai 自然日限制；收费会员不限次数", "sellable": False},
+    "ai_grammar_generations": {"name": "句法分析", "unit": "次/天（免费版）", "default": 20, "minimum": 0, "control": "免费版按 Asia/Shanghai 自然日限制；收费会员不限次数", "sellable": False},
+    "mp3_imports": {"name": "MP3 学习导入", "unit": "次/30天", "default": 0, "minimum": 0, "control": "已改为按当前音频收藏容量校验", "sellable": False},
+    "video_imports": {"name": "视频学习导入", "unit": "次/30天", "default": 0, "minimum": 0, "control": "已改为按当前视频收藏容量校验", "sellable": False},
+    "youtube_imports": {"name": "在线视频学习导入", "unit": "次/30天", "default": 0, "minimum": 0, "control": "已改为按当前视频收藏容量校验", "sellable": False},
     "storage_bytes": {"name": "私人学习空间", "unit": "GB", "default": 20, "minimum": 0, "storage": True, "control": "上传原文件和生成媒体变体时按字节结算"},
-    "devices": {"name": "登录设备", "unit": "台", "default": 2, "minimum": 1, "required": True, "control": "新设备登录时校验活跃设备数量"},
+    "devices": {"name": "登录设备", "unit": "台", "default": 2, "minimum": 1, "required": True, "control": "新设备登录时校验活跃设备数量", "sellable": False},
 }
 
 
@@ -70,7 +79,7 @@ class MembershipService:
 
     @staticmethod
     def _recommended_plan(plan_version: str) -> str | None:
-        rank = {"free-v1": "advanced-v1", "advanced-v1": "pro-v1"}
+        rank = {"free-v1": "advanced-v1", "free-v2": "advanced-v1", "advanced-v1": "pro-v1"}
         return rank.get(plan_version)
 
     def _plan(self, cursor: Any, plan_version_id: str) -> dict[str, Any]:
@@ -125,7 +134,7 @@ class MembershipService:
             period_key = f"subscription:{subscription['id']}:{cycle}"
             subscription_id = subscription["id"]
         else:
-            plan = self._plan(cursor, "free-v1")
+            plan = self._plan(cursor, "free-v2")
             anchor = user["created_at"].astimezone(timezone.utc)
             span = timedelta(days=int(plan["period_days"]))
             cycle = max(0, math.floor((now - anchor).total_seconds() / span.total_seconds()))
@@ -167,8 +176,15 @@ class MembershipService:
         return consumed, max(0, reserved)
 
     def _feature_summary(self, cursor: Any, context: dict[str, Any], feature: str) -> dict[str, Any]:
+        if feature in AI_FEATURES and context["plan"]["slug"] != "free":
+            return {"feature": feature, "limit": None, "used": 0, "credits": 0, "reserved": 0, "available": None, "unlimited": True, "resetAt": None}
+        context = self._quota_context(cursor, context, feature)
         limits = as_json(context["period"]["limits_json"])
         limit = int(limits.get(feature, 0))
+        if feature in {"video_library_capacity", "audio_library_capacity"}:
+            media_type = FEATURE_DEFINITIONS[feature]["capacity"]
+            used = self._media_library_count(cursor, str(context["user"]["id"]), media_type)
+            return {"feature": feature, "limit": limit, "used": used, "credits": 0, "reserved": 0, "available": max(0, limit - used)}
         net_used, reserved = self._usage_numbers(cursor, context["period"]["id"], feature)
         used, credits = max(0, net_used), max(0, -net_used)
         return {
@@ -178,10 +194,43 @@ class MembershipService:
             "credits": credits,
             "reserved": reserved,
             "available": max(0, limit - net_used - reserved),
+            "unlimited": False,
+            "resetAt": timestamp(context["period"]["ends_at"]) if feature in AI_FEATURES else None,
         }
+
+    def _quota_context(self, cursor: Any, context: dict[str, Any], feature: str) -> dict[str, Any]:
+        if feature not in AI_FEATURES or context["plan"]["slug"] != "free":
+            return context
+        local_now = utcnow().astimezone(SHANGHAI)
+        start_local = datetime.combine(local_now.date(), datetime.min.time(), tzinfo=SHANGHAI)
+        end_local = start_local + timedelta(days=1)
+        period_key = f"ai-day:{local_now.date().isoformat()}"
+        limits = as_json(context["plan"]["quotas_json"])
+        limits.update(DAILY_AI_LIMITS)
+        cursor.execute(
+            """INSERT INTO usage_periods(id,user_id,subscription_id,plan_version_id,period_key,starts_at,ends_at,limits_json)
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+            ON CONFLICT (user_id,period_key) DO NOTHING""",
+            (new_id(), context["user"]["id"], context["subscription"]["id"] if context["subscription"] else None,
+             context["plan"]["id"], period_key, start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc), json.dumps(limits)),
+        )
+        cursor.execute("SELECT * FROM usage_periods WHERE user_id=%s AND period_key=%s FOR UPDATE", (context["user"]["id"], period_key))
+        daily_period = self.accounts._one(cursor)
+        if not daily_period:
+            raise RuntimeError("daily AI usage period creation failed")
+        return {**context, "period": daily_period}
 
     def _public_context(self, cursor: Any, context: dict[str, Any], include_usage: bool = False) -> dict[str, Any]:
         plan, period, subscription = context["plan"], context["period"], context["subscription"]
+        cursor.execute(
+            """SELECT m.*,from_plan.display_name AS from_name,to_plan.display_name AS to_name
+            FROM membership_change_orders m
+            LEFT JOIN plan_versions from_plan ON from_plan.id=m.from_plan_version_id
+            JOIN plan_versions to_plan ON to_plan.id=m.to_plan_version_id
+            WHERE m.user_id=%s ORDER BY m.created_at DESC LIMIT 20""",
+            (context["user"]["id"],),
+        )
+        change_orders = [self._change_order(row) for row in self.accounts._many(cursor)]
         result: dict[str, Any] = {
             "plan": {
                 "id": plan["id"], "slug": plan["slug"], "name": plan["display_name"], "rank": int(plan["rank"]),
@@ -192,10 +241,147 @@ class MembershipService:
                 "id": subscription["id"], "status": subscription["status"], "startsAt": timestamp(subscription["starts_at"]),
                 "endsAt": timestamp(subscription["ends_at"]),
             },
+            "changeOrders": change_orders,
+            "mediaCapacity": self._media_capacity(cursor, str(context["user"]["id"]), as_json(period["limits_json"])),
         }
         if include_usage:
             result["usage"] = [self._feature_summary(cursor, context, feature) for feature in FEATURES]
         return result
+
+    def _change_details(self, cursor: Any, user_id: str, target_plan_id: str, now: datetime | None = None) -> dict[str, Any]:
+        """Calculate a membership change without mutating subscriptions."""
+        now = now or utcnow()
+        context = self._context(cursor, user_id)
+        target = self._plan(cursor, target_plan_id)
+        current = context["subscription"]
+        cursor.execute(
+            """SELECT s.id,s.starts_at,s.ends_at,pv.id AS plan_id,pv.display_name,pv.rank
+            FROM subscriptions s JOIN plan_versions pv ON pv.id=s.plan_version_id
+            WHERE s.user_id=%s AND s.status IN ('active','grace_period') AND s.ends_at>NOW()
+            ORDER BY s.ends_at DESC FOR UPDATE OF s""",
+            (user_id,),
+        )
+        existing = self.accounts._many(cursor)
+        highest_rank = max((int(row["rank"]) for row in existing), default=int(context["plan"]["rank"]))
+        latest_end = max((row["ends_at"] for row in existing), default=now)
+        target_rank = int(target["rank"])
+        carry_seconds = 0
+        if not existing:
+            change_type = "first_purchase"
+            starts_at = now
+            carry_days = 0
+        elif target_rank > highest_rank:
+            change_type = "upgrade"
+            starts_at = now
+            remaining_seconds = max(0, int((latest_end - now).total_seconds()))
+            source_pricing = as_json(context["plan"]["pricing_json"])
+            target_pricing = as_json(target["pricing_json"])
+            source_price = int(source_pricing.get("amount_cents") or source_pricing.get("monthly_cents") or 0)
+            target_price = int(target_pricing.get("amount_cents") or target_pricing.get("monthly_cents") or 0)
+            if source_price <= 0 or target_price <= 0:
+                raise SaaSError("upgrade_conversion_unavailable", "当前套餐无法计算升级折算，请联系客服处理。", 409)
+            carry_seconds = math.ceil(remaining_seconds * source_price / target_price / 3600) * 3600
+            carry_days = carry_seconds / 86400
+        elif target_rank < highest_rank:
+            raise SaaSError("membership_downgrade_not_allowed", "当前会员不允许使用低等级卡密，兑换失败且卡密未核销。", 409)
+        else:
+            change_type = "renewal"
+            starts_at = now
+            carry_days = 0
+        ends_at = (latest_end if change_type == "renewal" else starts_at) + timedelta(days=int(target["period_days"]), seconds=carry_seconds)
+        return {
+            "context": context,
+            "target": target,
+            "currentSubscriptionId": current["id"] if current else (existing[0]["id"] if existing else None),
+            "currentPlanId": context["plan"]["id"],
+            "changeType": change_type,
+            "startsAt": starts_at,
+            "endsAt": ends_at,
+            "effectiveAt": starts_at,
+            "carryDays": carry_days,
+            "carrySeconds": carry_seconds,
+        }
+
+    def change_preview(self, user_id: str, target_plan_id: str) -> dict[str, Any]:
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                details = self._change_details(cursor, user_id, str(target_plan_id or "").strip())
+                target = details["target"]
+                current = details["context"]["plan"]
+                return {
+                    "currentPlan": {"id": current["id"], "name": current["display_name"], "rank": int(current["rank"])},
+                    "targetPlan": {"id": target["id"], "name": target["display_name"], "rank": int(target["rank"])},
+                    "changeType": details["changeType"],
+                    "effectiveAt": timestamp(details["effectiveAt"]),
+                    "renewalMode": "extend_current_expiry" if details["changeType"] == "renewal" else None,
+                    "startsAt": timestamp(details["startsAt"]),
+                    "endsAt": timestamp(details["endsAt"]),
+                    "currentEndsAt": timestamp(details["context"]["subscription"]["ends_at"]) if details["context"]["subscription"] else None,
+                    "carryDays": details["carryDays"],
+                    "carrySeconds": details["carrySeconds"],
+                    "durationDays": int(target["period_days"]),
+                }
+
+    def change_orders(self, user_id: str) -> list[dict[str, Any]]:
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """SELECT m.*,from_plan.display_name AS from_name,to_plan.display_name AS to_name
+                    FROM membership_change_orders m
+                    LEFT JOIN plan_versions from_plan ON from_plan.id=m.from_plan_version_id
+                    JOIN plan_versions to_plan ON to_plan.id=m.to_plan_version_id
+                    WHERE m.user_id=%s ORDER BY m.created_at DESC LIMIT 50""",
+                    (user_id,),
+                )
+                return [self._change_order(row) for row in self.accounts._many(cursor)]
+
+    def cancel_change_order(self, user_id: str, change_order_id: str) -> dict[str, Any]:
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM membership_change_orders WHERE id=%s AND user_id=%s FOR UPDATE", (change_order_id, user_id))
+                order = self.accounts._one(cursor)
+                if not order:
+                    raise SaaSError("change_order_not_found", "会员变更记录不存在。", 404)
+                if order["status"] != "scheduled":
+                    raise SaaSError("change_order_not_cancellable", "只有尚未生效的排期变更可以取消。", 409)
+                if order["effective_at"] <= utcnow():
+                    raise SaaSError("change_order_already_effective", "该变更已经生效，不能取消。", 409)
+                if order["created_subscription_id"]:
+                    cursor.execute("UPDATE subscriptions SET status='suspended',note='用户取消未来会员排期',updated_at=NOW() WHERE id=%s AND starts_at>NOW()", (order["created_subscription_id"],))
+                cursor.execute("UPDATE membership_change_orders SET status='cancelled',updated_at=NOW() WHERE id=%s", (change_order_id,))
+                self._membership_event(cursor, user_id, change_order_id, "scheduled_change_cancelled", {"subscriptionId": order["created_subscription_id"]}, user_id)
+                return {"changeOrder": self._change_order({**order, "status": "cancelled"})}
+
+    def _media_library_count(self, cursor: Any, user_id: str, media_type: str) -> int:
+        resource_types = ["video", "youtube"] if media_type == "video" else ["audio"]
+        cursor.execute(
+            """SELECT
+              (SELECT COUNT(*) FROM user_library ul JOIN catalog_books cb ON cb.id=ul.catalog_book_id
+               WHERE ul.user_id=%s AND cb.resource_type=ANY(%s)) +
+              (SELECT COUNT(*) FROM content_books WHERE owner_id=%s AND visibility IN ('private','draft')
+               AND status='ready' AND source_type=ANY(%s)) AS total""",
+            (user_id, resource_types, user_id, resource_types),
+        )
+        return int((self.accounts._one(cursor) or {"total": 0})["total"])
+
+    def _media_capacity(self, cursor: Any, user_id: str, limits: dict[str, Any]) -> dict[str, dict[str, int]]:
+        result = {}
+        for kind, feature in (("video", "video_library_capacity"), ("audio", "audio_library_capacity")):
+            limit = int(limits.get(feature, 0) or 0)
+            used = self._media_library_count(cursor, user_id, kind)
+            result[kind] = {"used": used, "limit": limit, "available": max(0, limit - used)}
+        return result
+
+    def assert_media_capacity(self, cursor: Any, user_id: str, context: dict[str, Any], kind: str) -> dict[str, int]:
+        if kind not in {"video", "audio"}:
+            return {"used": 0, "limit": 0, "available": 0}
+        feature = f"{kind}_library_capacity"
+        limits = as_json(context["period"]["limits_json"])
+        limit = int(limits.get(feature, 0) or 0)
+        used = self._media_library_count(cursor, user_id, kind)
+        if used >= limit:
+            raise SaaSError("media_capacity_exceeded", f"当前套餐最多收藏 {limit} 个{ '视频' if kind == 'video' else '音频'}（公版与私人内容合计）。", 409, {"feature": feature, "plan": context["plan"]["id"], "used": used, "limit": limit, "recommendedPlan": self._recommended_plan(context["plan"]["id"])})
+        return {"used": used, "limit": limit, "available": max(0, limit - used)}
 
     def membership(self, user_id: str, include_usage: bool = False) -> dict[str, Any]:
         with self.accounts.transaction() as connection:
@@ -249,6 +435,7 @@ class MembershipService:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 context = self._context(cursor, user_id)
+                quota_context = self._quota_context(cursor, context, feature)
                 cursor.execute(
                     "SELECT * FROM quota_reservations WHERE user_id=%s AND feature=%s AND idempotency_key=%s FOR UPDATE",
                     (user_id, feature, key),
@@ -256,7 +443,19 @@ class MembershipService:
                 existing = self.accounts._one(cursor)
                 if existing:
                     return {"reservation": self._reservation(existing), "membership": self._public_context(cursor, context, True), "idempotent": True}
-                summary = self._feature_summary(cursor, context, feature)
+                if feature in AI_FEATURES and context["plan"]["slug"] != "free":
+                    reservation = {
+                        "id": new_id(), "user_id": user_id, "usage_period_id": context["period"]["id"], "feature": feature,
+                        "idempotency_key": key, "quantity": quantity, "state": "settled", "metadata_json": payload,
+                    }
+                    cursor.execute(
+                        """INSERT INTO quota_reservations(id,user_id,usage_period_id,feature,idempotency_key,quantity,state,metadata_json,settled_at)
+                        VALUES(%s,%s,%s,%s,%s,%s,'settled',%s::jsonb,NOW())""",
+                        (reservation["id"], user_id, reservation["usage_period_id"], feature, key, quantity, json.dumps(payload)),
+                    )
+                    return {"reservation": self._reservation(reservation), "membership": self._public_context(cursor, context, True), "idempotent": False}
+                quota_context = self._quota_context(cursor, context, feature)
+                summary = self._feature_summary(cursor, quota_context, feature)
                 if quantity > summary["available"]:
                     plan_id = context["plan"]["id"]
                     raise SaaSError(
@@ -265,7 +464,7 @@ class MembershipService:
                          "resetAt": timestamp(context["period"]["ends_at"]), "recommendedPlan": self._recommended_plan(plan_id)},
                     )
                 reservation = {
-                    "id": new_id(), "user_id": user_id, "usage_period_id": context["period"]["id"], "feature": feature,
+                    "id": new_id(), "user_id": user_id, "usage_period_id": quota_context["period"]["id"], "feature": feature,
                     "idempotency_key": key, "quantity": quantity, "state": "reserved", "metadata_json": payload,
                 }
                 cursor.execute(
@@ -327,13 +526,14 @@ class MembershipService:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 context = self._context(cursor, user_id)
+                quota_context = self._quota_context(cursor, context, feature)
                 cursor.execute(
                     """INSERT INTO usage_ledger(id,user_id,usage_period_id,feature,quantity,reason,idempotency_key,metadata_json)
                     VALUES(%s,%s,%s,%s,%s,'credit',%s,%s::jsonb) ON CONFLICT DO NOTHING""",
-                    (new_id(), user_id, context["period"]["id"], feature, -quantity, key, json.dumps({"note": note[:1000], "actorId": actor_id})),
+                    (new_id(), user_id, quota_context["period"]["id"], feature, -quantity, key, json.dumps({"note": note[:1000], "actorId": actor_id})),
                 )
                 self._audit(cursor, user_id, actor_id, "quota_credit", {"feature": feature, "quantity": quantity, "key": key})
-                return self._feature_summary(cursor, context, feature)
+                return self._feature_summary(cursor, quota_context, feature)
 
     def adjust(self, user_id: str, feature: str, quantity: int, idempotency_key: str, actor_id: str | None = None, note: str = "") -> dict[str, Any]:
         """Apply a signed admin adjustment; positive means grant, negative deduct."""
@@ -345,16 +545,17 @@ class MembershipService:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 context = self._context(cursor, user_id)
+                quota_context = self._quota_context(cursor, context, feature)
                 # Usage ledger stores consumption as positive and credits as
                 # negative, so a positive user-facing grant maps to -quantity.
                 ledger_quantity = -quantity
                 cursor.execute(
                     """INSERT INTO usage_ledger(id,user_id,usage_period_id,feature,quantity,reason,idempotency_key,metadata_json)
                     VALUES(%s,%s,%s,%s,%s,'adjustment',%s,%s::jsonb) ON CONFLICT DO NOTHING""",
-                    (new_id(), user_id, context["period"]["id"], feature, ledger_quantity, key, json.dumps({"note": note[:1000], "actorId": actor_id, "adjustment": quantity})),
+                    (new_id(), user_id, quota_context["period"]["id"], feature, ledger_quantity, key, json.dumps({"note": note[:1000], "actorId": actor_id, "adjustment": quantity})),
                 )
                 self._audit(cursor, user_id, actor_id, "quota_adjustment", {"feature": feature, "quantity": quantity, "key": key, "note": note[:1000]})
-                return self._feature_summary(cursor, context, feature)
+                return self._feature_summary(cursor, quota_context, feature)
 
     def create_manual_order(self, actor_id: str, user_id: str, plan_version: str, starts_at: Any, ends_at: Any, note: str = "", amount_cents: int = 0) -> dict[str, Any]:
         start, end = parse_time(starts_at, "startsAt"), parse_time(ends_at, "endsAt")
@@ -424,8 +625,16 @@ class MembershipService:
                     SELECT id,user_id,plan_version_id,status,starts_at,ends_at,amount_cents,currency,
                     CASE WHEN error_message<>'' THEN error_message ELSE billing_interval END AS note,created_at,provider
                     FROM payment_orders WHERE user_id=%s
+                    UNION ALL
+                    SELECT rc.id,rc.redeemed_by AS user_id,cpv.plan_version_id,'completed' AS status,
+                    s.starts_at,s.ends_at,cpv.amount_cents,'CNY' AS currency,'云猫寄售兑换' AS note,
+                    rc.redeemed_at AS created_at,'cloudcat' AS provider
+                    FROM commerce_redemption_codes rc
+                    JOIN commerce_product_versions cpv ON cpv.id=rc.product_version_id
+                    JOIN subscriptions s ON s.id=rc.subscription_id
+                    WHERE rc.redeemed_by=%s AND rc.status='redeemed'
                     ORDER BY created_at DESC""",
-                    (user_id, user_id),
+                    (user_id, user_id, user_id),
                 )
                 return [self._order(row) for row in self.accounts._many(cursor)]
 
@@ -434,6 +643,25 @@ class MembershipService:
             "INSERT INTO membership_audit(id,user_id,actor_id,action,payload_json) VALUES(%s,%s,%s,%s,%s::jsonb)",
             (new_id(), user_id, actor_id, action, json.dumps(payload)),
         )
+
+    def _membership_event(self, cursor: Any, user_id: str, change_order_id: str | None, event_type: str, payload: dict[str, Any], actor_id: str | None) -> None:
+        cursor.execute(
+            """INSERT INTO membership_events(id,user_id,change_order_id,event_type,payload_json,created_by)
+            VALUES(%s,%s,%s,%s,%s::jsonb,%s)""",
+            (new_id(), user_id, change_order_id, event_type, json.dumps(payload), actor_id),
+        )
+
+    @staticmethod
+    def _change_order(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": row["id"], "source": row["source"], "fromPlanVersion": row["from_plan_version_id"],
+            "fromPlanName": row.get("from_name"), "toPlanVersion": row["to_plan_version_id"],
+            "toPlanName": row.get("to_name"), "changeType": row["change_type"], "status": row["status"],
+            "effectiveAt": timestamp(row["effective_at"]), "carryDays": round(int(row.get("carry_seconds", 0) or 0) / 86400, 2),
+            "carrySeconds": int(row.get("carry_seconds", 0) or 0),
+            "amountCents": int(row["amount_cents"]), "createdAt": timestamp(row["created_at"]),
+            "createdSubscriptionId": row.get("created_subscription_id"),
+        }
 
     @staticmethod
     def _reservation(row: dict[str, Any]) -> dict[str, Any]:

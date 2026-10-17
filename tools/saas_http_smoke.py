@@ -56,7 +56,7 @@ def main()->int:
             except Exception:time.sleep(.1)
         else:raise RuntimeError("SaaS reader did not become healthy")
         check("SaaS health",health.get("saasEnabled") is True,health);check("CSP","content-security-policy" in headers,headers)
-        _,_,commerce=request("/api/commerce/products");check("public commerce catalog",len(commerce.get("products",[]))>=4 and commerce.get("payment",{}).get("automaticRenewal") is False,commerce)
+        _,_,commerce=request("/api/commerce/products");check("CloudCat monthly catalog",{"free","advanced-30","pro-30"}.issubset({item.get("slug") for item in commerce.get("products",[])}) and all(item.get("family")=="free" or not item.get("purchaseUrl") or item.get("purchaseUrl","").startswith("https://catfk.com/") for item in commerce.get("products",[])) and commerce.get("payment",{}).get("methods")==["cloudcat"] and commerce.get("payment",{}).get("automaticRenewal") is False,commerce)
         _,_,homepage=request("/");check("public product homepage",isinstance(homepage,bytes) and "把英语材料真正读懂".encode() in homepage)
         status,_,_=request("/api/workspace/books",expected=(401,));check("unauthenticated isolation",status==401)
         try:
@@ -71,7 +71,7 @@ def main()->int:
                         cursor.execute("UPDATE user_sessions SET revoked_at=NOW() WHERE user_id=%s AND device_id<>%s AND revoked_at IS NULL",(user_id,device_id))
         except Exception:pass
         _,_,login=request("/api/auth/login","POST",{"email":"ai-owner@local.test","password":"ai owner password"});check("login",login.get("user",{}).get("email")=="ai-owner@local.test",login);check("csrf cookie",bool(csrf()))
-        _,_,usage=request("/api/membership/usage");check("membership",usage.get("plan",{}).get("id")=="free-v1",usage.get("plan"))
+        _,_,usage=request("/api/membership/usage");check("membership",usage.get("plan",{}).get("id")=="free-v2",usage.get("plan"))
         _,_,plans=request("/api/membership/plans");check("membership plans",len(plans.get("plans",[]))>=1,plans)
         _,_,requests_before=request("/api/membership/requests");check("membership requests",isinstance(requests_before.get("requests"),list),requests_before)
         _,_,preferences=request("/api/preferences");check("preferences read",isinstance(preferences,dict),preferences)
