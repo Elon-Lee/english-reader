@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { Alert, Button, Card, Empty, Modal, Skeleton, Space, Typography } from 'antd'
+import { Alert, Button, Card, Empty, List, Modal, Skeleton, Space, Tag, Typography } from 'antd'
+import { CheckCircleFilled } from '@ant-design/icons'
 import { getJson } from '../api/client'
 import { MEMBERSHIP_LIMIT_EVENT } from '../api/membershipLimit'
 import { CloudCatPurchaseModal, PriceDisplay } from '../pages/PublicSite'
 
-const { Paragraph, Text } = Typography
+const { Text } = Typography
 
 export default function MembershipLimitModal({ onRefresh }) {
   const [request, setRequest] = useState(null)
@@ -55,14 +56,15 @@ export default function MembershipLimitModal({ onRefresh }) {
   }
 
   return <>
-    <Modal title={completed ? '会员升级成功' : '升级会员'} open={Boolean(request) && !product} onCancel={continuing ? undefined : close} footer={null} width={680}>
+    <Modal title={completed ? '会员升级成功' : '选择学习方案'} open={Boolean(request) && !product} onCancel={continuing ? undefined : close} footer={null} width={980}>
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
         <Alert showIcon type={completed ? 'success' : 'warning'} message={completed ? '新会员权益已生效，可继续刚才的操作。' : request?.message} />
-        {loading ? <Skeleton active /> : error ? <Alert showIcon type="error" message={error} action={<Button onClick={completed ? resume : load}>重试</Button>} /> : completed ? <Button type="primary" loading={continuing} onClick={resume}>{request?.onContinue ? '继续刚才的操作' : '返回继续使用'}</Button> : products.length ? products.map(item => <Card key={item.id} size="small" title={item.shortName || item.name} extra={<PriceDisplay product={item} />}>
-          <Paragraph>{item.benefits.join('；')}</Paragraph>
-          <Button type="primary" onClick={() => setProduct(item)}>升级 / 兑换</Button>
-          {!item.purchaseUrl && <Text type="secondary"> 暂未开放购买，可使用已有兑换码</Text>}
-        </Card>) : <Empty description="当前暂无可升级套餐。可移除不再需要的收藏释放名额；每日额度可等待次日恢复。" />}
+        {loading ? <Skeleton active /> : error ? <Alert showIcon type="error" message={error} action={<Button onClick={completed ? resume : load}>重试</Button>} /> : completed ? <Button type="primary" loading={continuing} onClick={resume}>{request?.onContinue ? '继续刚才的操作' : '返回继续使用'}</Button> : products.length ? <div className="membership-limit-plan-grid">{products.map(item => <Card key={item.id} className="membership-plan-card" title={<Space>{item.shortName || item.name}{item.featured && <Tag color="success">推荐</Tag>}</Space>} extra={<PriceDisplay product={item} />}>
+          <Text type="secondary">每次兑换 {item.durationDays || 30} 天</Text>
+          <List size="small" dataSource={(item.benefits || []).slice(0, 9)} renderItem={benefit => <List.Item><CheckCircleFilled className="check-icon" />{benefit}</List.Item>} />
+          <Button block type="primary" onClick={() => setProduct(item)}>购买 / 兑换</Button>
+          {!item.purchaseUrl && <Text type="secondary">暂未开放购买，可使用已有兑换码</Text>}
+        </Card>)}</div> : <Empty description="当前暂无可升级套餐。可移除不再需要的收藏释放名额；每日额度可等待次日恢复。" />}
       </Space>
     </Modal>
     <CloudCatPurchaseModal product={product} open={Boolean(product)} authenticated returnTo={`${location.pathname}${location.search}`} onClose={() => setProduct(null)} onRedeemed={async () => {

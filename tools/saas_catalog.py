@@ -131,7 +131,8 @@ class CatalogService:
         """Full content requires a shelf entry; trial content is restricted to the first 10%."""
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("""SELECT cb.id,cb.title,cb.english_title,cb.level,cb.resource_type,cb.estimated_minutes,cb.source_content_book_id,src.duration,src.data_json
+                cursor.execute("""SELECT cb.id,cb.title,cb.english_title,cb.level,cb.resource_type,cb.estimated_minutes,cb.source_content_book_id,src.duration,src.data_json,
+                ou.catalog_book_id AS library_book_id,ou.shelf_state
                 FROM catalog_books cb JOIN content_books src ON src.id=cb.source_content_book_id
                 LEFT JOIN user_library ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
                 WHERE cb.id=%s AND cb.publication_status='published' AND cb.rights_status IN ('public_domain','licensed') AND (ou.catalog_book_id IS NOT NULL OR %s)""",(user_id,catalog_book_id,trial))
@@ -164,7 +165,7 @@ class CatalogService:
                     assets = [asset for asset in assets if str(asset["contentType"]).startswith(("audio/", "video/")) or str(asset["contentType"]).startswith("image/") or asset["variants"]]
                 playable=any(str(asset["contentType"]).startswith(("audio/","video/")) or any(str(variant["contentType"]).startswith(("audio/","video/")) for variant in asset["variants"]) for asset in assets)
                 cursor.execute("SELECT last_sentence_id,reading_seconds,completed_at FROM workspace_progress WHERE user_id=%s AND content_book_id=%s",(user_id,row["source_content_book_id"]));progress=self.accounts._one(cursor)or{}
-                return {"book":{"id":row["id"],"title":row["title"],"englishTitle":row["english_title"],"level":row["level"],"resourceType":row["resource_type"],"estimatedMinutes":int(row["estimated_minutes"]),"duration":float(row["duration"] or 0),"sentences":sentences,"mediaAssets":assets,"trial":trial,"trialPercent":10,"trialEndSeconds":trial_end,"trialLimit":len(sentences),"mediaReady":playable,"mediaNotice":"已连接受鉴权媒体，可在阅读器中播放。" if playable else "该读物当前只有正文，暂未找到可播放音视频。","progress":{"lastSentenceId":"" if trial else progress.get("last_sentence_id","") or "","readingSeconds":0 if trial else int(progress.get("reading_seconds",0)or 0),"completedAt":timestamp(progress.get("completed_at"))}}}
+                return {"book":{"id":row["id"],"title":row["title"],"englishTitle":row["english_title"],"level":row["level"],"resourceType":row["resource_type"],"inLibrary":bool(row.get("library_book_id")),"shelfState":row.get("shelf_state"),"estimatedMinutes":int(row["estimated_minutes"]),"duration":float(row["duration"] or 0),"sentences":sentences,"mediaAssets":assets,"trial":trial,"trialPercent":10,"trialEndSeconds":trial_end,"trialLimit":len(sentences),"mediaReady":playable,"mediaNotice":"已连接受鉴权媒体，可在阅读器中播放。" if playable else "该读物当前只有正文，暂未找到可播放音视频。","progress":{"lastSentenceId":"" if trial else progress.get("last_sentence_id","") or "","readingSeconds":0 if trial else int(progress.get("reading_seconds",0)or 0),"completedAt":timestamp(progress.get("completed_at"))}}}
 
     def _published_book(self,cursor:Any,catalog_book_id:str)->dict[str,Any]:
         cursor.execute("SELECT * FROM catalog_books WHERE id=%s AND publication_status='published' AND rights_status IN ('public_domain','licensed') FOR UPDATE",(catalog_book_id,))
