@@ -249,7 +249,7 @@ class EntitlementConcurrencyTests(unittest.TestCase):
             self.assertEqual(self.memberships.usage(user)['mediaCapacity']['audio']['used'], 1)
             if isinstance(rows[0], SaaSError):
                 self.assertEqual(rows[0].code, 'media_capacity_exceeded')
-                self.assertEqual(self.scalar("SELECT COUNT(*) FROM media_assets WHERE owner_id=%s AND status='active'", (user,)), 0)
+                self.assertEqual(self.scalar("SELECT COUNT(*) FROM media_assets WHERE owner_id=%s AND status='active'", (user,)), 1)
 
     def test_cancel_during_upload_does_not_restore_task_or_keep_storage(self):
         user = str(self.alice['id'])

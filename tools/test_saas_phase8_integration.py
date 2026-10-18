@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from datetime import timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -35,7 +36,7 @@ class WorkspaceImportTests(unittest.TestCase):
         cls.environment={"DATABASE_URL":TEST_URL,"SHIYUE_SAAS_ENABLED":"1","SESSION_SECRET":"test-only-session-secret-that-is-at-least-32-characters","BOOTSTRAP_ADMIN_EMAIL":"admin@local.test","BOOTSTRAP_ADMIN_PASSWORD":"phase8 admin password","MEDIA_ROOT":str(cls.root)}
         cls.fake_ocr=Path(cls.temp.name)/"fake_pdf_ocr.py";cls.fake_ocr.write_text("#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\nPath(sys.argv[2]).write_text(json.dumps([{'page':1,'lines':[{'text':'PDF native first sentence.'},{'text':'PDF native second sentence!'}]}]))\n",encoding="utf-8");cls.fake_ocr.chmod(0o755)
         cls.fake_model=Path(cls.temp.name)/"fake-model.bin";cls.fake_model.write_bytes(b"model")
-        cls.fake_whisper=Path(cls.temp.name)/"fake_whisper.py";cls.fake_whisper.write_text("#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\nprefix=Path(sys.argv[sys.argv.index('-of')+1])\nprefix.with_suffix('.json').write_text(json.dumps({'transcription':[{'text':'Hello private audio.', 'offsets':{'from':0,'to':1200}, 'tokens':[{'text':' Hello','p':0.9}]},{'text':'Second audio sentence!', 'offsets':{'from':3000,'to':4200}, 'tokens':[{'text':' Second','p':0.9}]}]}))\n",encoding="utf-8");cls.fake_whisper.chmod(0o755)
+        cls.fake_whisper=Path(cls.temp.name)/"fake_whisper.py";cls.fake_whisper.write_text("#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\nif '-pp' in sys.argv:\n print('whisper_print_progress_callback: progress =  40%',file=sys.stderr,flush=True)\n print('whisper_print_progress_callback: progress = 100%',file=sys.stderr,flush=True)\nprefix=Path(sys.argv[sys.argv.index('-of')+1])\nprefix.with_suffix('.json').write_text(json.dumps({'transcription':[{'text':'Hello private audio.', 'offsets':{'from':0,'to':1200}, 'tokens':[{'text':' Hello','p':0.9}]},{'text':'Second audio sentence!', 'offsets':{'from':3000,'to':4200}, 'tokens':[{'text':' Second','p':0.9}]}]}))\n",encoding="utf-8");cls.fake_whisper.chmod(0o755)
         cls.fake_ytdlp=Path(cls.temp.name)/"fake_ytdlp.py";cls.fake_ytdlp.write_text("""#!/usr/bin/env python3
 import json,subprocess,sys
 from pathlib import Path
@@ -94,6 +95,18 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         self.assertEqual(self.workspace.list_books(other)["books"],[])
         repeat=self.imports.complete(owner,task_id);self.assertTrue(repeat["idempotent"])
 
+    def test_abandoned_running_import_is_reclaimed_and_completed(self):
+        owner=str(self.owner["id"])
+        created=self.imports.create(owner,"text","中断恢复","resume.txt","resume-stale-task")
+        task_id=created["task"]["id"]
+        self.imports.upload(owner,task_id,"resume.txt",b"Recovery works. Second sentence.","text/plain")
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE workspace_import_tasks SET status='running',progress=45,updated_at=NOW()-INTERVAL '4 hours' WHERE id=%s",(task_id,))
+        resumed=self.imports.complete(owner,task_id)
+        self.assertEqual(resumed["task"]["status"],"complete")
+        self.assertEqual(resumed["task"]["progress"],100)
+
     def test_mp3_reservation_cancellation_and_source_asset_release(self):
         owner=str(self.owner["id"])
         created=self.imports.create(owner,"mp3","试听","sample.mp3","mp3-task-1")
@@ -151,7 +164,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         self.assertEqual(video["used"],0);self.assertEqual(video["reserved"],0);self.assertGreater(storage["used"],sample.stat().st_size)
         self.assertEqual(next(row for row in usage["usage"] if row["feature"]=="video_library_capacity")["used"],1)
 
-    def test_video_processing_failure_releases_quota_and_source_space(self):
+    def test_video_processing_failure_releases_reservation_and_preserves_retry_source(self):
         owner=str(self.owner["id"]);created=self.video_imports.create(owner,"video","损坏视频","broken.mp4","broken-video-task");task_id=created["task"]["id"]
         uploaded=self.video_imports.upload(owner,task_id,"broken.mp4",b"not-a-video","video/mp4")
         with self.assertRaises(SaaSError) as failed:self.video_imports.complete(owner,task_id)
@@ -159,15 +172,17 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         task=self.video_imports.list(owner)["tasks"][0];self.assertEqual(task["status"],"failed")
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT status FROM media_assets WHERE id=%s",(uploaded["sourceAssetId"],));self.assertEqual((self.accounts._one(cursor)or{})["status"],"deleted")
+                cursor.execute("SELECT status FROM media_assets WHERE id=%s",(uploaded["sourceAssetId"],));self.assertEqual((self.accounts._one(cursor)or{})["status"],"active")
         usage=self.memberships.usage(owner);video=next(row for row in usage["usage"] if row["feature"]=="video_imports");storage=next(row for row in usage["usage"] if row["feature"]=="storage_bytes")
-        self.assertEqual(video["used"],0);self.assertEqual(video["reserved"],0);self.assertEqual(storage["used"],0)
+        self.assertEqual(video["used"],0);self.assertEqual(video["reserved"],0);self.assertEqual(storage["used"],len(b"not-a-video"))
 
     @unittest.skipUnless(shutil.which("ffmpeg"),"FFmpeg is required for the native YouTube acceptance test")
     def test_youtube_native_downloader_reuses_video_processor_and_preserves_captions(self):
-        owner,other=str(self.owner["id"]),str(self.other["id"]);url="https://www.youtube.com/watch?v=fake123"
-        created=self.youtube_imports.create(owner,"youtube","","","native-youtube-task",url);completed=self.youtube_imports.complete(owner,created["task"]["id"])
+        owner,other=str(self.owner["id"]),str(self.other["id"]);url="https://www.youtube.com/watch?v=fake123";progress_events=[];update=self.youtube_imports._update_progress
+        created=self.youtube_imports.create(owner,"youtube","","","native-youtube-task",url)
+        with patch.object(self.youtube_imports,"_update_progress",side_effect=lambda *args:(progress_events.append(args),update(*args))[1]):completed=self.youtube_imports.complete(owner,created["task"]["id"])
         self.assertEqual(completed["task"]["status"],"complete");asset_id=completed["task"]["sourceAssetId"]
+        self.assertIn(70,[event[1] for event in progress_events]);self.assertIn(85,[event[1] for event in progress_events])
         reader=self.workspace.reader(owner,completed["task"]["outputBookId"])["book"];self.assertEqual(reader["resourceType"],"youtube");self.assertEqual(reader["title"],"Private YouTube")
         variants=reader["mediaAssets"][0]["variants"];self.assertEqual([item["name"] for item in variants],["audio","cover","low","subtitles-en","subtitles-zh-CN"])
         self.assertTrue(self.media.stream(owner,asset_id,"subtitles-en")["path"].is_file())

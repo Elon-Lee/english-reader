@@ -14,6 +14,8 @@ EXPECT=ROOT/"tools/deployment/ssh_expect.exp"
 RUNTIME=STATE/"runtime";TLS=STATE/"tls"
 RUNTIME_IMAGE="shiyue-reader-runtime:20260930-1"
 SAAS_IMAGE="shiyue-saas-runtime:20261012-1"
+SAAS_FRONTEND_PORT=5173
+SAAS_BACKEND_PORT=8790
 POSTGRES_IMAGE="postgres:16-bookworm"
 REDIS_IMAGE="redis:7-bookworm"
 TASK_LOCK=threading.Lock();MEMORY_PASSWORDS={}
@@ -59,7 +61,7 @@ def save_target(data,password=""):
     if not host:raise ValueError("请输入SSH地址")
     port=max(1,min(65535,int(data.get("port",22))));remote_root=str(data.get("remoteRoot","/srv/shiyue")).strip() or "/srv/shiyue"
     if remote_root in {"","/","/root","/home","/srv"}:raise ValueError("远程目录范围过大，请使用类似 /srv/shiyue 的独立目录")
-    service_port=max(1,min(65535,int(data.get("servicePort",8765))));stamp=now();db=connect();target_id=data.get("id") or data.get("targetId")
+    service_port=SAAS_FRONTEND_PORT;stamp=now();db=connect();target_id=data.get("id") or data.get("targetId")
     if target_id:
         target_id=int(target_id)
         if not db.execute("SELECT 1 FROM deployment_targets WHERE id=?",(target_id,)).fetchone():db.close();raise ValueError("远程节点不存在")
@@ -451,17 +453,30 @@ def health_check_command(target):
     return f"docker exec shiyue-reader python3 -c {shlex.quote(code)}"
 
 def saas_app_run_command(target,release_path,name="shiyue-saas",port=None,restart=True):
-    root=shlex.quote(target["remote_root"]);release=shlex.quote(release_path);port=int(port or target["service_port"]);recording=bool(target["install_recording"])
+    root=shlex.quote(target["remote_root"]);release=shlex.quote(release_path);port=int(port or SAAS_BACKEND_PORT);recording=bool(target["install_recording"])
     options=[f"docker run -d --name {shlex.quote(name)}"]
     if restart:options.append("--restart unless-stopped")
-    options += ["--network host",f"--env-file {root}/shared/config/saas.env","-e READER_HOST=0.0.0.0",f"-e READER_PORT={port}","-e SHIYUE_RUNTIME_MODE=saas","-e SHIYUE_SAAS_ENABLED=1","-e MEDIA_ROOT=/app/books","-e SAAS_BACKUP_ROOT=/state/backups/saas","-e SHIYUE_PDF_OCR=/opt/shiyue/pdf_ocr","-e SHIYUE_YTDLP=/usr/local/bin/yt-dlp","-e SHIYUE_NODE=/usr/bin/node",
+    options += ["--network host",f"--env-file {root}/shared/config/saas.env","-e READER_HOST=127.0.0.1",f"-e READER_PORT={port}","-e SHIYUE_RUNTIME_MODE=saas","-e SHIYUE_SAAS_ENABLED=1","-e MEDIA_ROOT=/app/books","-e SAAS_BACKUP_ROOT=/state/backups/saas","-e SHIYUE_PDF_OCR=/opt/shiyue/pdf_ocr","-e SHIYUE_YTDLP=/usr/local/bin/yt-dlp","-e SHIYUE_NODE=/usr/bin/node",
       f"-v {release}/reader:/app/reader:ro,z",f"-v {release}/tools:/app/tools:ro,z",f"-v {root}/shared/books:/app/books:z",f"-v {root}/shared/.local:/app/.local:z",f"-v {root}/shared/cache:/app/.cache:z",f"-v {root}/backups:/state/backups:z"]
     if recording:options += [f"-v {root}/shared/whisper/ggml-base.en.bin:/opt/shiyue/models/ggml-base.en.bin:ro,z","-e SHIYUE_WHISPER_CLI=/opt/shiyue/whisper/whisper-cli","-e SHIYUE_WHISPER_MODEL=/opt/shiyue/models/ggml-base.en.bin"]
-    if target.get("use_https",0):options += [f"-v {root}/shared/https:/certs:ro,z","-e READER_TLS_CERT=/certs/server-cert.pem","-e READER_TLS_KEY=/certs/server-key.pem"]
     options.append(shlex.quote(SAAS_IMAGE));return " \\\n  ".join(options)
 
+def saas_frontend_run_command(target,release_path,name="shiyue-saas-frontend",port=None,backend_port=None,restart=True):
+    root=shlex.quote(target["remote_root"]);release=shlex.quote(release_path);port=int(port or SAAS_FRONTEND_PORT);backend_port=int(backend_port or SAAS_BACKEND_PORT)
+    options=[f"docker run -d --name {shlex.quote(name)}"]
+    if restart:options.append("--restart unless-stopped")
+    options += ["--network host",f"-e FRONTEND_HOST=0.0.0.0",f"-e FRONTEND_PORT={port}",f"-e SAAS_BACKEND_URL=http://127.0.0.1:{backend_port}","-e FRONTEND_ROOT=/app/site",f"-v {release}/reader/site:/app/site:ro,z",f"-v {release}/tools:/app/tools:ro,z",shlex.quote(SAAS_IMAGE),"python3","/app/tools/saas_frontend_server.py"]
+    if target.get("use_https",0):options[-3:-3]=[f"-e FRONTEND_TLS_CERT=/certs/server-cert.pem",f"-e FRONTEND_TLS_KEY=/certs/server-key.pem",f"-v {root}/shared/https:/certs:ro,z"]
+    return " \\\n  ".join(options)
+
 def saas_health_check_command(port,container="shiyue-saas"):
-    code=f"import json,urllib.request; h=json.loads(urllib.request.urlopen('http://127.0.0.1:{int(port)}/api/health',timeout=20).read()); assert h.get('status')=='ok' and h.get('saasEnabled') and h.get('redisReady'); print(json.dumps(h,ensure_ascii=False))"
+    backend_port=SAAS_BACKEND_PORT if int(port)==SAAS_FRONTEND_PORT else int(port)
+    code=f"import json,urllib.request; h=json.loads(urllib.request.urlopen('http://127.0.0.1:{backend_port}/api/health',timeout=20).read()); assert h.get('status')=='ok' and h.get('saasEnabled') and h.get('redisReady'); print(json.dumps(h,ensure_ascii=False))"
+    return f"docker exec {shlex.quote(container)} python3 -c {shlex.quote(code)}"
+
+def saas_frontend_health_check_command(port=SAAS_FRONTEND_PORT,container="shiyue-saas-frontend",https=False):
+    scheme="https" if https else "http";context=",context=ssl._create_unverified_context()" if https else ""
+    code=f"import ssl,urllib.request; h=urllib.request.urlopen('{scheme}://127.0.0.1:{int(port)}/',timeout=20{context}); assert h.status==200 and b'<div id=\\\"root\\\"' in h.read(); a=urllib.request.urlopen('{scheme}://127.0.0.1:{int(port)}/api/health',timeout=20{context}); assert a.status==200; print('SHIYUE_FRONTEND_READY')"
     return f"docker exec {shlex.quote(container)} python3 -c {shlex.quote(code)}"
 
 def saas_migration_check_command(container="shiyue-saas-candidate"):
@@ -480,12 +495,14 @@ def ensure_remote_saas_config(job,remote,target):
     root=target["remote_root"];destination=f"{root}/shared/config/saas.env"
     found=remote.ssh(f"test -s {shlex.quote(destination)} && echo SHIYUE_SAAS_ENV_READY || true")
     if "SHIYUE_SAAS_ENV_READY" in found:
-        job.write("远程 SaaS 密钥配置已存在，保留现有数据库和会话密钥");return
+        scheme="https" if target.get("use_https",0) else "http"
+        remote.ssh(f"sed -i -E 's#^APP_BASE_URL=.*#APP_BASE_URL={scheme}://{target['host']}:{SAAS_FRONTEND_PORT}#' {shlex.quote(destination)}")
+        job.write("远程 SaaS 密钥配置已存在，保留现有数据库和会话密钥，并更新前台入口地址");return
     postgres_password=secrets.token_hex(24);redis_password=secrets.token_hex(24);session_secret=secrets.token_urlsafe(48);scheme="https" if target.get("use_https",0) else "http"
     values={
       "POSTGRES_DB":"shiyue","POSTGRES_USER":"shiyue","POSTGRES_PASSWORD":postgres_password,
       "DATABASE_URL":f"postgresql://shiyue:{postgres_password}@127.0.0.1:5432/shiyue","REDIS_PASSWORD":redis_password,"REDIS_URL":f"redis://:{redis_password}@127.0.0.1:6379/0",
-      "SESSION_SECRET":session_secret,"APP_BASE_URL":f"{scheme}://{target['host']}:{int(target['service_port'])}","SHIYUE_SAAS_AUTO_MIGRATE":"1","BOOTSTRAP_ADMIN_EMAIL":"","BOOTSTRAP_ADMIN_PASSWORD":"",
+      "SESSION_SECRET":session_secret,"APP_BASE_URL":f"{scheme}://{target['host']}:{SAAS_FRONTEND_PORT}","SHIYUE_SAAS_AUTO_MIGRATE":"1","BOOTSTRAP_ADMIN_EMAIL":"","BOOTSTRAP_ADMIN_PASSWORD":"",
     }
     with tempfile.TemporaryDirectory(prefix="shiyue-saas-env-") as temp:
         path=Path(temp)/"saas.env";path.write_text("".join(f"{key}={value}\n" for key,value in values.items()),encoding="utf-8");os.chmod(path,0o600)
@@ -535,7 +552,7 @@ test -s {root}/shared/config/saas.env
 test -s {root}/current/.shiyue-release.json
 test -s {root}/current/reader/site/index.html
 test "$(docker inspect -f '{{{{.State.Running}}}}' shiyue-saas)" = true
-docker exec shiyue-saas python3 -c 'import json,urllib.request; h=json.load(urllib.request.urlopen("http://127.0.0.1:{int(target['service_port'])}/api/health",timeout=20)); assert h.get("status")=="ok" and h.get("runtimeMode")=="saas" and h.get("saasEnabled") and h.get("redisReady")'
+docker exec shiyue-saas python3 -c 'import json,urllib.request; import os; port=os.environ.get("READER_PORT","8765"); h=json.load(urllib.request.urlopen("http://127.0.0.1:"+port+"/api/health",timeout=20)); assert h.get("status")=="ok" and h.get("runtimeMode")=="saas" and h.get("saasEnabled") and h.get("redisReady")'
 echo SHIYUE_SAAS_UPGRADE_READY
 """)
     if "SHIYUE_SAAS_UPGRADE_READY" not in output:raise ValueError("远程 SaaS 服务未通过升级前检查")
@@ -804,56 +821,66 @@ rm -f {shlex.quote(remote_bundle)} {shlex.quote(remote_manifest)}
 """
     output=remote.ssh(script)
     if restart:
-        remote.ssh("docker restart shiyue-saas >/dev/null")
+        remote.ssh("docker restart shiyue-saas shiyue-saas-frontend >/dev/null")
         output += remote.ssh(saas_health_check_command(target["service_port"]))
     return {"contentRevision":revision,"database":output,"media":sync_result,"summary":summary}
 
 def activate_saas_release(job,remote,target,release):
-    root=target["remote_root"];release_path=f"{root}/releases/{release}";port=int(target["service_port"]);candidate_port=port+10000
-    candidate=saas_app_run_command(target,release_path,"shiyue-saas-candidate",candidate_port,False);candidate_health=saas_health_check_command(candidate_port,"shiyue-saas-candidate")
-    root_check_code=f"import re,urllib.request; base='http://127.0.0.1:{candidate_port}'; h=urllib.request.urlopen(base+'/',timeout=20).read().decode(); assert 'modern-assets' not in h; m=re.search(r'src=[\\\"\\\']([^\\\"\\\']*assets/index\\.js[^\\\"\\\']*)',h); assert m, 'root page has no built JS'; r=urllib.request.urlopen(base+m.group(1),timeout=20); assert r.status==200 and len(r.read())>0; print('SHIYUE_ROOT_SITE_READY')"
-    job.update(91,"候选端口验收完整 SaaS 服务")
+    root=target["remote_root"];release_path=f"{root}/releases/{release}"
+    candidate_backend=SAAS_BACKEND_PORT+10000;candidate_frontend=SAAS_FRONTEND_PORT+10000
+    candidate=saas_app_run_command(target,release_path,"shiyue-saas-candidate",candidate_backend,False)
+    candidate_frontend_command=saas_frontend_run_command(target,release_path,"shiyue-saas-frontend-candidate",candidate_frontend,candidate_backend,False)
+    candidate_health=saas_health_check_command(candidate_backend,"shiyue-saas-candidate")
+    frontend_health=saas_frontend_health_check_command(candidate_frontend,"shiyue-saas-frontend-candidate",bool(target.get("use_https",0)))
+    frontend_scheme="https" if target.get("use_https",0) else "http";frontend_context=",context=ssl._create_unverified_context()" if target.get("use_https",0) else ""
+    root_check_code=f"import ssl,urllib.request; r=urllib.request.urlopen(\'{frontend_scheme}://127.0.0.1:{candidate_frontend}/\',timeout=20{frontend_context}); assert r.status==200 and b'id=\"root\"' in r.read(); print(\'SHIYUE_FRONTEND_READY\')"
+    job.update(91,"候选端口验收 SaaS 前后台服务")
     script=f"""set -euo pipefail
-docker rm -f shiyue-saas-candidate >/dev/null 2>&1 || true
-{candidate}
-mount_source=$(docker inspect -f '{{{{range .Mounts}}}}{{{{if eq .Destination "/app/reader"}}}}{{{{.Source}}}}{{{{end}}}}{{{{end}}}}' shiyue-saas-candidate)
-[ "$mount_source" = {shlex.quote(release_path + '/reader')} ]
-healthy=0
-for attempt in $(seq 1 60); do
-  if {candidate_health} >/tmp/shiyue-saas-candidate-health.json 2>/tmp/shiyue-saas-candidate-error.log; then healthy=1; break; fi
-  sleep 1
-done
-if [ "$healthy" -ne 1 ]; then docker logs --tail 200 shiyue-saas-candidate >&2 || true; exit 5; fi
-{saas_migration_check_command()}
-docker exec shiyue-saas-candidate python3 -c {shlex.quote(root_check_code)}
-cat /tmp/shiyue-saas-candidate-health.json
-docker rm -f shiyue-saas-candidate >/dev/null
-"""
+ docker rm -f shiyue-saas-candidate shiyue-saas-frontend-candidate >/dev/null 2>&1 || true
+ {candidate}
+ {candidate_frontend_command}
+ healthy=0
+ for attempt in $(seq 1 60); do
+   if {candidate_health} >/tmp/shiyue-saas-candidate-health.json 2>/tmp/shiyue-saas-candidate-error.log && {frontend_health} >/tmp/shiyue-saas-frontend-health.log 2>/tmp/shiyue-saas-frontend-error.log; then healthy=1; break; fi
+   sleep 1
+ done
+ if [ "$healthy" -ne 1 ]; then docker logs --tail 200 shiyue-saas-candidate >&2 || true; docker logs --tail 200 shiyue-saas-frontend-candidate >&2 || true; exit 5; fi
+ {saas_migration_check_command("shiyue-saas-candidate")}
+ docker exec shiyue-saas-frontend-candidate python3 -c {shlex.quote(root_check_code)}
+ cat /tmp/shiyue-saas-candidate-health.json
+ docker rm -f shiyue-saas-candidate shiyue-saas-frontend-candidate >/dev/null
+ """
     candidate_output=remote.ssh(script)
-    job.update(95,"替换旧站并启用根路径 SaaS")
-    production=saas_app_run_command(target,f"{root}/current","shiyue-saas",port,True);production_health=saas_health_check_command(port,"shiyue-saas");legacy=docker_run_command(target)
-    previous_saas=saas_app_run_command(target,f"{root}/current","shiyue-saas",port,True)
+    job.update(95,"替换旧站并启用 SaaS 前后台")
+    production=saas_app_run_command(target,f"{root}/current","shiyue-saas",SAAS_BACKEND_PORT,True)
+    production_frontend=saas_frontend_run_command(target,f"{root}/current","shiyue-saas-frontend",SAAS_FRONTEND_PORT,SAAS_BACKEND_PORT,True)
+    production_health=saas_health_check_command(SAAS_BACKEND_PORT,"shiyue-saas")
+    frontend_production_health=saas_frontend_health_check_command(SAAS_FRONTEND_PORT,"shiyue-saas-frontend",bool(target.get("use_https",0)))
+    legacy=docker_run_command(target)
+    previous_saas=saas_app_run_command(target,f"{root}/current","shiyue-saas",SAAS_BACKEND_PORT,True)
+    previous_frontend=saas_frontend_run_command(target,f"{root}/current","shiyue-saas-frontend",SAAS_FRONTEND_PORT,SAAS_BACKEND_PORT,True)
     switch=f"""set -euo pipefail
-previous_release=$(readlink -f {shlex.quote(root)}/current 2>/dev/null || true)
-docker rm -f shiyue-saas shiyue-reader >/dev/null 2>&1 || true
-ln -sfn {shlex.quote(release_path)} {shlex.quote(root)}/current
-{production}
-healthy=0
-for attempt in $(seq 1 60); do
-  if {production_health} >/tmp/shiyue-saas-health.json 2>/tmp/shiyue-saas-health-error.log; then healthy=1; break; fi
-  sleep 1
-done
-if [ "$healthy" -ne 1 ]; then
-  docker logs --tail 200 shiyue-saas >&2 || true
-  docker rm -f shiyue-saas >/dev/null 2>&1 || true
-  if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then
-    ln -sfn "$previous_release" {shlex.quote(root)}/current
-    if [ -s "$previous_release/reader/site/index.html" ]; then {previous_saas}; else {legacy}; fi
-  fi
-  exit 6
-fi
-cat /tmp/shiyue-saas-health.json
-"""
+ previous_release=$(readlink -f {shlex.quote(root)}/current 2>/dev/null || true)
+ docker rm -f shiyue-saas shiyue-saas-frontend shiyue-reader >/dev/null 2>&1 || true
+ ln -sfn {shlex.quote(release_path)} {shlex.quote(root)}/current
+ {production}
+ {production_frontend}
+ healthy=0
+ for attempt in $(seq 1 60); do
+   if {production_health} >/tmp/shiyue-saas-health.json 2>/tmp/shiyue-saas-health-error.log && {frontend_production_health} >/tmp/shiyue-saas-frontend-health.log 2>/tmp/shiyue-saas-frontend-error.log; then healthy=1; break; fi
+   sleep 1
+ done
+ if [ "$healthy" -ne 1 ]; then
+   docker logs --tail 200 shiyue-saas >&2 || true; docker logs --tail 200 shiyue-saas-frontend >&2 || true
+   docker rm -f shiyue-saas shiyue-saas-frontend >/dev/null 2>&1 || true
+   if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then
+     ln -sfn "$previous_release" {shlex.quote(root)}/current
+     if [ -s "$previous_release/reader/site/index.html" ]; then {previous_saas}; {previous_frontend}; else {legacy}; fi
+   fi
+   exit 6
+ fi
+ cat /tmp/shiyue-saas-health.json
+ """
     return {"candidate":candidate_output,"production":remote.ssh(switch)}
 
 def run_task(kind,worker,target_id):
@@ -926,8 +953,10 @@ def start_saas_upgrade(target_id):
 current_release=$(readlink -f {root}/current)
 test "$(basename "$current_release")" = {shlex.quote(release)}
 test "$(docker inspect -f '{{{{.State.Running}}}}' shiyue-saas)" = true
+test "$(docker inspect -f '{{{{.State.Running}}}}' shiyue-saas-frontend)" = true
 mount_source=$(docker inspect -f '{{{{range .Mounts}}}}{{{{if eq .Destination "/app/reader"}}}}{{{{.Source}}}}{{{{end}}}}{{{{end}}}}' shiyue-saas)
 test "$(readlink -f "$mount_source")" = "$current_release/reader"
+{saas_frontend_health_check_command(SAAS_FRONTEND_PORT,"shiyue-saas-frontend",bool(target.get("use_https",0)))}
 echo SHIYUE_SAAS_RELEASE_ACTIVE
 """)
         if "SHIYUE_SAAS_RELEASE_ACTIVE" not in verification:raise ValueError("线上 SaaS 容器与 current 发布版本不一致")
@@ -958,7 +987,7 @@ def start_saas_deploy(target_id):
     return run_task("saas_deploy",worker,target_id)
 def start_saas_public_sync(target_id):
     def worker(job,remote,target):
-        output=remote.ssh(f"set -e; docker inspect shiyue-saas >/dev/null; docker inspect shiyue-postgres >/dev/null; docker inspect shiyue-redis >/dev/null; test -s {shlex.quote(target['remote_root'])}/current/reader/site/index.html; echo SHIYUE_SAAS_READY")
+        output=remote.ssh(f"set -e; docker inspect shiyue-saas >/dev/null; docker inspect shiyue-saas-frontend >/dev/null; docker inspect shiyue-postgres >/dev/null; docker inspect shiyue-redis >/dev/null; test -s {shlex.quote(target['remote_root'])}/current/reader/site/index.html; echo SHIYUE_SAAS_READY")
         if "SHIYUE_SAAS_READY" not in output:raise ValueError("远程尚未完成 SaaS 根站部署")
         result=sync_saas_public_content(job,remote,target);job.complete(result,"SaaS 公共资源增量同步完成")
     return run_task("saas_public_sync",worker,target_id)
@@ -1069,11 +1098,12 @@ def start_uninstall(target_id,confirmation):
         quoted=shlex.quote(root)
         script=f"""set -e
 if command -v systemctl >/dev/null 2>&1; then systemctl disable --now shiyue-reader >/dev/null 2>&1 || true; fi
+docker rm -f shiyue-saas shiyue-saas-frontend >/dev/null 2>&1 || true
 docker rm -f shiyue-reader >/dev/null 2>&1 || true
 if [ -d {quoted} ]; then rm -rf -- {quoted}; fi
 docker images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' 2>/dev/null | while read image; do
   case "$image" in
-    shiyue-reader:*|shiyue-reader-runtime:*) docker image rm "$image" >/dev/null 2>&1 || true ;;
+    shiyue-saas:*|shiyue-reader:*|shiyue-reader-runtime:*) docker image rm "$image" >/dev/null 2>&1 || true ;;
   esac
 done
 test ! -e {quoted}

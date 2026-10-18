@@ -9,10 +9,13 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import queue
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -191,7 +194,7 @@ class WorkspaceImportService:
         book={"id":f"private-{task_id}","title":title,"englishTitle":title,"sourceType":"audio","duration":duration,"alignment":"whisper-dtw-normalized","sentences":sentences,"whisper":{"engine":"whisper.cpp","model":self.whisper_model.name,"timestampMethod":"dtw","transcribedWords":sum(len(sentence.get("words",[])) for sentence in sentences)},"segmentation":segmentation}
         return book,{"extractor":"whisper.cpp","model":self.whisper_model.name,"sentences":len(sentences),"duration":duration}
 
-    def _video_book(self,source:Path,task_id:str,title:str,asset_id:str)->tuple[dict[str,Any],dict[str,Any],list[dict[str,str]]]:
+    def _video_book(self,source:Path,task_id:str,title:str,asset_id:str,progress=None)->tuple[dict[str,Any],dict[str,Any],list[dict[str,str]]]:
         if not self.whisper_cli.is_file() or not self.whisper_model.is_file():
             raise SaaSError("whisper_unavailable","本机 Whisper 处理器或模型未安装。",503)
         source=source.resolve();output_dir=source.parent;audio_path=output_dir/"audio.m4a";cover_path=output_dir/"cover.jpg";low_video_path=output_dir/"video-low.mp4"
@@ -205,15 +208,44 @@ class WorkspaceImportService:
                     [ffmpeg,"-y","-v","error","-ss","0","-i",str(source),"-frames:v","1","-vf","scale=960:-2",str(cover_path)],
                     [ffmpeg,"-y","-v","error","-i",str(source),"-map","0:v:0","-map","0:a:0?","-vf","scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2","-c:v","libx264","-preset","veryfast","-crf","27","-maxrate","380k","-bufsize","760k","-g","50","-keyint_min","50","-pix_fmt","yuv420p","-threads","2","-c:a","aac","-b:a","96k","-ac","2","-movflags","+faststart",str(low_video_path)],
                 ]
-                for command in commands:
+                steps=("提取音频", "准备语音转写", "生成视频封面", "生成流畅视频")
+                for index,command in enumerate(commands):
+                    if progress:progress(47+index*3,steps[index])
                     try:subprocess.run(command,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=600)
                     except FileNotFoundError as exc:raise SaaSError("ffmpeg_unavailable","本机 FFmpeg 未安装。",503) from exc
                     except subprocess.TimeoutExpired as exc:raise SaaSError("video_processing_timeout","视频音频或封面提取超时。",504) from exc
                     except subprocess.CalledProcessError as exc:raise SaaSError("video_processing_failed","FFmpeg 无法处理该视频。",422) from exc
-                command=[str(self.whisper_cli),"-m",str(self.whisper_model),"-f",str(whisper_audio),"-l","en","-t",os.environ.get("SHIYUE_WHISPER_THREADS","3"),"-p","2","-ng","-dtw","base.en","-ml","1","-sow","-ojf","-of",str(prefix),"-np"]
-                try:subprocess.run(command,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1800)
-                except subprocess.TimeoutExpired as exc:raise SaaSError("whisper_timeout","视频转写超时。",504) from exc
-                except subprocess.CalledProcessError as exc:raise SaaSError("whisper_failed","视频 Whisper 转写失败。",422) from exc
+                command=[str(self.whisper_cli),"-m",str(self.whisper_model),"-f",str(whisper_audio),"-l","en","-t",os.environ.get("SHIYUE_WHISPER_THREADS","3"),"-p","2","-ng","-dtw","base.en","-ml","1","-sow","-ojf","-of",str(prefix),"-pp"]
+                if progress:progress(60,"Whisper 正在转写视频音频")
+                try:
+                    process=subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True,bufsize=1)
+                    lines:queue.Queue[str|None]=queue.Queue()
+                    def read_stderr():
+                        try:
+                            for line in process.stderr or ():lines.put(line.rstrip())
+                        finally:lines.put(None)
+                    threading.Thread(target=read_stderr,daemon=True).start()
+                    deadline=time.monotonic()+1800;last_progress=60;recent=[];closed=False
+                    while process.poll() is None or not closed:
+                        remaining=deadline-time.monotonic()
+                        if remaining<=0:
+                            process.kill();process.wait();raise SaaSError("whisper_timeout","视频转写超时。",504)
+                        try:line=lines.get(timeout=min(30,remaining))
+                        except queue.Empty:
+                            if progress:progress(last_progress,"Whisper 正在转写视频音频")
+                            continue
+                        if line is None:
+                            closed=True;continue
+                        recent.append(line);recent=recent[-20:]
+                        match=re.search(r"progress\s*=\s*(\d+)\s*%",line,re.IGNORECASE)
+                        if match:
+                            value=int(match.group(1));last_progress=60+round(max(0,min(100,value))*0.25)
+                            if progress:progress(last_progress,"Whisper 正在转写视频音频")
+                    if process.stderr:process.stderr.close()
+                    if process.returncode:
+                        raise SaaSError("whisper_failed",("视频 Whisper 转写失败："+"\n".join(recent))[-1800:],422)
+                except FileNotFoundError as exc:raise SaaSError("whisper_unavailable","本机 Whisper 处理器未安装。",503) from exc
+                except OSError as exc:raise SaaSError("whisper_failed","无法启动视频 Whisper 转写。",422) from exc
                 try:transcript=json.loads(prefix.with_suffix(".json").read_text(encoding="utf-8"))
                 except (OSError,json.JSONDecodeError) as exc:raise SaaSError("whisper_failed","Whisper 没有产生可读视频转写。",422) from exc
             sentences,segmentation=whisper_book(transcript)
@@ -252,6 +284,22 @@ class WorkspaceImportService:
         return target
 
     def _youtube_download(self,user_id:str,task_id:str,url:str)->tuple[Path,str,dict[str,Any],list[dict[str,str]]]:
+        # A failed YouTube task may already have registered its downloaded
+        # source before a later processing step failed. Reuse that asset on
+        # retry instead of downloading into the same unique storage path.
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                task=self._task(cursor,user_id,task_id,lock=False)
+                existing_id=task.get("source_asset_id")
+                if existing_id:
+                    cursor.execute("SELECT storage_path FROM media_assets WHERE id=%s AND owner_id=%s AND status='active'",(existing_id,user_id));asset=self.accounts._one(cursor)
+                    if asset:
+                        _,source=self.media._safe_path(asset["storage_path"])
+                        if source.is_file():
+                            metadata=as_json(task.get("metadata_json")) if task.get("metadata_json") else {}
+                            cursor.execute("SELECT variant_name,content_type,storage_path FROM asset_variants WHERE asset_id=%s AND deleted_at IS NULL",(existing_id,))
+                            captions=[{"name":row["variant_name"],"contentType":row["content_type"],"storagePath":row["storage_path"]} for row in self.accounts._many(cursor) if str(row["variant_name"]).startswith("subtitles-")]
+                            return source,existing_id,metadata,captions
         if not self.node.is_file():raise SaaSError("youtube_runtime_unavailable","本机 Node.js 运行时未安装。",503)
         info_result=self._run_ytdlp([self.yt_dlp,"--js-runtimes",f"node:{self.node}","--dump-single-json","--no-playlist","--skip-download",url],180)
         try:info=json.loads(info_result.stdout)
@@ -306,7 +354,36 @@ class WorkspaceImportService:
             raise
         return target,asset["id"],metadata,staged_captions
 
+    def _update_progress(self,task_id:str,progress:int,step:str)->None:
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE workspace_import_tasks SET progress=%s,step=%s,updated_at=NOW() WHERE id=%s AND status='running'",(progress,step,task_id))
+
     def complete(self,user_id:str,task_id:str)->dict[str,Any]:
+        """Serialize processing and reclaim tasks abandoned for over 80 minutes."""
+        connection=self.accounts._connect()
+        key=f"import-complete:{user_id}:{task_id}"
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_try_advisory_lock(hashtextextended(%s,0))",(key,))
+                locked=bool(cursor.fetchone()[0])
+            if not locked:
+                task=next((item for item in self.list(user_id)["tasks"] if item["id"]==task_id),None)
+                if not task:raise SaaSError("import_task_not_found","导入任务不存在或你无权访问。",404)
+                return {"task":task,"idempotent":True}
+            with self.accounts.transaction() as tx:
+                with tx.cursor() as cursor:
+                    task=self._task(cursor,user_id,task_id)
+                    if task["status"]=="running":
+                        cursor.execute("UPDATE workspace_import_tasks SET status='queued',step='恢复中断的导入任务',updated_at=NOW() WHERE id=%s AND updated_at<NOW()-INTERVAL '80 minutes' RETURNING id",(task_id,))
+                        if not cursor.fetchone():return {"task":self._public(task),"idempotent":True}
+            return self._complete_locked(user_id,task_id)
+        finally:
+            try:
+                with connection.cursor() as cursor:cursor.execute("SELECT pg_advisory_unlock(hashtextextended(%s,0))",(key,))
+            finally:connection.close()
+
+    def _complete_locked(self,user_id:str,task_id:str)->dict[str,Any]:
         """Run document extraction outside database transactions.
 
         The task is marked running first, then OCR/text extraction happens with
@@ -320,7 +397,9 @@ class WorkspaceImportService:
                     task=self._task(cursor,user_id,task_id)
                     if task["status"]=="complete":return {"task":self._public(task),"idempotent":True}
                     if task["status"]=="running":return {"task":self._public(task),"idempotent":True}
-                    if task["status"] in {"cancelled","failed"}:raise SaaSError("import_task_terminal","该任务已经结束。",409)
+                    if task["status"]=="cancelled":raise SaaSError("import_task_terminal","该任务已经结束。",409)
+                    if task["status"]=="failed" and not (task["kind"]=="youtube" and task.get("source_asset_id")):
+                        raise SaaSError("import_task_terminal","该任务已经结束。",409)
                     if task["kind"] not in {"text","document","mp3","video","youtube"}:
                         cursor.execute("UPDATE workspace_import_tasks SET status='awaiting_processor',progress=20,step='等待 PostgreSQL 原生处理器迁移',updated_at=NOW() WHERE id=%s",(task_id,));cursor.execute("SELECT * FROM workspace_import_tasks WHERE id=%s",(task_id,));return {"task":self._public(self.accounts._one(cursor)or{}),"idempotent":False}
                     source=None if task["kind"]=="youtube" else self._source_path(cursor,user_id,task)
@@ -333,7 +412,7 @@ class WorkspaceImportService:
                 data,extractor=self._audio_book(source,task_id,title);source_type="audio";book_id=data["id"]
             elif work["kind"]=="video":
                 if source.suffix.casefold() not in {".mp4",".mov",".m4v",".mkv",".webm"}:raise SaaSError("unsupported_video","当前原生视频处理器仅支持 MP4、MOV、M4V、MKV 和 WebM。",422)
-                data,extractor,variants=self._video_book(source,task_id,title,work["source_asset_id"]);source_type="video";book_id=data["id"]
+                data,extractor,variants=self._video_book(source,task_id,title,work["source_asset_id"],lambda value,step:self._update_progress(task_id,value,step));source_type="video";book_id=data["id"]
                 pending_variant_paths=[variant["storagePath"] for variant in variants]
                 try:self.media.add_variants(user_id,work["source_asset_id"],variants)
                 except Exception:
@@ -346,7 +425,7 @@ class WorkspaceImportService:
                 source,asset_id,youtube,captions=self._youtube_download(user_id,task_id,work["source_url"]);work["source_asset_id"]=asset_id
                 title=str(work["title"] or youtube.get("title") or "YouTube 视频").strip() or "YouTube 视频"
                 pending_variant_paths=[variant["storagePath"] for variant in captions]
-                data,extractor,variants=self._video_book(source,task_id,title,asset_id);data["sourceType"]="youtube";data["youtube"]=youtube;source_type="youtube";book_id=data["id"]
+                data,extractor,variants=self._video_book(source,task_id,title,asset_id,lambda value,step:self._update_progress(task_id,value,step));data["sourceType"]="youtube";data["youtube"]=youtube;source_type="youtube";book_id=data["id"]
                 variants.extend(captions);pending_variant_paths=[variant["storagePath"] for variant in variants]
                 try:self.media.add_variants(user_id,asset_id,variants)
                 except Exception:
@@ -386,6 +465,22 @@ class WorkspaceImportService:
         if reservation_id:self.memberships.settle(user_id,reservation_id)
         return {"task":self._public(completed),"idempotent":False}
 
+    def retry(self,user_id:str,task_id:str)->dict[str,Any]:
+        """Reset a failed task so its existing source can be processed again."""
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                task=self._task(cursor,user_id,task_id)
+                if task["status"]!="failed":
+                    if task["status"] in {"queued","uploading","running","processing"}:return {"task":self._public(task),"idempotent":True}
+                    raise SaaSError("import_task_not_retryable","只有失败任务可以重试。",409)
+                if task["kind"]!="youtube" and not task.get("source_asset_id"):
+                    raise SaaSError("import_source_missing","失败任务的源文件已不存在，请重新上传。",409)
+                cursor.execute("""UPDATE workspace_import_tasks
+                    SET status='queued',progress=%s,step=%s,error='',output_book_id=NULL,completed_at=NULL,updated_at=NOW()
+                    WHERE id=%s""",(0 if task["kind"]=="youtube" else 15,"等待重新处理",task_id))
+                cursor.execute("SELECT * FROM workspace_import_tasks WHERE id=%s",(task_id,));retrying=self.accounts._one(cursor)or{}
+                return {"task":self._public(retrying),"idempotent":False}
+
     def fail(self,user_id:str,task_id:str,error:str)->dict[str,Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
@@ -394,9 +489,6 @@ class WorkspaceImportService:
                 cursor.execute("UPDATE workspace_import_tasks SET status='failed',step='导入失败',error=%s,updated_at=NOW() WHERE id=%s",(str(error)[:2000],task_id));cursor.execute("SELECT * FROM workspace_import_tasks WHERE id=%s",(task_id,));failed=self.accounts._one(cursor)or{}
         if failed.get("quota_reservation_id"):
             try:self.memberships.release(user_id,failed["quota_reservation_id"])
-            except SaaSError:pass
-        if failed.get("source_asset_id"):
-            try:self.media.delete(user_id,failed["source_asset_id"])
             except SaaSError:pass
         return {"task":self._public(failed),"idempotent":False}
 

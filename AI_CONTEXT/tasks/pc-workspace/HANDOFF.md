@@ -6,6 +6,10 @@
 
 ## 已完成
 
+- 2026-10-18 书架失败导入任务的“重试”改为调用原任务重试 API，保留源文件并直接重新执行当前任务，不再打开新的导入确认弹窗；失败处理不再删除源文件，缺失源文件时返回明确错误。已通过构建、modern/UI smoke、Python 编译和 `git diff --check`，本地 SaaS 后台已重启加载新接口。
+- 2026-10-18 本机导入报“Whisper 处理器或模型未安装”已修复：运行 `tools/install_whisper.sh` 构建 `tools/vendor/whisper.cpp/build/bin/whisper-cli` 并下载 `tools/vendor/whisper.cpp/models/ggml-base.en.bin`，后台已重启，Whisper CLI 与模型文件均已验证存在。
+- 2026-10-18 修复 YouTube 失败任务重试时的“该媒体路径已经登记”：如果第一次下载已登记源媒体，后续重试会复用现有源媒体和字幕变体，不重复登记同一路径；普通文件导入仍按原流程处理。SaaS 导入集成测试因当前环境未设置安全的 `_test` 数据库 URL 未能启动，Python 编译和 `git diff --check` 已通过；本地后台已重启。
+
 - 2026-10-18 权益触限不再仅弹错误：通过 `api/membershipLimit.js` 与全局 `MembershipLimitModal` 接入同页升级、云猫购买/兑换、成功刷新权益和继续原操作。书城关闭详情后显示可升级套餐，免费可选进阶/Pro、进阶仅 Pro，最高档显示无可升级说明；加载、失败重试、空状态均具备。仅本地，尚未发布生产。
 - 新前端页面：学习空间、书城、书架、学习记录、生词、奖励、会员、运营后台、平台部署、设置。
 - Vite 地址保持 `/modern-assets/?screen=...`；生产保持 `/modern.html?screen=...`。

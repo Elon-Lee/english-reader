@@ -67,7 +67,7 @@ def main():
     print(f"目标：{target['id']} · {target['name']} · {target['host']}:{target['port']} · {action}",flush=True)
     if args.saas:job_id=manager.start_saas_deploy(target["id"])
     elif args.sync_public:job_id=manager.start_saas_public_sync(target["id"])
-    elif args.full:job_id=manager.start_deploy(target["id"])
+    elif args.full:job_id=manager.start_saas_deploy(target["id"])
     else:job_id=manager.start_saas_upgrade(target["id"])
     print(f"部署任务：{job_id}",flush=True)
     follow_job(job_id,max(30,args.timeout))

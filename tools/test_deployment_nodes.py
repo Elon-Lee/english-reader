@@ -56,11 +56,11 @@ class DeploymentNodeTests(unittest.TestCase):
         target=manager.save_target({"name":"HTTP节点","host":"10.0.0.10","remoteRoot":"/srv/shiyue-http","useHttps":False,"installRecording":True})
         self.assertEqual(target["use_https"],0);self.assertEqual(target["install_recording"],1)
         command=manager.docker_run_command(manager.get_target(target["id"]));health=manager.health_check_command(manager.get_target(target["id"]))
-        self.assertIn("ggml-base.en.bin",command);self.assertNotIn("READER_TLS_CERT",command);self.assertNotIn("/certs",command);self.assertIn("http://127.0.0.1:8765",health)
+        self.assertIn("ggml-base.en.bin",command);self.assertNotIn("READER_TLS_CERT",command);self.assertNotIn("/certs",command);self.assertIn("http://127.0.0.1:5173",health)
 
     def test_https_protocol_mounts_certificates(self):
         target=manager.save_target({"name":"HTTPS节点","host":"10.0.0.11","remoteRoot":"/srv/shiyue-https","useHttps":True,"installRecording":False})
         command=manager.docker_run_command(manager.get_target(target["id"]));health=manager.health_check_command(manager.get_target(target["id"]))
-        self.assertIn("READER_TLS_CERT",command);self.assertNotIn("ggml-base.en.bin",command);self.assertIn("https://127.0.0.1:8765",health)
+        self.assertIn("READER_TLS_CERT",command);self.assertNotIn("ggml-base.en.bin",command);self.assertIn("https://127.0.0.1:5173",health)
 
 if __name__=="__main__":unittest.main()

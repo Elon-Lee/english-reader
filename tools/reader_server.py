@@ -528,7 +528,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if self.path == "/api/deployment/config":self.reply({"target":deployment_manager.save_target(item,str(item.get("password","")).strip())});return
                 if not target_id:self.reply({"error":"请选择远程节点"},400);return
                 if self.path == "/api/deployment/test":self.reply({"jobId":deployment_manager.start_test(target_id)},202);return
-                if self.path == "/api/deployment/deploy":self.reply({"jobId":deployment_manager.start_deploy(target_id)},202);return
+                if self.path == "/api/deployment/deploy":self.reply({"jobId":deployment_manager.start_saas_deploy(target_id)},202);return
                 if self.path in {"/api/deployment/upgrade","/api/deployment/saas-upgrade"}:self.reply({"jobId":deployment_manager.start_saas_upgrade(target_id)},202);return
                 if self.path == "/api/deployment/sync":self.reply({"jobId":deployment_manager.start_sync(target_id)},202);return
                 if self.path == "/api/deployment/uninstall":self.reply({"jobId":deployment_manager.start_uninstall(target_id,str(item.get("confirmName","")).strip())},202);return
@@ -976,6 +976,8 @@ class Handler(SimpleHTTPRequestHandler):
                 self.reply(result,201);return
             if path.endswith("/complete"):
                 task_id=unquote(path[len("/api/workspace/imports/"):-len("/complete")].rstrip("/"));self.reply(WORKSPACE_IMPORTS.complete(user_id,task_id));return
+            if path.endswith("/retry"):
+                task_id=unquote(path[len("/api/workspace/imports/"):-len("/retry")].rstrip("/"));self.reply(WORKSPACE_IMPORTS.retry(user_id,task_id));return
             if path.endswith("/cancel"):
                 task_id=unquote(path[len("/api/workspace/imports/"):-len("/cancel")].rstrip("/"));self.reply(WORKSPACE_IMPORTS.cancel(user_id,task_id));return
             self.reply({"error":"not found"},404)
