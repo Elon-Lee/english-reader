@@ -300,7 +300,7 @@ def export_saas_public_content(job,revision):
     for item in payload.get("files",[]):
         source=(media_root/item["path"]).resolve();source.relative_to(media_root)
         destination=stage/item["path"];destination.parent.mkdir(parents=True,exist_ok=True);destination.symlink_to(source)
-    job.write(f"公共资源：{summary['catalogBooks']} 本上架书 · {summary['files']} 个文件 · {summary['bytes']/1024/1024:.1f} MiB")
+    job.write(f"待审核内容：{summary['catalogBooks']} 本 · {summary['files']} 个文件 · {summary['bytes']/1024/1024:.1f} MiB；上传后需在线上运营后台审核发布")
     return stage,bundle,manifest,summary
 
 def ensure_remote_docker(job,remote):
@@ -630,16 +630,17 @@ rm -f {shlex.quote(remote_dump)}
 def prune_initial_database_to_published_content(job,remote,target):
     root=target["remote_root"]
     sql="""BEGIN;
-CREATE TEMP TABLE shiyue_public_catalog AS SELECT id,source_content_book_id FROM catalog_books WHERE publication_status='published' AND rights_status IN ('public_domain','licensed');
+CREATE TEMP TABLE shiyue_public_catalog AS SELECT id,source_content_book_id FROM catalog_books WHERE publication_status IN ('draft','published') AND rights_status IN ('public_domain','licensed','private');
 DELETE FROM official_book_unlocks WHERE catalog_book_id NOT IN (SELECT id FROM shiyue_public_catalog);
 DELETE FROM user_library WHERE catalog_book_id NOT IN (SELECT id FROM shiyue_public_catalog);
 DELETE FROM catalog_books WHERE id NOT IN (SELECT id FROM shiyue_public_catalog);
 DELETE FROM media_assets ma WHERE NOT EXISTS (SELECT 1 FROM shiyue_public_catalog pc WHERE pc.id=ma.catalog_book_id OR pc.source_content_book_id=ma.content_book_id);
 DELETE FROM content_books WHERE id NOT IN (SELECT source_content_book_id FROM shiyue_public_catalog WHERE source_content_book_id IS NOT NULL);
+UPDATE catalog_books SET publication_status='draft',reviewed_by=NULL,published_at=NULL,updated_at=NOW();
 COMMIT;"""
     job.update(67,"移除首次快照中的非公开书籍数据")
     command=f"set -e; set -a; . {shlex.quote(root)}/shared/config/saas.env; set +a; docker exec shiyue-postgres psql -v ON_ERROR_STOP=1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -c {shlex.quote(sql)}"
-    remote.ssh(command);job.write("远程初始数据库仅保留已公开且版权允许的书籍内容；账号、订阅和平台配置已保留")
+    remote.ssh(command);job.write("远程初始数据库仅保留已登记书目及关联内容，统一设为未审核；需在线上运营后台审核后发布。账号、订阅和平台配置已保留")
 
 def local_dioco_config():
     if not PRIVATE_CONFIG.exists():return None
@@ -806,18 +807,20 @@ def sync_saas_public_content(job,remote,target,release_path=None,progress=None,r
     root=target["remote_root"];release_path=release_path or f"{root}/current";backup=f"{root}/backups/resources/{revision}";remote_bundle=f"{root}/shared/.local/{bundle.name}";remote_manifest=f"/tmp/{manifest.name}"
     job.update(progress["prepare"],"准备远程公共资源目录");remote.ssh(f"set -e; docker inspect shiyue-postgres >/dev/null; docker image inspect {shlex.quote(SAAS_IMAGE)} >/dev/null; mkdir -p {shlex.quote(root)}/shared/books {shlex.quote(backup)} {shlex.quote(root)}/manifests/history {shlex.quote(root)}/shared/.local")
     sync_result=remote.sync_tree_package(stage,f"{root}/shared/books",backup,manifest,f"{root}/manifests/current-saas-public.json",progress)
-    job.update(progress["database"],"上传公共书目数据库包");remote.scp(bundle,remote_bundle);remote.scp(manifest,remote_manifest)
+    apply_helper=f"{revision}.apply.py"
+    job.update(progress["database"],"上传待审核书目数据库包");remote.scp(bundle,remote_bundle);remote.scp(manifest,remote_manifest)
+    remote.scp(ROOT/"tools/deployment/saas_public_sync.py",f"{root}/shared/.local/{apply_helper}")
     job.update(progress["merge"],"合并公共书目并保留远程用户数据")
     command=(f"docker run --rm --network host --env-file {shlex.quote(root)}/shared/config/saas.env "
       f"-v {shlex.quote(release_path)}/tools:/app/tools:ro,z -v {shlex.quote(root)}/shared/.local:/app/.local:z "
-      f"-v {shlex.quote(root)}/manifests:/state/manifests:z {shlex.quote(SAAS_IMAGE)} python3 /app/tools/deployment/saas_public_sync.py apply "
+      f"-v {shlex.quote(root)}/manifests:/state/manifests:z {shlex.quote(SAAS_IMAGE)} python3 /app/.local/{shlex.quote(apply_helper)} apply "
       f"--bundle /app/.local/{shlex.quote(bundle.name)} --previous-manifest /state/manifests/current-saas-public.json")
     script=f"""set -euo pipefail
 {command}
 cp {shlex.quote(remote_manifest)} {shlex.quote(root)}/manifests/current-saas-public.json
 cp {shlex.quote(remote_manifest)} {shlex.quote(root)}/manifests/history/{revision}.json
 cp {shlex.quote(remote_bundle)} {shlex.quote(root)}/manifests/history/{revision}.json.gz
-rm -f {shlex.quote(remote_bundle)} {shlex.quote(remote_manifest)}
+rm -f {shlex.quote(remote_bundle)} {shlex.quote(remote_manifest)} {shlex.quote(root+'/shared/.local/'+apply_helper)}
 """
     output=remote.ssh(script)
     if restart:

@@ -92,6 +92,21 @@ class PhaseThreePostgresTests(unittest.TestCase):
         self.assertEqual(len(self.catalog.library(str(self.bob["id"]))["items"]),0)
         self.assertNotEqual(first,second)
 
+    def test_archive_and_restore_preserve_membership_and_user_isolation(self):
+        book_id=self.publish(30)
+        alice_id=str(self.alice["id"]);bob_id=str(self.bob["id"])
+        self.catalog.add_or_unlock(alice_id,book_id,False)
+        self.catalog.add_or_unlock(bob_id,book_id,False)
+        for state in ("later","later","active"):
+            result=self.catalog.add_or_unlock(alice_id,book_id,False,state)
+            self.assertEqual(result["shelfState"],state)
+            items=self.catalog.library(alice_id)["items"]
+            self.assertEqual(len(items),1)
+            self.assertEqual(items[0]["shelfState"],state)
+            self.assertTrue(items[0]["inLibrary"])
+            self.assertEqual(self.catalog.reader(alice_id,book_id)["book"]["id"],book_id)
+            self.assertEqual(self.catalog.library(bob_id)["items"][0]["shelfState"],"active")
+
     def test_uncollected_catalog_reader_is_limited_to_trial_mode(self):
         book_id=self.publish(3)
         trial=self.catalog.reader(str(self.alice["id"]),book_id,trial=True)["book"]

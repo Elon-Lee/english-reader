@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import inspect,json,subprocess,sys,tarfile,tempfile,unittest
+import inspect,json,shlex,subprocess,sys,tarfile,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -76,6 +76,16 @@ class DeploymentReleasePipelineTests(unittest.TestCase):
         self.assertIn("SHIYUE_MIGRATIONS_READY",remote.scripts[-2])
         self.assertIn("/app/reader",remote.scripts[-2])
 
+    def test_initial_content_requires_review_and_sync_uses_current_apply_helper(self):
+        remote=SyntaxRemote()
+        manager.prune_initial_database_to_published_content(Job(),remote,{"remote_root":"/srv/shiyue"})
+        applied_sql=shlex.split(remote.scripts[0])[-1]
+        self.assertIn("SET publication_status='draft',reviewed_by=NULL,published_at=NULL",applied_sql)
+        self.assertIn("publication_status IN ('draft','published')",applied_sql)
+        source=inspect.getsource(manager.sync_saas_public_content)
+        self.assertIn('remote.scp(ROOT/"tools/deployment/saas_public_sync.py"',source)
+        self.assertIn('python3 /app/.local/',source)
+
     def test_saas_upgrade_has_remote_backup_and_database_validation(self):
         target={"id":1,"remote_root":"/srv/shiyue","service_port":8765,"install_recording":False,"use_https":False}
         remote=SyntaxRemote();job=Job();release="code-20261017-120000-abcdef12"
@@ -96,6 +106,10 @@ class DeploymentReleasePipelineTests(unittest.TestCase):
     def test_deployment_http_upgrade_uses_saas_specific_worker(self):
         server=(manager.ROOT/"tools/reader_server.py").read_text()
         self.assertIn('"/api/deployment/saas-upgrade"}:self.reply({"jobId":deployment_manager.start_saas_upgrade(target_id)}',server)
+
+    def test_deployment_http_sync_uses_saas_content_upload(self):
+        server=(manager.ROOT/"tools/reader_server.py").read_text()
+        self.assertIn('if self.path == "/api/deployment/sync":self.reply({"jobId":deployment_manager.start_saas_public_sync(target_id)},202)',server)
 
     def test_cli_upgrade_uses_saas_specific_worker(self):
         target={"id":1,"name":"test","host":"localhost","port":22}

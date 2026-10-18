@@ -2,7 +2,7 @@
 """Export/apply catalog-backed public SaaS content without touching user state."""
 from __future__ import annotations
 
-import argparse,gzip,json,os
+import argparse,gzip,hashlib,json,os
 from datetime import date,datetime
 from decimal import Decimal
 from pathlib import Path
@@ -14,6 +14,33 @@ TABLE_KEYS={
     "media_assets":["id"],"asset_variants":["id"],
 }
 JSON_COLUMNS={"content_books":{"data_json","quality_json"},"catalog_books":{"preview_json"},"content_sentence_grammar":{"payload"}}
+
+# Local review decisions are never publishing authority on the destination.
+EXPORT_CATALOG_WHERE="publication_status IN ('draft','published') AND rights_status IN ('public_domain','licensed','private')"
+
+
+def pending_catalog(items):
+    return [{**item,"publication_status":"draft","reviewed_by":None,"published_at":None} for item in items]
+
+
+def content_fingerprints(tables):
+    """Track the uploaded revision independently of online moderation decisions."""
+    fingerprints={}
+    for book in tables["catalog_books"]:
+        source_id=book.get("source_content_book_id")
+        assets=[item for item in tables["media_assets"] if item.get("content_book_id")==source_id or item.get("catalog_book_id")==book["id"]]
+        asset_ids={item["id"] for item in assets}
+        tags=[item for item in tables["catalog_book_tags"] if item["catalog_book_id"]==book["id"]]
+        tag_ids={item["tag_id"] for item in tags}
+        data={"catalog":pending_catalog([book])[0],
+              "source":[item for item in tables["content_books"] if item["id"]==source_id],
+              "grammar":[item for item in tables["content_sentence_grammar"] if item["book_id"]==source_id],
+              "assets":assets,"variants":[item for item in tables["asset_variants"] if item["asset_id"] in asset_ids],
+              "tags":tags,"tagDefinitions":[item for item in tables["catalog_tags"] if item["id"] in tag_ids],
+              "series":[item for item in tables["catalog_series"] if item["id"]==book.get("series_id")]}
+        encoded=json.dumps(data,ensure_ascii=False,sort_keys=True,default=json_default,separators=(',',':')).encode()
+        fingerprints[book["id"]]=hashlib.sha256(encoded).hexdigest()
+    return fingerprints
 
 
 def json_default(value):
@@ -38,7 +65,7 @@ def export_bundle(database_url:str,media_root:Path,bundle:Path,manifest:Path)->d
     media_root=media_root.expanduser().resolve()
     with psycopg.connect(database_url,row_factory=dict_row) as connection:
         with connection.cursor() as cursor:
-            catalog_books=rows(cursor,"SELECT * FROM catalog_books WHERE publication_status='published' AND rights_status IN ('public_domain','licensed') ORDER BY id")
+            catalog_books=pending_catalog(rows(cursor,f"SELECT * FROM catalog_books WHERE {EXPORT_CATALOG_WHERE} ORDER BY id"))
             catalog_ids=[item["id"] for item in catalog_books];source_ids=[item["source_content_book_id"] for item in catalog_books if item.get("source_content_book_id")]
             if catalog_ids:
                 series_ids=[item["series_id"] for item in catalog_books if item.get("series_id")]
@@ -64,7 +91,7 @@ def export_bundle(database_url:str,media_root:Path,bundle:Path,manifest:Path)->d
     payload={"format":1,"tables":{"catalog_series":catalog_series,"catalog_tags":catalog_tags,"content_books":content_books,"catalog_books":catalog_books,"catalog_book_tags":catalog_book_tags,"content_sentence_grammar":grammar,"media_assets":media_assets,"asset_variants":variants}}
     bundle.parent.mkdir(parents=True,exist_ok=True)
     with gzip.open(bundle,"wt",encoding="utf-8") as output:json.dump(payload,output,ensure_ascii=False,default=json_default)
-    metadata={"format":1,"catalogIds":catalog_ids,"sourceBookIds":source_ids,"assetIds":asset_ids,"files":files}
+    metadata={"format":1,"catalogIds":catalog_ids,"sourceBookIds":source_ids,"assetIds":asset_ids,"files":files,"contentFingerprints":content_fingerprints(payload["tables"])}
     manifest.write_text(json.dumps(metadata,ensure_ascii=False,indent=2),encoding="utf-8")
     return {"catalogBooks":len(catalog_books),"sourceBooks":len(content_books),"grammarSentences":len(grammar),"assets":len(media_assets),"variants":len(variants),"files":len(files),"bytes":sum(item["size"] for item in files)}
 
@@ -91,6 +118,8 @@ def apply_bundle(database_url:str,bundle:Path,previous_manifest:Path|None=None)-
     current={"catalogIds":[item["id"] for item in tables["catalog_books"]],"assetIds":[item["id"] for item in tables["media_assets"]]}
     previous={}
     if previous_manifest and previous_manifest.is_file():previous=json.loads(previous_manifest.read_text(encoding="utf-8"))
+    fingerprints=content_fingerprints(tables)
+    tables["catalog_books"]=pending_catalog(tables["catalog_books"])
     principal_ids=set()
     for item in tables["content_books"]:principal_ids.add(item["owner_id"])
     for item in tables["media_assets"]:principal_ids.add(item["owner_id"])
@@ -112,21 +141,40 @@ def apply_bundle(database_url:str,bundle:Path,previous_manifest:Path|None=None)-
                     for item in tables["catalog_books"]:
                         for column in ("created_by","reviewed_by"):
                             if item.get(column) in missing:item[column]=fallback
-            for table in ("catalog_series","catalog_tags","content_books","catalog_books"):
+            for table in ("catalog_series","catalog_tags"):
                 upsert_rows(cursor,table,tables[table])
-            catalog_ids=current["catalogIds"]
+            # Unchanged retries preserve the destination's review and edits. New
+            # uploads and changed revisions must be reviewed on the destination.
+            from psycopg.rows import dict_row
+            pending=0;changed_catalog=set();changed_sources=set()
+            with connection.cursor(row_factory=dict_row) as review_cursor:
+                for item in sorted(tables["catalog_books"],key=lambda row:row["id"]):
+                    review_cursor.execute("SELECT * FROM catalog_books WHERE id=%s FOR UPDATE",(item["id"],))
+                    existing=review_cursor.fetchone()
+                    unchanged=previous.get("contentFingerprints",{}).get(item["id"])==fingerprints[item["id"]]
+                    if existing and unchanged:
+                        continue
+                    pending+=1
+                    changed_catalog.add(item["id"])
+                    if item.get("source_content_book_id"):
+                        changed_sources.add(item["source_content_book_id"])
+                        upsert_rows(cursor,"content_books",[source for source in tables["content_books"] if source["id"]==item["source_content_book_id"]])
+                    upsert_rows(cursor,"catalog_books",[item])
+            catalog_ids=sorted(changed_catalog)
             if catalog_ids:cursor.execute("DELETE FROM catalog_book_tags WHERE catalog_book_id=ANY(%s)",(catalog_ids,))
-            upsert_rows(cursor,"catalog_book_tags",tables["catalog_book_tags"])
-            source_ids=[item["id"] for item in tables["content_books"]]
+            upsert_rows(cursor,"catalog_book_tags",[item for item in tables["catalog_book_tags"] if item["catalog_book_id"] in changed_catalog])
+            source_ids=sorted(changed_sources)
             if source_ids:cursor.execute("DELETE FROM content_sentence_grammar WHERE book_id=ANY(%s)",(source_ids,))
-            upsert_rows(cursor,"content_sentence_grammar",tables["content_sentence_grammar"])
-            upsert_rows(cursor,"media_assets",tables["media_assets"]);upsert_rows(cursor,"asset_variants",tables["asset_variants"])
+            upsert_rows(cursor,"content_sentence_grammar",[item for item in tables["content_sentence_grammar"] if item["book_id"] in changed_sources])
+            changed_assets=[item for item in tables["media_assets"] if item.get("content_book_id") in changed_sources or item.get("catalog_book_id") in changed_catalog]
+            changed_asset_ids={item["id"] for item in changed_assets}
+            upsert_rows(cursor,"media_assets",changed_assets);upsert_rows(cursor,"asset_variants",[item for item in tables["asset_variants"] if item["asset_id"] in changed_asset_ids])
             removed_catalog=sorted(set(previous.get("catalogIds",[]))-set(current["catalogIds"]))
             removed_assets=sorted(set(previous.get("assetIds",[]))-set(current["assetIds"]))
             if removed_catalog:cursor.execute("UPDATE catalog_books SET publication_status='archived',updated_at=NOW() WHERE id=ANY(%s)",(removed_catalog,))
             if removed_assets:cursor.execute("UPDATE media_assets SET status='deleted',deleted_at=COALESCE(deleted_at,NOW()) WHERE id=ANY(%s)",(removed_assets,))
         connection.commit()
-    return {"catalogBooks":len(current["catalogIds"]),"sourceBooks":len(tables["content_books"]),"assets":len(current["assetIds"]),"removedCatalogBooks":len(removed_catalog),"removedAssets":len(removed_assets)}
+    return {"catalogBooks":len(current["catalogIds"]),"pendingReviewBooks":pending,"sourceBooks":len(tables["content_books"]),"assets":len(current["assetIds"]),"removedCatalogBooks":len(removed_catalog),"removedAssets":len(removed_assets)}
 
 
 def main():

@@ -2,6 +2,11 @@
 
 ## 已完成
 
+- 2026-10-18 媒体资产移入运营后台独立 `MediaAssetsAdmin.jsx`，按 Tab 加载、服务端分页与范围筛选，保留标记删除/扫描/清理及二次确认，提供加载/失败重试/空状态；平台页不再请求媒体资产，账户注销清理保留在平台配置页。内容审核拆为“审核”“编辑”两个按钮：审核仅设置版权和发布状态，编辑仅改书目信息并保留审核状态。
+- 修复“上传待审核内容”任务 #24545 报错：HTTP `/api/deployment/sync` 仍调用旧 `start_sync`，日志明确 `Error: No such object: shiyue-reader`。已切换 `start_saas_public_sync` 并新增路由回归；任务表新增失败原因列。本地真实内容导出验证 4 本、118 个媒体文件通过，部署相关 28 项、构建/modern/UI/JS、Python 编译及 diff 检查通过。本地后台已重启、前端及代理健康；本轮未重新执行远程上传或发布，线上重传待用户操作。
+- 2026-10-18 内容审核已从平台与部署移至“运营后台 → 内容审核”，独立 `CatalogModeration.jsx` 按 Tab 加载，提供真实审核 API、状态筛选、错误重试、编辑、发布及停止公开确认；管理员书架入口直达该 Tab。平台页资源同步按钮改为“上传待审核内容”。本地前后端正常，尚未发布线上。
+- 内容上传规则：仅上传已登记到 `catalog_books` 且为 draft/published、非 prohibited 的内容；不打包未登记的私人读物。导出与接收双侧强制新内容/变更内容为 `draft`（界面“未审核”），清空本地审核人及发布时间；首次初始化同样进入未审核。只有目标站管理员审核发布才进入首页书城。manifest 新增 `contentFingerprints`；未变更的重复同步保留线上审核状态、书目编辑及标签，有变更则重新审核；旧 manifest 首次同步按待审核处理。同步携带当前 apply 脚本，避免远程旧脚本绕过规则。未修改现有线上书目。
+- 验证：前端构建/modern/UI/JS、Python 编译、diff 检查通过；部署套件原 26 项及新增初始化/接收脚本用例通过；独立临时 PostgreSQL 的 phase3 与上传审核共 13 项通过，覆盖待审核不可见、发布可见、重复同步保留线上编辑/标签、修改重新审核、旧包发布状态清除。临时库已清理。现有 HTTP smoke 仍假设后台 `/` 返回首页，与当前 API-only 后台冲突，在首页检查失败；本地前端 5173 返回 200，代理健康为 SaaS。
 - 2026-10-18 远程 SaaS 部署改为前后台双容器：公网只暴露 `5173` 前台容器，前台将 `/api/*` 与 `/books/*` 反代到仅监听 `127.0.0.1:8790` 的 SaaS 后台容器；候选验收、生产切换、升级、公共资源同步、回滚和卸载均同步处理两个容器。部署目标服务端口固定为 `5173`，完整部署入口也改走 SaaS 流程。
 - 2026-10-18 远程升级任务 `24508` 已完成，发布版本 `code-20261018-174855-80458285`。失败任务 `24489` 的原因是候选验收仍访问已改为 API-only 的后台根路径 `/`，已改为验收独立前台容器；升级前检查也兼容旧的单容器生产状态。远程实机确认 `shiyue-saas-frontend` 正常监听 `*:5173`、`shiyue-saas` 仅监听 `127.0.0.1:8790`、Redis/数据库健康、前台 `/` 和 `/api/health` 均返回 200，旧 `8765` 已关闭。公网从当前工作站访问 `117.72.209.44:5173` 仍超时，远程主机本机 iptables 为 ACCEPT，判断为京东云安全组尚未放行 TCP 5173，需要在云控制台开放该端口后才能公网访问。
 - 2026-10-18 为修复视频导入 45% 假停滞，已对生产 `/srv/shiyue/current/tools/saas_imports.py` 做临时热修复并重启 `shiyue-saas`；FFmpeg/Whisper 端到端体检通过，后台健康和前台 200 通过。热修复备份为 `/srv/shiyue/backups/saas/saas_imports.py.20261018-210557.bak`；下一次正式 SaaS 升级必须包含仓库当前导入代码，避免覆盖该热修复。
@@ -17,7 +22,7 @@
 - 发布包包含 `.shiyue-release.json`（版本、Git 提交、构建时间、工作区状态），远程切换前校验 SHA-256 和关键文件完整性，健康检查失败会恢复上一代码版本。
 - 新增命令行入口：`npm run package:remote` 只打包；`npm run deploy:jdcloud` 完整部署根路径 SaaS/PostgreSQL/Redis；`npm run sync:jdcloud:public` 只增量同步合法已公开书籍及相关正文、语法和媒体。
 - 发布包不再包含 `reader/modern.html` 或 `reader/modern-assets/`；生产前端构建到 `reader/site/` 并直接接管根路径，旧路径仅返回 308 到 `/`。
-- 公共同步只选择 `publication_status='published'` 且 `rights_status IN ('public_domain','licensed')` 的 catalog 书籍，不同步草稿、待审核、私人书籍或无关 `private-uploads`，也不覆盖远程用户、订阅、会话和学习数据。
+- 内容同步只选择已登记书目中的可传输内容及关联媒体，上传后的审核规则见上；不覆盖远程用户、订阅、会话和学习数据。
 - 2026-10-13 本地修复“用户与订阅 → 查看详情”在存在人工订单时失败：`AdminService.user_detail` 读取 `manual_orders` 时误用了不存在的 `plan_version` 列，已改为真实列 `plan_version_id`，并补充带人工订阅/订单的阶段 5 回归测试。已在隔离测试库通过浏览器确认用户详情、设备和订阅记录正常展示；按用户要求尚未发布远程。
 - 2026-10-13 本地前端构建将 React/Ant Design/vendor/icons 共享分包改为内容哈希文件名，入口 JS/CSS 仍带构建版本参数，避免发布后新入口加载浏览器缓存中的旧分包。该变更随下次用户手动发布生效，尚未远程部署。
 - 2026-10-17 修复“程序升级”误走旧 reader 部署流程：`/api/deployment/upgrade` 与 `/api/deployment/saas-upgrade` 现在进入 `start_saas_upgrade`。升级只打包本机工作区并替换 SaaS 代码，不导入本地数据库或同步内容；要求远端现有 SaaS/PostgreSQL/Redis 健康，先对远程 PostgreSQL 做私有权限备份，再启用候选容器。候选启动应用自动 migrations 后，必须 `ensure_migrated()` 确认发布包含的所有 schema/data migrations 已登记，且根页面 JS 可加载、SaaS/Redis 健康，才切换线上版本。切换后再核对 `current` 与 SaaS 容器挂载版本；管理页版本读远端 release 的 `current` 标记。发布包会在前端构建前记录 Git 提交和工作区状态。

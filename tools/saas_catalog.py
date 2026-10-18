@@ -187,9 +187,11 @@ class CatalogService:
                     kind="video" if resource.get("resource_type") in {"video","youtube"} else "audio" if resource.get("resource_type")=="audio" else ""
                     self.memberships.assert_media_capacity(cursor,user_id,context,kind)
                     cursor.execute("INSERT INTO user_library(id,user_id,catalog_book_id,shelf_state) VALUES(%s,%s,%s,%s)",(new_id(),user_id,catalog_book_id,shelf_state))
+                elif existing["shelf_state"] != shelf_state:
+                    cursor.execute("UPDATE user_library SET shelf_state=%s WHERE user_id=%s AND catalog_book_id=%s",(shelf_state,user_id,catalog_book_id))
                 self.memberships._audit(cursor,user_id,None,"catalog_library_add",{"catalogBookId":catalog_book_id})
                 # Legacy API alias only: there is no independent unlock state.
-                return {"bookId":catalog_book_id,"inLibrary":True,"unlocked":True,"readerReady":True}
+                return {"bookId":catalog_book_id,"inLibrary":True,"unlocked":True,"readerReady":True,"shelfState":shelf_state}
 
     def remove(self,user_id:str,catalog_book_id:str)->dict[str,Any]:
         with self.accounts.transaction() as connection:
@@ -239,5 +241,10 @@ class CatalogService:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("""SELECT cb.id AS source_book_id,cb.title,cb.english_title,cb.series,cb.level,cb.source_type,cb.cover_url,
-                cat.id AS catalog_book_id,cat.rights_status,cat.publication_status FROM content_books cb LEFT JOIN catalog_books cat ON cat.source_content_book_id=cb.id ORDER BY cb.updated_at DESC""")
-                return {"sources":[{"sourceBookId":row["source_book_id"],"title":row["title"],"englishTitle":row["english_title"],"series":row["series"],"level":row["level"],"resourceType":row["source_type"],"coverUrl":row["cover_url"],"catalogBookId":row["catalog_book_id"],"rightsStatus":row["rights_status"] or "private","publicationStatus":row["publication_status"] or "draft"} for row in self.accounts._many(cursor)]}
+                cat.id AS catalog_book_id,cat.rights_status,cat.publication_status,cat.title AS catalog_title,
+                cat.english_title AS catalog_english_title,cat.level AS catalog_level,cat.author,cat.description,cat.featured_rank,
+                cs.title AS catalog_series FROM content_books cb LEFT JOIN catalog_books cat ON cat.source_content_book_id=cb.id
+                LEFT JOIN catalog_series cs ON cs.id=cat.series_id ORDER BY cb.updated_at DESC""")
+                sources=self.accounts._many(cursor)
+                tags=self._tags(cursor,[row["catalog_book_id"] for row in sources if row["catalog_book_id"]])
+                return {"sources":[{"sourceBookId":row["source_book_id"],"title":row["catalog_title"] if row["catalog_book_id"] else row["title"],"englishTitle":row["catalog_english_title"] if row["catalog_book_id"] else row["english_title"],"series":row["catalog_series"] or row["series"],"level":row["catalog_level"] if row["catalog_book_id"] else row["level"],"author":row["author"] or "","description":row["description"] or "","featuredRank":int(row["featured_rank"] or 0),"tags":tags.get(row["catalog_book_id"],[]),"resourceType":row["source_type"],"coverUrl":row["cover_url"],"catalogBookId":row["catalog_book_id"],"rightsStatus":row["rights_status"] or "private","publicationStatus":row["publication_status"] or "draft"} for row in sources]}

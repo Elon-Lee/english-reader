@@ -530,7 +530,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if self.path == "/api/deployment/test":self.reply({"jobId":deployment_manager.start_test(target_id)},202);return
                 if self.path == "/api/deployment/deploy":self.reply({"jobId":deployment_manager.start_saas_deploy(target_id)},202);return
                 if self.path in {"/api/deployment/upgrade","/api/deployment/saas-upgrade"}:self.reply({"jobId":deployment_manager.start_saas_upgrade(target_id)},202);return
-                if self.path == "/api/deployment/sync":self.reply({"jobId":deployment_manager.start_sync(target_id)},202);return
+                if self.path == "/api/deployment/sync":self.reply({"jobId":deployment_manager.start_saas_public_sync(target_id)},202);return
                 if self.path == "/api/deployment/uninstall":self.reply({"jobId":deployment_manager.start_uninstall(target_id,str(item.get("confirmName","")).strip())},202);return
                 if self.path == "/api/deployment/delete-config":self.reply({"result":deployment_manager.delete_target_config(target_id)});return
                 if self.path == "/api/deployment/content-rollback":
