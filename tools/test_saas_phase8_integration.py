@@ -153,8 +153,19 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         completed=self.video_imports.complete(owner,task_id);self.assertEqual(completed["task"]["status"],"complete")
         asset_id=completed["task"]["sourceAssetId"];reader=self.workspace.reader(owner,completed["task"]["outputBookId"])["book"]
         self.assertEqual(reader["resourceType"],"video");self.assertEqual(round(reader["duration"],1),2.0)
+        self.assertFalse(reader["canWatchHdVideo"])
         self.assertEqual([sentence["text"] for sentence in reader["sentences"]],["Hello private audio.","Second audio sentence!"])
         self.assertTrue(self.media.stream(owner,asset_id,"audio")["path"].is_file());self.assertTrue(self.media.stream(owner,asset_id,"cover")["path"].is_file())
+        self.assertTrue(self.media.stream(owner,asset_id,"low")["path"].is_file())
+        with self.assertRaises(SaaSError) as high:self.media.stream(owner,asset_id)
+        self.assertEqual(high.exception.code,"video_quality_membership_required")
+        self.memberships.create_manual_order(str(self.admin["id"]),owner,"advanced-v1",utcnow()-timedelta(minutes=1),utcnow()+timedelta(days=30))
+        self.assertTrue(self.workspace.reader(owner,completed["task"]["outputBookId"])["book"]["canWatchHdVideo"])
+        self.assertTrue(self.media.stream(owner,asset_id)["path"].is_file())
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:cursor.execute("UPDATE subscriptions SET ends_at=NOW()-INTERVAL '1 second' WHERE user_id=%s",(owner,))
+        with self.assertRaises(SaaSError) as expired:self.media.stream(owner,asset_id)
+        self.assertEqual(expired.exception.code,"video_quality_membership_required")
         with self.assertRaises(SaaSError) as denied:self.media.stream(other,asset_id,"audio")
         self.assertEqual(denied.exception.code,"media_access_denied")
         with self.accounts.transaction() as connection:

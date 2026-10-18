@@ -96,6 +96,8 @@ class CommerceService:
                 "免费包含：句法分析不限次数" if "句法分析" in item else item
                 for item in benefits
             ]
+        quality_benefit = "视频可观看流畅版；高清需付费会员" if row["family_slug"] == "free" else "视频可在流畅与高清之间切换"
+        benefits = [quality_benefit] + [item for item in benefits if item != quality_benefit]
         result = {
             "id": row["id"],
             "productId": row["product_id"],
@@ -113,6 +115,7 @@ class CommerceService:
             "originalAmountCents": int(row.get("original_amount_cents", row["amount_cents"]) or 0),
             "discountPercent": int(row.get("discount_percent", 100) or 100),
             "benefits": benefits,
+            "videoQuality": "low" if row["family_slug"] == "free" else "high",
             "featureLimits": cls._display_limits(row.get("limits_json")),
             "purchaseUrl": str(row.get("purchase_url", "") or ""),
             "configuredBenefits": cls._configured_benefits(row.get("configured_benefits_json")),

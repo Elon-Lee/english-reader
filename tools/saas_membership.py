@@ -30,6 +30,19 @@ AI_FEATURES = {"ai_context_generations", "ai_grammar_generations"}
 DAILY_AI_LIMITS = {"ai_context_generations": 50, "ai_grammar_generations": 20}
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
+
+def can_watch_hd_video(cursor: Any, user_id: str) -> bool:
+    """Check the current paid entitlement without trusting a cached user plan."""
+    cursor.execute(
+        """SELECT EXISTS(SELECT 1 FROM subscriptions s
+        JOIN plan_versions pv ON pv.id=s.plan_version_id
+        JOIN plans p ON p.id=pv.plan_id
+        WHERE s.user_id=%s AND s.status IN ('active','grace_period')
+          AND s.starts_at<=NOW() AND s.ends_at>NOW() AND p.slug<>'free') AS allowed""",
+        (user_id,),
+    )
+    return bool(cursor.fetchone()[0])
+
 FEATURE_DEFINITIONS: dict[str, dict[str, Any]] = {
     "official_library_capacity": {"name": "官方书架容量", "unit": "本", "default": 0, "minimum": 0, "control": "已停止按官方书架总量限制", "sellable": False},
     "official_unlocks": {"name": "学习材料使用额度", "unit": "次/30天", "default": 0, "minimum": 0, "control": "公版及已授权材料不再按次数扣减", "sellable": False},
@@ -237,6 +250,7 @@ class MembershipService:
                 "id": plan["id"], "slug": plan["slug"], "name": plan["display_name"], "rank": int(plan["rank"]),
                 "periodDays": int(plan["period_days"]), "quotas": as_json(plan["quotas_json"]), "pricing": as_json(plan["pricing_json"]),
             },
+            "canWatchHdVideo": plan["slug"] != "free",
             "period": {"id": period["id"], "startsAt": timestamp(period["starts_at"]), "endsAt": timestamp(period["ends_at"])},
             "subscription": None if not subscription else {
                 "id": subscription["id"], "status": subscription["status"], "startsAt": timestamp(subscription["starts_at"]),

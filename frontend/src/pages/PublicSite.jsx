@@ -36,7 +36,7 @@ function ProductCard({ product, authenticated, onPurchase }) {
       <div><Title level={3}>{product.shortName}</Title><Paragraph>{product.tagline}</Paragraph></div>
       <div className="public-price"><PriceDisplay product={product} /><span>{product.family === 'free' ? '永久免费' : ' / 30 天'}</span></div>
       <Text type="secondary">{product.family === 'free' ? '注册即可使用' : '单次购买，不自动续费'}</Text>
-      <ul>{product.benefits.slice(0, 9).map(item => <li key={item}><CheckCircleFilled />{item}</li>)}</ul>
+      <ul>{product.benefits.slice(0, 10).map(item => <li key={item}><CheckCircleFilled />{item}</li>)}</ul>
       {product.family === 'free'
         ? <Button block type={product.featured ? 'primary' : 'default'} size="large" href={freeHref}>{authenticated ? '进入学习空间' : '免费开始使用'}</Button>
         : <Button block type={product.featured ? 'primary' : 'default'} size="large" onClick={() => onPurchase(product)} disabled={!product.purchaseUrl}>{product.purchaseUrl ? '购买 / 兑换' : '商品上线准备中'}</Button>}

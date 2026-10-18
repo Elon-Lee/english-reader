@@ -109,19 +109,27 @@ class PrivateWorkspaceTests(unittest.TestCase):
         catalog_id='catalog-trial-video'
         source=self.root/'trial-video.mp4'
         subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=c=green:s=160x90:r=25','-t','10','-c:v','libx264','-pix_fmt','yuv420p',str(source)],check=True,capture_output=True)
+        low=self.root/'trial-low.mp4'
+        subprocess.run(['ffmpeg','-v','error','-i',str(source),'-vf','scale=80:44','-c:v','libx264','-pix_fmt','yuv420p',str(low)],check=True,capture_output=True)
         owner_id,viewer_id=str(self.owner['id']),str(self.other['id'])
-        asset=self.media.register(owner_id,owner_id,'private','trial-video.mp4','video','video/mp4',content_book_id=self.book_id)
+        asset=self.media.register(owner_id,owner_id,'private','trial-video.mp4','video','video/mp4',content_book_id=self.book_id,variants=[{'name':'low','storagePath':'trial-low.mp4','contentType':'video/mp4'}])
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("UPDATE content_books SET duration=10 WHERE id=%s",(self.book_id,))
                 cursor.execute("INSERT INTO catalog_books(id,source_content_book_id,title,rights_status,publication_status) VALUES(%s,%s,'Trial','licensed','published')",(catalog_id,self.book_id))
         with self.assertRaises(SaaSError):self.media.stream(viewer_id,asset['id'])
-        preview=self.media.trial_stream(viewer_id,asset['id'],catalog_id)
+        with self.assertRaises(SaaSError) as high:self.media.trial_stream(viewer_id,asset['id'],catalog_id)
+        self.assertEqual(high.exception.code,'video_quality_membership_required')
+        preview=self.media.trial_stream(viewer_id,asset['id'],catalog_id,'low')
         probe=subprocess.run(['ffprobe','-v','error','-show_entries','format=duration','-of','csv=p=0',str(preview['path'])],check=True,capture_output=True,text=True)
         self.assertGreaterEqual(float(probe.stdout),.96)
         self.assertLessEqual(float(probe.stdout),1.04)
         reader=self.catalog.reader(viewer_id,catalog_id,trial=True)['book']
+        self.assertFalse(reader['canWatchHdVideo'])
         self.assertTrue(any('trialBook=' in item['url'] for item in reader['mediaAssets']))
+        self.memberships.create_manual_order(str(self.admin['id']),viewer_id,'advanced-v1',utcnow()-timedelta(minutes=1),utcnow()+timedelta(days=30))
+        self.assertTrue(self.catalog.reader(viewer_id,catalog_id,trial=True)['book']['canWatchHdVideo'])
+        self.assertTrue(self.media.trial_stream(viewer_id,asset['id'],catalog_id)['path'].is_file())
         with self.assertRaises(SaaSError):self.media.trial_stream(viewer_id,asset['id'],'unrelated-book')
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:cursor.execute("UPDATE catalog_books SET publication_status='archived' WHERE id=%s",(catalog_id,))

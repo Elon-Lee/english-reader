@@ -90,6 +90,10 @@ class PhaseSixPostgresTests(unittest.TestCase):
         self.assertEqual(locked.exception.code,"media_access_denied")
         self.catalog.add_or_unlock(str(self.owner["id"]),catalog_id,True)
         self.assertEqual(self.media.stream(str(self.owner["id"]),asset["id"])["path"].read_bytes(),b"0123456789abcdef")
+        original=self.make_file("official/video.mp4",b"high-video")
+        low=self.make_file("official/video-low.mp4",b"low-video")
+        video=self.media.register(str(self.admin["id"]),str(self.admin["id"]),"official",original,"video","video/mp4",catalog_id,variants=[{"name":"low","storagePath":low,"contentType":"video/mp4"}])
+        self.assertFalse(self.catalog.reader(str(self.owner["id"]),catalog_id)["book"]["canWatchHdVideo"])
         with socket.socket() as probe:probe.bind(("127.0.0.1",0));port=probe.getsockname()[1]
         environment={**os.environ,**self.environment,"READER_HOST":"127.0.0.1","READER_PORT":str(port)};process=subprocess.Popen([sys.executable,str(ROOT/"tools/reader_server.py")],cwd=ROOT,env=environment,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)
         connection=None
@@ -103,6 +107,12 @@ class PhaseSixPostgresTests(unittest.TestCase):
             else:self.fail("media server did not start: "+(process.stderr.read() if process.stderr else ""))
             login=self.accounts.login("owner@local.test","owner password phase six","phase6-owner-device-1","Phase6 test")
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("GET",f"/api/media/{asset['id']}",headers={"Cookie":f"shiyue_session={login['sessionToken']}","Range":"bytes=2-6"});response=connection.getresponse();body=response.read();self.assertEqual(response.status,206);self.assertEqual(body,b"23456");self.assertEqual(response.getheader("Content-Range"),"bytes 2-6/16");self.assertEqual(response.getheader("X-Content-Type-Options"),"nosniff");connection.close();connection=None
+            cookie={"Cookie":f"shiyue_session={login['sessionToken']}"}
+            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("GET",f"/api/media/{video['id']}",headers=cookie);response=connection.getresponse();body=json.loads(response.read());self.assertEqual(response.status,403);self.assertEqual(body["code"],"video_quality_membership_required");connection.close();connection=None
+            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("GET",f"/api/media/{video['id']}?variant=low",headers={**cookie,"Range":"bytes=0-2"});response=connection.getresponse();body=response.read();self.assertEqual(response.status,206);self.assertEqual(body,b"low");connection.close();connection=None
+            self.memberships.create_manual_order(str(self.admin["id"]),str(self.owner["id"]),"advanced-v1",utcnow()-timedelta(minutes=1),utcnow()+timedelta(days=30))
+            self.assertTrue(self.catalog.reader(str(self.owner["id"]),catalog_id)["book"]["canWatchHdVideo"])
+            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("GET",f"/api/media/{video['id']}",headers={**cookie,"Range":"bytes=0-3"});response=connection.getresponse();body=response.read();self.assertEqual(response.status,206);self.assertEqual(body,b"high");connection.close();connection=None
         finally:
             if connection:connection.close()
             process.terminate()

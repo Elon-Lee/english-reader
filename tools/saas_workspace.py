@@ -7,7 +7,7 @@ from datetime import date
 from typing import Any
 
 from saas_auth import SaaSError, SaaSService, new_id, utcnow
-from saas_membership import as_json, timestamp
+from saas_membership import as_json, can_watch_hd_video, timestamp
 from saas_rewards import local_day
 
 
@@ -79,7 +79,7 @@ class WorkspaceService:
                     text=str(item.get("text","")).strip()
                     if text:sentences.append({"id":str(item.get("id",len(sentences))),"text":text,"translation":str(item.get("translation","")).strip(),"start":item.get("start"),"end":item.get("end"),"page":item.get("page"),"section":item.get("section"),"words":item.get("words",[]) if isinstance(item.get("words",[]),list) else []})
                 cursor.execute("SELECT last_sentence_id,reading_seconds,completed_at FROM workspace_progress WHERE user_id=%s AND content_book_id=%s",(user_id,book_id));progress=self.accounts._one(cursor)or{}
-                return {"book":{"id":book["id"],"title":book["title"],"englishTitle":book["english_title"],"series":book["series"],"level":book["level"],"resourceType":book["source_type"],"duration":float(book["duration"]),"sentences":sentences,"mediaAssets":self._asset_summaries(cursor,book_id),"progress":{"lastSentenceId":progress.get("last_sentence_id","") or "","readingSeconds":int(progress.get("reading_seconds",0)or 0),"completedAt":timestamp(progress.get("completed_at"))}}}
+                return {"book":{"id":book["id"],"title":book["title"],"englishTitle":book["english_title"],"series":book["series"],"level":book["level"],"resourceType":book["source_type"],"duration":float(book["duration"]),"sentences":sentences,"mediaAssets":self._asset_summaries(cursor,book_id),"canWatchHdVideo":can_watch_hd_video(cursor,user_id),"progress":{"lastSentenceId":progress.get("last_sentence_id","") or "","readingSeconds":int(progress.get("reading_seconds",0)or 0),"completedAt":timestamp(progress.get("completed_at"))}}}
 
     def vocabulary(self,user_id:str,book_id:str="")->dict[str,Any]:
         with self.accounts.transaction() as connection:

@@ -143,6 +143,12 @@ class CommercePostgresTests(unittest.TestCase):
 
     def test_seeded_catalog_has_fixed_term_products(self):
         products = [item for item in self.commerce.public_catalog()["products"] if item["slug"] in {"free", "advanced-30", "pro-30"}]
+        by_family = {item["family"]: item for item in products}
+        self.assertEqual(by_family["free"]["videoQuality"], "low")
+        self.assertIn("流畅版", by_family["free"]["benefits"][0])
+        for family in ("advanced", "pro"):
+            self.assertEqual(by_family[family]["videoQuality"], "high")
+            self.assertIn("高清", by_family[family]["benefits"][0])
         self.assertEqual({item["slug"] for item in products}, {"free", "advanced-30", "pro-30"})
         paid = {item["slug"]: item for item in products if item["family"] != "free"}
         self.assertEqual(paid["advanced-30"]["amountCents"], 1900)

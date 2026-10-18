@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from saas_auth import SaaSError, SaaSService, new_id
-from saas_membership import MembershipService, as_json, timestamp
+from saas_membership import MembershipService, as_json, can_watch_hd_video, timestamp
 
 
 RIGHTS = {"public_domain", "licensed", "private", "prohibited"}
@@ -165,7 +165,7 @@ class CatalogService:
                     assets = [asset for asset in assets if str(asset["contentType"]).startswith(("audio/", "video/")) or str(asset["contentType"]).startswith("image/") or asset["variants"]]
                 playable=any(str(asset["contentType"]).startswith(("audio/","video/")) or any(str(variant["contentType"]).startswith(("audio/","video/")) for variant in asset["variants"]) for asset in assets)
                 cursor.execute("SELECT last_sentence_id,reading_seconds,completed_at FROM workspace_progress WHERE user_id=%s AND content_book_id=%s",(user_id,row["source_content_book_id"]));progress=self.accounts._one(cursor)or{}
-                return {"book":{"id":row["id"],"title":row["title"],"englishTitle":row["english_title"],"level":row["level"],"resourceType":row["resource_type"],"inLibrary":bool(row.get("library_book_id")),"shelfState":row.get("shelf_state"),"estimatedMinutes":int(row["estimated_minutes"]),"duration":float(row["duration"] or 0),"sentences":sentences,"mediaAssets":assets,"trial":trial,"trialPercent":10,"trialEndSeconds":trial_end,"trialLimit":len(sentences),"mediaReady":playable,"mediaNotice":"已连接受鉴权媒体，可在阅读器中播放。" if playable else "该读物当前只有正文，暂未找到可播放音视频。","progress":{"lastSentenceId":"" if trial else progress.get("last_sentence_id","") or "","readingSeconds":0 if trial else int(progress.get("reading_seconds",0)or 0),"completedAt":timestamp(progress.get("completed_at"))}}}
+                return {"book":{"id":row["id"],"title":row["title"],"englishTitle":row["english_title"],"level":row["level"],"resourceType":row["resource_type"],"inLibrary":bool(row.get("library_book_id")),"shelfState":row.get("shelf_state"),"estimatedMinutes":int(row["estimated_minutes"]),"duration":float(row["duration"] or 0),"sentences":sentences,"mediaAssets":assets,"canWatchHdVideo":can_watch_hd_video(cursor,user_id),"trial":trial,"trialPercent":10,"trialEndSeconds":trial_end,"trialLimit":len(sentences),"mediaReady":playable,"mediaNotice":"已连接受鉴权媒体，可在阅读器中播放。" if playable else "该读物当前只有正文，暂未找到可播放音视频。","progress":{"lastSentenceId":"" if trial else progress.get("last_sentence_id","") or "","readingSeconds":0 if trial else int(progress.get("reading_seconds",0)or 0),"completedAt":timestamp(progress.get("completed_at"))}}}
 
     def _published_book(self,cursor:Any,catalog_book_id:str)->dict[str,Any]:
         cursor.execute("SELECT * FROM catalog_books WHERE id=%s AND publication_status='published' AND rights_status IN ('public_domain','licensed') FOR UPDATE",(catalog_book_id,))

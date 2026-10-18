@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from saas_auth import SaaSError, SaaSService, new_id
-from saas_membership import MembershipService, as_json, timestamp
+from saas_membership import MembershipService, as_json, can_watch_hd_video, timestamp
 
 TRIAL_CLIP_LOCK = threading.Lock()
 
@@ -165,6 +165,8 @@ class MediaService:
             cursor.execute("SELECT * FROM asset_variants WHERE asset_id=%s AND variant_name=%s AND deleted_at IS NULL",(asset_id,variant_name));variant=self.accounts._one(cursor)
             if not variant:raise SaaSError("media_variant_not_found","媒体变体不存在。",404)
             target={"storage_path":variant["storage_path"],"content_type":variant["content_type"],"byte_size":int(variant["byte_size"]),"variant_name":variant_name}
+        if str(target["content_type"]).startswith("video/") and str(variant_name or "").casefold() != "low" and not can_watch_hd_video(cursor,user_id):
+            raise SaaSError("video_quality_membership_required","高清播放需要有效的付费会员，请切换流畅版本。",403)
         cursor.execute("""INSERT INTO asset_usage(asset_id,user_id,access_count,first_accessed_at,last_accessed_at,charged_bytes)
         VALUES(%s,%s,1,NOW(),NOW(),0) ON CONFLICT (asset_id,user_id) DO UPDATE SET access_count=asset_usage.access_count+1,last_accessed_at=NOW()""",(asset_id,user_id))
         return {"asset":asset,"target":target}
@@ -194,6 +196,8 @@ class MediaService:
                     cursor.execute('SELECT * FROM asset_variants WHERE asset_id=%s AND variant_name=%s AND deleted_at IS NULL', (asset_id, variant_name))
                     target = self.accounts._one(cursor)
                     if not target: raise SaaSError('media_not_found', '试读媒体不存在。', 404)
+                if str(target['content_type']).startswith('video/') and str(variant_name or '').casefold() != 'low' and not can_watch_hd_video(cursor,user_id):
+                    raise SaaSError('video_quality_membership_required', '高清试读需要有效的付费会员，请切换流畅版本。', 403)
         _, source = self._safe_path(target['storage_path'])
         content_type = str(target['content_type'])
         if not source.is_file(): raise SaaSError('media_not_found', '媒体文件不存在。', 404)

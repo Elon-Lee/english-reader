@@ -16,7 +16,7 @@ export default function BenefitAdmin({ entitlements = { builtIn: [], configured:
     form.resetFields(); setOpen(false); setEditing(null)
   }
   return <div className="benefit-admin-stack">
-    <Card title={<div><Title level={3}>内置项</Title><Paragraph>由系统代码实际校验和扣减，套餐只能勾选这些真实产品功能，并配置每个周期的使用限制。</Paragraph></div>}>
+    <Card title={<div><Title level={3}>内置项</Title><Paragraph>由系统代码实际校验和扣减，套餐只能勾选这些真实产品功能，并配置每个周期的使用限制。视频画质由当前会员等级自动控制：免费版仅流畅，付费版可切换高清。</Paragraph></div>}>
       <Row gutter={[16, 16]}>{(entitlements.builtIn || []).map(item => <Col xs={24} lg={12} key={item.key}><Card size="small" className="benefit-definition-card"><Space direction="vertical" size={8}><Space><Text strong>{item.name}</Text><Tag color="success">系统受控</Tag>{item.required && <Tag color="blue">必选</Tag>}</Space><Text type="secondary">{item.control}</Text><Text>默认限制：<b>{item.defaultLimit} {item.unit}</b></Text><Text code>{item.key}</Text></Space></Card></Col>)}</Row>
     </Card>
     <Card title={<div><Title level={3}>配置项</Title><Paragraph>运营手工维护的附加权益，只用于套餐展示，不参与系统次数或容量控制。</Paragraph></div>} extra={<Button type="primary" icon={<PlusOutlined />} onClick={create}>新增配置项</Button>}>
