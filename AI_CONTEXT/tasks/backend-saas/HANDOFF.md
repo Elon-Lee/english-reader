@@ -6,6 +6,7 @@
 - PostgreSQL 服务模块：`tools/saas_auth.py`、`saas_membership.py`、`saas_catalog.py`、`saas_workspace.py`、`saas_imports.py`、`saas_ai.py`、`saas_admin.py` 等。
 - 最新 migration：`0035_entitlement_operation_idempotency.sql`，为人工订阅、订阅变更、邀请码权益及领取保存事务内幂等回执；本地正式库和隔离测试库已应用，生产仍为 `0034`。本轮书架/权益修复尚未发布生产。
 - 认证使用数据库会话 Cookie 和 CSRF；所有写接口必须校验 CSRF。
+- 2026-10-18 修复已有会话缺失/失配 `shiyue_csrf` 时写 API 持续 403：认证读取会轮换当前 session 并补发配对 CSRF Cookie，使缺失 Cookie 同时撤销旧 session；前端收到一次 `csrf_failed` 后自动刷新认证并重试一次，写接口仍强制校验 CSRF。新增回归覆盖旧 session 失效、Cookie 恢复和后续安全登出；隔离 PostgreSQL 测试库当前未配置，尚未执行数据库集成测试。
 - 测试库名称必须以 `_test` 结尾。
 - 京东云生产运行 PostgreSQL 16 Bookworm、Redis 7 Bookworm 和 `shiyue-saas-runtime:20261012-1`；数据库和 Redis 端口仅绑定 `127.0.0.1`，应用通过 host network 访问。
 

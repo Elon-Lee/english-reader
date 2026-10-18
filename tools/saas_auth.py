@@ -475,6 +475,21 @@ class SaaSService:
         if not supplied or not hmac.compare_digest(str(session.get("csrf_hash", "")), token_hash(supplied)):
             raise SaaSError("csrf_failed", "请求验证失败，请刷新页面后重试。", 403)
 
+    def recover_csrf(self, session_id: str, raw_session_token: str) -> tuple[str, str]:
+        """Rotate a session with a missing CSRF cookie and return its cookie pair."""
+        rotated_session = random_token()
+        recovered = hmac.new(rotated_session.encode("utf-8"), b"shiyue-csrf-recovery-v1", hashlib.sha256).hexdigest()
+        with self.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """UPDATE user_sessions SET token_hash=%s,csrf_hash=%s
+                    WHERE id=%s AND token_hash=%s AND revoked_at IS NULL AND expires_at>NOW()""",
+                    (token_hash(rotated_session), token_hash(recovered), session_id, token_hash(raw_session_token)),
+                )
+                if cursor.rowcount != 1:
+                    raise SaaSError("authentication_required", "请先登录。", 401)
+        return rotated_session, recovered
+
     def logout(self, session: dict[str, Any]) -> None:
         with self.transaction() as connection:
             with connection.cursor() as cursor:

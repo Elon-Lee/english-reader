@@ -57,13 +57,15 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
   const [previewError, setPreviewError] = useState('')
 
   useEffect(() => {
+    let active = true
     setRedeemCode('')
     setRedeemResult(null)
     setRedeemError('')
     setPreview(null)
     setPreviewError('')
-    if (open && authenticated && product?.planVersion) getJson(`/api/membership/change-preview?targetPlan=${encodeURIComponent(product.planVersion)}`).then(setPreview).catch(error => setPreviewError(error.message || '当前套餐不能使用该卡密。'))
-  }, [product?.id, open])
+    if (open && authenticated && product?.planVersion) getJson(`/api/membership/change-preview?targetPlan=${encodeURIComponent(product.planVersion)}`).then(value => { if (active) setPreview(value) }).catch(error => { if (active) setPreviewError(error.message || '套餐预览失败，请关闭后重试。') })
+    return () => { active = false }
+  }, [product?.id, open, authenticated])
 
   const submitRedeem = async () => {
     if (!authenticated) {
@@ -97,8 +99,8 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
       <div className="public-price"><PriceDisplay product={product} /><span> / {product.durationDays} 天</span></div>
       <div className="public-purchase-modal-steps"><span>1. 云猫付款并复制自动发放的兑换码</span><span>2. 回到这里粘贴兑换码，立即开通</span></div>
       {preview && <Alert showIcon type="info" message={preview.changeType === 'upgrade' ? `立即升级到${preview.targetPlan.name}` : preview.changeType === 'renewal' ? `立即续费并延长 ${preview.durationDays} 天` : `立即开通${preview.targetPlan.name} ${preview.durationDays}天`} description={preview.changeType === 'upgrade' ? `按套餐价值折算：当前剩余权益约折算 ${preview.carryDays} 天 Pro，有效期预计至 ${new Date(preview.endsAt).toLocaleDateString('zh-CN')}` : preview.changeType === 'renewal' ? `续费后会员有效期延长至 ${new Date(preview.endsAt).toLocaleDateString('zh-CN')}` : `立即生效，预计有效至 ${new Date(preview.endsAt).toLocaleDateString('zh-CN')}`} />}
-      {previewError && <Alert showIcon type="error" message="当前等级不允许购买该套餐" description={previewError} />}
-      <Button block type="primary" size="large" href={product.purchaseUrl} target="_blank" rel="noreferrer" disabled={Boolean(previewError)}>打开云猫购买</Button>
+      {previewError && <Alert showIcon type="error" message="暂时无法购买该套餐" description={previewError} />}
+      <Button block type="primary" size="large" href={product.purchaseUrl || undefined} target="_blank" rel="noreferrer" disabled={!product.purchaseUrl || Boolean(previewError) || (authenticated && !preview)}>打开云猫购买</Button>
       <div className="public-purchase-modal-redeem">
         <Text strong>已有兑换码？</Text>
         {authenticated

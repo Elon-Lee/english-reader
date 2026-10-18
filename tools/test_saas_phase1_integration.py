@@ -135,8 +135,11 @@ class PhaseOnePostgresTests(unittest.TestCase):
         self.assertIsNotNone(session)
         self.assertTrue(session["email_verified_at"])
         self.service.assert_csrf(session, login["csrfToken"])
+        rotated, recovered = self.service.recover_csrf(str(session["session_id"]), login["sessionToken"])
+        self.assertIsNone(self.service.authenticate(login["sessionToken"]))
+        self.service.assert_csrf(self.service.authenticate(rotated), recovered)
         with self.assertRaises(SaaSError) as csrf_error:
-            self.service.assert_csrf(session, "wrong")
+            self.service.assert_csrf(self.service.authenticate(rotated), "wrong")
         self.assertEqual(csrf_error.exception.code, "csrf_failed")
         with self.assertRaises(SaaSError) as device_error:
             self.service.login("reader@local.test", "valid password for testing", "device-flow-00000002", "Phase1 test")
@@ -259,6 +262,24 @@ class PhaseOnePostgresTests(unittest.TestCase):
             body = json.loads(response.read())
             self.assertEqual(response.status, 200)
             self.assertEqual(body, {"items": []})
+            connection.close()
+            connection = None
+            session_cookie = next(value for value in cookies.split("; ") if value.startswith("shiyue_session="))
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            connection.request("GET", "/api/auth/me", headers={"Cookie": session_cookie})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            recovered_cookies = [value.split(";", 1)[0] for name, value in response.getheaders() if name.lower() == "set-cookie"]
+            rotated_cookie = next(value for value in recovered_cookies if value.startswith("shiyue_session="))
+            csrf_cookie = next(value for value in recovered_cookies if value.startswith("shiyue_csrf="))
+            response.read()
+            connection.close()
+            self.assertIsNone(self.service.authenticate(session_cookie.split("=", 1)[1]))
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            connection.request("POST", "/api/auth/logout", "{}", {"Content-Type": "application/json", "Cookie": f"{rotated_cookie}; {csrf_cookie}", "X-CSRF-Token": csrf_cookie.split("=", 1)[1]})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            response.read()
             connection.close()
             connection = None
         finally:

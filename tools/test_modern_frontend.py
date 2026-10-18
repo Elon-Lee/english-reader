@@ -13,6 +13,7 @@ ASSETS = SITE / "assets"
 READER_PAGE = ROOT / "frontend" / "src" / "pages" / "ReaderPage.jsx"
 MODERN_STYLES = ROOT / "frontend" / "src" / "styles.css"
 MODERN_SOURCE = ROOT / "frontend" / "src" / "main.jsx"
+API_CLIENT = ROOT / "frontend" / "src" / "api" / "client.js"
 PUBLIC_SITE = ROOT / "frontend" / "src" / "pages" / "PublicSite.jsx"
 MEMBERSHIP_PAGE = ROOT / "frontend" / "src" / "pages" / "MembershipPage.jsx"
 PAGE_SKELETON = ROOT / "frontend" / "src" / "components" / "PageSkeleton.jsx"
@@ -42,6 +43,8 @@ def main() -> int:
         check(list(ASSETS.glob(f"{chunk}-*.js")), f"hashed {chunk} vendor chunk missing")
     check("/api/preferences" in entry, "reading preferences API integration missing")
     check("/api/auth/login" in entry and "/api/auth/register" in entry, "modern authentication integration missing")
+    api_client = API_CLIENT.read_text(encoding="utf-8")
+    check("error.code === 'csrf_failed'" in api_client and "fetch('/api/auth/me'" in api_client, "CSRF rejection must recover the session cookie and retry once")
     check("/api/auth/verify-email" in entry and "/api/auth/reset-password" in entry, "email verification or password reset UI missing")
     check("/verify-email" in entry and "/reset-password" in entry, "authentication link routes missing")
     check("/api/workspace/activity" in entry and "/reader" in entry, "modern reader integration missing")

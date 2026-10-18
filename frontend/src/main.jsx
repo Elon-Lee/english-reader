@@ -10,7 +10,9 @@ import {
   CustomerServiceOutlined, DashboardOutlined, FileTextOutlined, MenuOutlined, MoreOutlined,
   PlusOutlined, ReadOutlined, SettingOutlined, ShopOutlined, StarOutlined, GiftOutlined, ThunderboltFilled, UserOutlined,
 } from '@ant-design/icons'
-import { csrfHeaders, deleteJson, getJson, postJson } from './api/client'
+import { csrfHeaders, deleteJson, fetchWithCsrf, getJson, postJson } from './api/client'
+import { handleMembershipLimit } from './api/membershipLimit'
+import MembershipLimitModal from './components/MembershipLimitModal'
 import { DEFAULT_PREFERENCES } from './config/preferences'
 import CatalogPage from './pages/CatalogPage'
 import AdminPage from './pages/AdminPage'
@@ -170,7 +172,7 @@ function App() {
       await postJson('/api/library/items', { bookId: book.id, shelfState: 'active' })
       await reloadWorkspace({ silent: true })
       messageApi.success('已加入我的书架')
-    } catch (error) { messageApi.error(error.message || '书架操作失败') }
+    } catch (error) { if (!handleMembershipLimit(error, { onContinue: () => catalogAction(book) })) messageApi.error(error.message || '书架操作失败') }
   }
   const cancelImport = async task => {
     try { await postJson(`/api/workspace/imports/${encodeURIComponent(task.id)}/cancel`, {}); await reloadWorkspace({ silent: true }); messageApi.success('导入任务已取消') } catch (error) { messageApi.error(error.message || '取消任务失败') }
@@ -183,7 +185,7 @@ function App() {
   }
   const deleteUnusedInvitations = async (batchId, invitationIds) => { try { const result = await deleteJson(`/api/admin/invitation-batches/${encodeURIComponent(batchId)}/invitations`, { invitationIds }); await reloadWorkspace({ silent: true, targetScreen: 'admin' }); messageApi.success(`已删除 ${result.deleted || 0} 个未使用邀请码`); return result } catch (error) { messageApi.error(error.message || '删除邀请码失败'); throw error } }
   const revokeDevice = async (userId, deviceId) => {
-    Modal.confirm({ title: '确认撤销该设备？', content: '撤销后，该设备的活跃会话会立即失效，需要重新登录。', okText: '确认撤销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { const response = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE', credentials: 'include', headers: csrfHeaders() }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '设备撤销失败'); await reloadWorkspace({ silent: true }); messageApi.success('设备已撤销') } catch (error) { messageApi.error(error.message || '设备撤销失败'); throw error } } })
+    Modal.confirm({ title: '确认撤销该设备？', content: '撤销后，该设备的活跃会话会立即失效，需要重新登录。', okText: '确认撤销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { const response = await fetchWithCsrf(`/api/admin/users/${encodeURIComponent(userId)}/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '设备撤销失败'); await reloadWorkspace({ silent: true }); messageApi.success('设备已撤销') } catch (error) { messageApi.error(error.message || '设备撤销失败'); throw error } } })
   }
   const adjustQuota = async (userId, payload) => {
     try { await writeAdminEntitlement('/api/admin/quotas/adjust', { ...payload, userId }); await reloadWorkspace({ silent: true }); messageApi.success('额度调整已完成') } catch (error) { messageApi.error(error.message || '额度调整失败'); throw error }
@@ -209,7 +211,7 @@ function App() {
   const requestDeletion = () => { Modal.confirm({ title: '确认申请注销账户？', content: '提交后会退出当前设备，并进入 7 天宽限期。宽限期内重新登录可以取消。', okText: '申请注销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { await postJson('/api/account/deletion', { reason: '用户在新版工作台申请注销' }); setAuthState('unauthenticated'); messageApi.success('注销申请已提交') } catch (error) { messageApi.error(error.message || '注销申请失败'); throw error } } }) }
   const cancelDeletion = async () => { try { await postJson('/api/account/deletion/cancel', {}); await reloadWorkspace({ silent: true }); messageApi.success('注销申请已取消') } catch (error) { messageApi.error(error.message || '取消注销失败') } }
   const revokeOwnDevice = async deviceId => {
-    Modal.confirm({ title: '确认撤销此设备？', content: '撤销后，该设备需要重新登录才能访问工作台。', okText: '确认撤销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { const response = await fetch(`/api/auth/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE', credentials: 'include', headers: csrfHeaders() }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '设备撤销失败'); await reloadWorkspace({ silent: true }); messageApi.success('设备已撤销') } catch (error) { messageApi.error(error.message || '设备撤销失败'); throw error } } })
+    Modal.confirm({ title: '确认撤销此设备？', content: '撤销后，该设备需要重新登录才能访问工作台。', okText: '确认撤销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { const response = await fetchWithCsrf(`/api/auth/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '设备撤销失败'); await reloadWorkspace({ silent: true }); messageApi.success('设备已撤销') } catch (error) { messageApi.error(error.message || '设备撤销失败'); throw error } } })
   }
   const exportAdminSummary = async () => { try { const response = await fetch('/api/admin/exports/summary', { credentials: 'include' }); const data = await response.json(); if (!response.ok) throw new Error(data.error || '导出失败'); const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `shiyue-admin-summary-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url); messageApi.success('运营摘要已导出') } catch (error) { messageApi.error(error.message || '导出失败') } }
   const checkIn = async () => { try { await postJson('/api/checkins', {}); await reloadWorkspace({ silent: true }); messageApi.success('签到成功，成长值已更新') } catch (error) { messageApi.error(error.message || '签到失败') } }
@@ -242,7 +244,7 @@ function App() {
       <Layout><Header className="modern-header"><Button className="mobile-menu" type="text" icon={<MenuOutlined />} onClick={() => setMobileOpen(true)} /><div className="header-context"><Text className="eyebrow">WORKSPACE / {nav.find(n => n.key === screen)?.label || '设置'}</Text><Text className="header-status"><span className="status-dot" /> 服务正常</Text></div></Header>
         <Content className="modern-content"><PageErrorBoundary key={screen}><Page loading={pageLoading} screen={screen} books={filteredBooks} allBooks={books} catalogBooks={catalogBooks} libraryBooks={libraryBooks} importTasks={importTasks} learningDays={learningDays} membership={membership} membershipOrders={membershipOrders} rewardStatus={rewardStatus} vocabulary={vocabulary} rewardsCatalog={rewardsCatalog} rewardsLedger={rewardsLedger} adminData={adminData} currentUser={currentUser} devices={devices} preferences={preferences} deletionStatus={deletionStatus} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} selectScreen={selectScreen} openReader={openReader} openImport={() => setImportOpen(true)} messageApi={messageApi} health={health} onRefresh={() => reloadWorkspace({ silent: true, targetScreen: screen })} onCatalogAction={catalogAction} onCancelImport={cancelImport} onUpdateUserStatus={updateUserStatus} onCreateInvitation={createInvitation} onDeleteUnusedInvitations={deleteUnusedInvitations} onRevokeDevice={revokeDevice} onAdjustQuota={adjustQuota} onUpdateSubscription={updateSubscription} onCreateManualOrder={createManualOrder} onCreateCommerceProduct={createCommerceProduct} onCreateCommerceVersion={createCommerceVersion} onPublishCommerceVersion={publishCommerceVersion} onSetCommerceProductActive={setCommerceProductActive} onCreateConfiguredBenefit={createConfiguredBenefit} onUpdateConfiguredBenefit={updateConfiguredBenefit} onRevokeOwnDevice={revokeOwnDevice} onExportAdminSummary={exportAdminSummary} onCheckIn={checkIn} onRedeemReward={redeemReward} onSavePreferences={savePreferences} onPreferencesChange={mergePreferences} onLogout={logout} onRequestDeletion={requestDeletion} onCancelDeletion={cancelDeletion} /></PageErrorBoundary></Content>
       </Layout>
-    </Layout><ImportModal open={importOpen} onClose={() => setImportOpen(false)} onCreated={() => reloadWorkspace({ silent: true })} messageApi={messageApi} /></AntApp>
+    </Layout><ImportModal open={importOpen} onClose={() => setImportOpen(false)} onResume={() => setImportOpen(true)} onCreated={() => reloadWorkspace({ silent: true })} messageApi={messageApi} /><MembershipLimitModal onRefresh={async () => { setMembership(await getJson('/api/membership/usage')); await reloadWorkspace({ silent: true }) }} /></AntApp>
   </ConfigProvider>
 }
 
@@ -361,7 +363,7 @@ function SectionHeader({ title, action }) { return <div className="section-heade
 function ActionCard({ icon, title, copy, action, onClick }) { return <Col xs={24} md={8}><Card className="action-card"><div className="action-icon">{icon}</div><Title level={4}>{title}</Title><Paragraph>{copy}</Paragraph><Button type="link" onClick={onClick}>{action} →</Button></Card></Col> }
 function Metric({ title, value, suffix, note }) { return <Col xs={12} lg={6}><Card className="metric-card"><Statistic title={title} value={value} suffix={suffix} /><Text type="secondary">{note}</Text></Card></Col> }
 function Quota({ title, items }) { return <Col xs={24} md={8}><Card title={title} className="quota-card"><List size="small" dataSource={items} renderItem={item => <List.Item><CheckCircleFilled className="check-icon" />{item}</List.Item>} /></Card></Col> }
-function ImportModal({ open, onClose, onCreated, messageApi }) {
+function ImportModal({ open, onClose, onResume, onCreated, messageApi }) {
   const [form] = Form.useForm()
   const [submitting, setSubmitting] = useState(false)
   const [file, setFile] = useState(null)
@@ -388,7 +390,7 @@ function ImportModal({ open, onClose, onCreated, messageApi }) {
           request.onerror = () => reject(new Error('网络中断，文件上传失败'))
           request.onload = () => {
             let data = {}; try { data = JSON.parse(request.responseText || '{}') } catch {}
-            if (request.status < 200 || request.status >= 300) reject(new Error(data.error || '上传失败'))
+            if (request.status < 200 || request.status >= 300) reject(Object.assign(new Error(data.error || '上传失败'), { code: data.code, payload: data }))
             else resolve(data)
           }
           request.send(file)
@@ -396,13 +398,11 @@ function ImportModal({ open, onClose, onCreated, messageApi }) {
       }
       const taskId = created.task.id
       onClose(); form.resetFields(); setFile(null); setUploadProgress(0); await onCreated?.(); messageApi.success('导入任务已提交，后台处理进度会自动更新')
-      void fetch(`/api/workspace/imports/${encodeURIComponent(taskId)}/complete`, { method: 'POST', credentials: 'include', headers: csrfHeaders({ 'Content-Type': 'application/json' }), body: '{}' }).then(async response => {
-        const result = await response.json().catch(() => ({}))
-        if (!response.ok) throw new Error(result.error || '导入处理失败')
+      void postJson(`/api/workspace/imports/${encodeURIComponent(taskId)}/complete`, {}).then(async result => {
         await onCreated?.()
         if (result.task?.status === 'complete') messageApi.success('内容已导入学习空间')
-      }).catch(async error => { await onCreated?.(); messageApi.error(error.message || '导入处理失败') })
-    } catch (error) { messageApi.error(error.message || '导入失败') } finally { setSubmitting(false) }
+      }).catch(async error => { await onCreated?.(); if (!handleMembershipLimit(error, { onContinue: onResume })) messageApi.error(error.message || '导入处理失败') })
+    } catch (error) { if (!handleMembershipLimit(error, { onClose, onContinue: onResume })) messageApi.error(error.message || '导入失败') } finally { setSubmitting(false) }
   }
   return <Modal title="导入新的学习内容" open={open} onCancel={submitting ? undefined : onClose} onOk={() => form.submit()} confirmLoading={submitting} okText={uploadProgress > 0 && uploadProgress < 100 ? `上传 ${uploadProgress}%` : '创建导入任务'} cancelText="稍后再说"><Form form={form} layout="vertical" onFinish={submit}><Form.Item label="内容来源" name="source" initialValue="file"><Segmented block options={[{ label: '上传文件', value: 'file' }, { label: 'YouTube', value: 'youtube' }]} /></Form.Item><Form.Item label="读物标题" name="title"><Input placeholder="可选，默认使用文件名" /></Form.Item><Form.Item label={source === 'youtube' ? 'YouTube 链接' : '学习文件'} name="input" rules={[{ required: true, message: source === 'youtube' ? '请输入 YouTube 链接' : '请选择要上传的文件' }]}><Input size="large" type={source === 'youtube' ? 'url' : 'file'} prefix={source === 'youtube' ? <CloudUploadOutlined /> : null} onChange={event => source === 'file' && setFile(event.target.files?.[0] || null)} placeholder={source === 'youtube' ? '粘贴 YouTube 链接' : undefined} /></Form.Item>{submitting && source === 'file' && <Progress percent={uploadProgress} status={uploadProgress >= 100 ? 'success' : 'active'} />}<Text type="secondary">支持 TXT、Markdown、PDF、MP3、MP4、MOV、M4V、MKV、WebM。文件直接流式发送，不再在浏览器中复制成完整 ArrayBuffer；大型音视频会进入后台处理队列。</Text></Form></Modal>
 }

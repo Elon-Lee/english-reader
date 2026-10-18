@@ -1,11 +1,14 @@
 export function csrfHeaders(headers = {}) {
   const csrf = document.cookie
-    .split('; ')
+    .split(/;\s*/)
     .find(value => value.startsWith('shiyue_csrf='))
     ?.split('=')
     .slice(1)
     .join('=')
-  return csrf ? { ...headers, 'X-CSRF-Token': decodeURIComponent(csrf) } : headers
+  if (!csrf) return headers
+  let token = csrf
+  try { token = decodeURIComponent(csrf) } catch {}
+  return { ...headers, 'X-CSRF-Token': token }
 }
 
 async function parseResponse(response) {
@@ -20,8 +23,24 @@ async function parseResponse(response) {
   return data
 }
 
+export async function fetchWithCsrf(path, options = {}) {
+  const request = { credentials: 'include', ...options }
+  let response = await fetch(path, request)
+  const method = String(request.method || 'GET').toUpperCase()
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    const error = await response.clone().json().catch(() => ({}))
+    if (response.status === 403 && error.code === 'csrf_failed') {
+      const recovery = await fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
+      if (recovery.ok) {
+        response = await fetch(path, { ...request, headers: csrfHeaders(request.headers) })
+      }
+    }
+  }
+  return response
+}
+
 export async function requestJson(path, options = {}) {
-  const response = await fetch(path, { credentials: 'include', ...options })
+  const response = await fetchWithCsrf(path, options)
   return parseResponse(response)
 }
 

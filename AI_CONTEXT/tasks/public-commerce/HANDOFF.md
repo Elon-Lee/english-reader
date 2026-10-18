@@ -1,6 +1,6 @@
 # 公开官网、月度套餐与云猫兑换交接
 
-更新时间：2026-10-17（Asia/Shanghai）
+更新时间：2026-10-18（Asia/Shanghai）
 
 ## 目标
 
@@ -8,6 +8,8 @@
 
 ## 当前完成状态
 
+- 2026-10-18 本地新增权益限制升级闭环：收藏、试读加入、导入空间/容量和阅读器 AI 额度触限后关闭来源弹窗，打开同页会员弹窗。通过真实商品目录与逐套餐 `change-preview` 的等级判断，仅展示高于当前会员的套餐，不依赖旧 `recommendedPlan` 固定映射；最高档/无可升级商品显示释放名额或等待额度恢复说明。复用云猫购买与兑换，兑换成功刷新权益，点击继续恢复收藏/分析或返回导入表单；普通错误保留原处理。购买预览加过期响应保护，未通过预览前禁用购买，缺购买链接仍允许已有卡密兑换。尚未发布生产。
+- 本轮验证：`npm run build:modern`、`npm run test:modern`、`npm run test:ui`（22 项）、`npm run check:js`、相关 Python 编译和 `git diff --check` 均通过。Chrome + Playwright 使用隔离模拟接口验证了触限关闭详情、免费两档/进阶仅 Pro/最高档空状态、兑换失败重试、成功后继续收藏进入阅读器、商品加载失败重试；未使用正式卡密或真实资金付款。新增关键文件：`frontend/src/api/membershipLimit.js`、`frontend/src/components/MembershipLimitModal.jsx`。
 - 已实现公开 `/`、`/pricing`、`/purchase/:slug`、`/support`；登录后进入 `/app`，旧 `/?screen=...` 继续兼容。
 - 官网使用真实阅读器、学习空间和学习记录截图，包含首屏进入、悬浮提示和产品图 hover 动效。
 - 套餐来自 PostgreSQL 已发布商品版本；运营后台可创建商品、创建草稿版本、发布、停止/恢复新售并查看版本历史。

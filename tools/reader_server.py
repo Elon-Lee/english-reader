@@ -4,6 +4,7 @@ import json
 import base64
 import gzip
 import hashlib
+import hmac
 import io
 import mimetypes
 import os
@@ -30,7 +31,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from library_db import BOOKS_ROOT, active_import_jobs, add_daily, annotate_word, canonical_youtube_series, create_job, delete_book, delete_import_jobs, dictionary, get_book, get_book_chunk, get_book_manifest, get_job, get_sentence_grammar, get_settings as db_get_settings, import_duplicates, imported_books, learning_days, library, mark_import_jobs_cancelling, now, pending_import_jobs, save_sentence_grammar, save_vocab, scan_catalog, set_settings, touch_book, update_job, update_vocab, vocabulary_list
 from deployment import manager as deployment_manager
-from saas_auth import SaaSConfigurationError, SaaSError, SaaSService
+from saas_auth import SaaSConfigurationError, SaaSError, SaaSService, token_hash
 from saas_admin import AdminService
 from saas_accounts import AccountLifecycleService
 from saas_catalog import CatalogService
@@ -686,7 +687,17 @@ class Handler(SimpleHTTPRequestHandler):
             self.reply({"code":"saas_disabled","error":"SaaS 账号功能尚未启用。"},404);return
         if path=="/api/auth/me":
             if not self.require_saas_user():return
-            self.reply({"user":SAAS.public_user(self._saas_session)})
+            headers=()
+            raw_session=self.cookie_value("shiyue_session")
+            supplied=self.cookie_value("shiyue_csrf")
+            stored=str(self._saas_session.get("csrf_hash", ""))
+            if not supplied or not hmac.compare_digest(stored,token_hash(supplied)):
+                try:
+                    rotated_session,csrf=SAAS.recover_csrf(str(self._saas_session["session_id"]),raw_session)
+                    headers=tuple(self.session_cookie_headers(rotated_session,csrf))
+                except SaaSError as exc:
+                    self.reply(exc.payload(),exc.status);return
+            self.reply({"user":SAAS.public_user(self._saas_session)},extra_headers=headers)
             return
         if path=="/api/auth/devices":
             if not self.require_saas_user():return

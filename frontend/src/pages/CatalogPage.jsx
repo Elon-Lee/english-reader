@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { handleMembershipLimit } from '../api/membershipLimit'
 import { Button, Card, Col, Empty, Input, Modal, Row, Segmented, Select, Skeleton, Space, Tag, Typography } from 'antd'
 import { BookOutlined, FileTextOutlined, HeartFilled, ReadOutlined } from '@ant-design/icons'
 
@@ -100,7 +101,7 @@ export default function CatalogPage({ catalogBooks, openReader, selectScreen, on
       if (data?.book) setDetail(data.book)
       }
     } catch (error) {
-      messageApi.error(error.message || '书架操作失败')
+      if (!handleMembershipLimit(error, { onClose: () => setDetailOpen(false), onContinue: () => performAction(book, readAfter) })) messageApi.error(error.message || '书架操作失败')
     } finally {
       actionPending.current = false
       setPendingBookId('')
