@@ -225,7 +225,9 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         route=urlsplit(self.path)
         if route.path in {"/terms","/privacy","/content-policy","/refunds","/copyright"}:
-            self.serve_legal_page(route.path);return
+            if SAAS.enabled:self.reply({"code":"backend_only","error":"该端口仅提供后台 API。"},404)
+            else:self.serve_legal_page(route.path)
+            return
         if route.path=="/api/auth/debug-browser-login":
             self.debug_browser_login(route);return
         if route.path.startswith("/api/auth/"):
@@ -332,16 +334,10 @@ class Handler(SimpleHTTPRequestHandler):
         if route.path == "/api/word-hover": self.word_hover(parse_qs(route.query)); return
         if route.path == "/api/word-dictionary": self.word_dictionary(parse_qs(route.query)); return
         if route.path == "/api/word-tts": self.word_tts(parse_qs(route.query)); return
-        if route.path.startswith("/books/"):
-            if SAAS.enabled:
-                if not self.require_saas_user(): return
-                self.saas_content_pending(); return
-            self.serve_books_file(route.path); return
         if SAAS.enabled:
-            if route.path=="/modern.html" or route.path.startswith("/modern-assets"):
-                self.send_response(308);self.send_header("Location","/");self.send_header("Content-Length","0");self.end_headers();return
-            if route.path in {"/", "/app", "/pricing", "/login", "/register", "/support", "/verify-email", "/reset-password"} or route.path.startswith("/purchase/") or route.path.startswith("/assets/") or route.path.startswith("/product/"):
-                if self.serve_saas_site(route):return
+            self.reply({"code":"backend_only","error":"该端口仅提供后台 API。"},404);return
+        if route.path.startswith("/books/"):
+            self.serve_books_file(route.path); return
         range_header=self.headers.get("Range")
         if range_header and self.serve_range(range_header): return
         if self.serve_reader_asset(route):return

@@ -58,6 +58,8 @@ React 阅读器的布局和交互语义与旧阅读器一致，同时使用 SaaS
 
 - 2026-10-18 修复阅读器会员触限弹窗，使其与会员中心采用相同的套餐卡片、购买/兑换和原操作继续流程；官方阅读器返回 `inLibrary` 后，已加入书架显示“移出书架”并带二次确认；视频清晰度切换保存并恢复播放、时间、音量和静音状态，自动播放失败时提示用户点击播放。前端静态产物已重新构建。已通过 `npm run build:modern`、`npm run test:modern`、`npm run check:js`、`python3 -m py_compile tools/saas_catalog.py` 和 `git diff --check`。
 - 2026-10-18 调整移出书架行为：删除收藏后刷新当前阅读 URL 并进入 `trial=1` 试读；播放器快捷提示中仅“开/关”两字使用状态色高亮，“句末暂停”保持普通文本。已通过 `npm run build:modern`、`npm run test:ui`、`npm run check:js` 和 `git diff --check`。
+- 2026-10-18 清理新版切换后的旧前端 React 死代码，删除 `main.jsx` 中未被新页面使用的旧书城、书架、统计、生词、奖励、阅读器、会员、设置和后台组件；SaaS 服务端对 `/modern.html`、`/modern-assets/*` 及旧阅读器入口资源直接返回 404，不再提供兼容入口。受仓库规则保护的 `reader/` 旧文件仍保留。已通过 `npm run build:modern`、`npm run test:modern`、`npm run test:ui`、`npm run check:js`、`python3 -m py_compile tools/reader_server.py` 和 `git diff --check`。
+- 2026-10-18 明确端口职责：SaaS 后台 `8790` 在 SaaS 模式下只处理 `/api/*` 业务接口，所有前端页面、静态资源、旧入口和法律页面均返回 `404`；前台由 Vite `5173` 提供，并通过 proxy 访问 `8790` 的 `/api` 与 `/books`。本地实测 `8790 /api/health=200`、`8790 /、/app、/assets/index.js、/modern.html、/reader/index.html、/terms=404`，`5173 /、/assets/index.js、/api/health=200`。已通过 `python3 -m py_compile tools/reader_server.py`、`npm run test:modern`、`npm run test:ui` 和 `git diff --check`。
 
 - 已用真实官方视频读物验收媒体左侧/上方、关闭按钮、字幕自动滚动、悬词暂停与词典展示；顶部布局实测 `window.scrollY=0`，1280×720 视频按 629×354 显示并在 900px 字幕列中居中。已用纯 MP3 私人读物验收双栏左右留白相等、整体居中。
 - 主题审查截图与结论保存在 `.local/debug/product-design-reader-theme-20261012/`；左侧/上方布局、媒体 hover 浮层、词高亮、播放器和工具标签已完成真实浏览器复验。
