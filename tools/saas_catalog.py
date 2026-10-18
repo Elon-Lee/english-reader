@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import re
 from datetime import datetime
 from typing import Any
@@ -56,6 +57,7 @@ class CatalogService:
             "level": row["level"], "resourceType": row["resource_type"], "estimatedMinutes": int(row["estimated_minutes"]),
             "sentenceCount": int(row["sentence_count"]), "wordCount": int(row["word_count"]), "coverUrl": row["cover_url"],
             "tags": tags, "featuredRank": int(row["featured_rank"]), "publishedAt": timestamp(row.get("published_at")),
+            "favoriteCount": int(row.get("favorite_count", 0) or 0), "readingCount": int(row.get("reader_count", 0) or 0),
             "inLibrary": bool((state or {}).get("inLibrary")), "unlocked": bool((state or {}).get("inLibrary")),
         }
         if detail:
@@ -74,7 +76,10 @@ class CatalogService:
         limit = max(1, min(100, int(limit or 60)))
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(f"""SELECT cb.*,cs.slug AS series_slug,cs.title AS series_title FROM catalog_books cb
+                cursor.execute(f"""SELECT cb.*,cs.slug AS series_slug,cs.title AS series_title,
+                (SELECT COUNT(*) FROM user_library ul WHERE ul.catalog_book_id=cb.id) AS favorite_count,
+                (SELECT COUNT(DISTINCT wp.user_id) FROM workspace_progress wp WHERE wp.content_book_id=cb.source_content_book_id) AS reader_count
+                FROM catalog_books cb
                 LEFT JOIN catalog_series cs ON cs.id=cb.series_id WHERE {' AND '.join(terms)}
                 ORDER BY cb.featured_rank DESC,cb.published_at DESC,cb.created_at DESC LIMIT %s""", (*values, limit))
                 rows = self.accounts._many(cursor); ids=[row["id"] for row in rows];tags_by=self._tags(cursor,ids); states=self._state(cursor,user_id,ids)
@@ -99,7 +104,10 @@ class CatalogService:
     def detail(self, catalog_book_id: str, user_id: str | None = None) -> dict[str, Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("""SELECT cb.*,cs.slug AS series_slug,cs.title AS series_title FROM catalog_books cb LEFT JOIN catalog_series cs ON cs.id=cb.series_id
+                cursor.execute("""SELECT cb.*,cs.slug AS series_slug,cs.title AS series_title,
+                (SELECT COUNT(*) FROM user_library ul WHERE ul.catalog_book_id=cb.id) AS favorite_count,
+                (SELECT COUNT(DISTINCT wp.user_id) FROM workspace_progress wp WHERE wp.content_book_id=cb.source_content_book_id) AS reader_count
+                FROM catalog_books cb LEFT JOIN catalog_series cs ON cs.id=cb.series_id
                 WHERE cb.id=%s AND cb.publication_status='published' AND cb.rights_status IN ('public_domain','licensed')""", (catalog_book_id,))
                 row=self.accounts._one(cursor)
                 if not row: raise SaaSError("catalog_book_not_found", "读物不存在或尚未上架。", 404)
@@ -119,14 +127,14 @@ class CatalogService:
                     book["shelfState"],book["addedAt"]=row["shelf_state"],timestamp(row["added_at"]);items.append(book)
                 return {"items":items}
 
-    def reader(self,user_id:str,catalog_book_id:str)->dict[str,Any]:
-        """Only current library members can read official content."""
+    def reader(self,user_id:str,catalog_book_id:str,trial:bool=False)->dict[str,Any]:
+        """Full content requires a shelf entry; trial content is restricted to the first 10%."""
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("""SELECT cb.id,cb.title,cb.english_title,cb.level,cb.resource_type,cb.estimated_minutes,cb.source_content_book_id,src.duration,src.data_json
                 FROM catalog_books cb JOIN content_books src ON src.id=cb.source_content_book_id
-                JOIN user_library ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
-                WHERE cb.id=%s AND cb.publication_status='published' AND cb.rights_status IN ('public_domain','licensed')""",(user_id,catalog_book_id))
+                LEFT JOIN user_library ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
+                WHERE cb.id=%s AND cb.publication_status='published' AND cb.rights_status IN ('public_domain','licensed') AND (ou.catalog_book_id IS NOT NULL OR %s)""",(user_id,catalog_book_id,trial))
                 row=self.accounts._one(cursor)
                 if not row:raise SaaSError("catalog_book_locked","请先将读物加入书架后再开始阅读。",403)
                 data=as_json(row["data_json"]);sentences=[]
@@ -134,14 +142,29 @@ class CatalogService:
                     if not isinstance(item,dict):continue
                     text=str(item.get("text","")).strip()
                     if text:sentences.append({"id":str(item.get("id",len(sentences))),"text":text,"translation":str(item.get("translation","")).strip(),"start":item.get("start"),"end":item.get("end"),"page":item.get("page"),"section":item.get("section"),"words":item.get("words",[]) if isinstance(item.get("words",[]),list) else []})
+                trial_end = float(row["duration"] or 0) * .10
+                trial_count = max(1, math.ceil(len(sentences) * .10))
+                if trial:
+                    if trial_end > 0 and any(item.get("start") is not None for item in sentences):
+                        sentences = [item for item in sentences if item.get("start") is not None and float(item["start"]) < trial_end]
+                        for item in sentences:
+                            if item.get("end") is not None:item["end"] = min(float(item["end"]), trial_end)
+                    else:sentences=sentences[:trial_count]
                 cursor.execute("""SELECT id,kind,content_type,original_bytes,generated_bytes FROM media_assets
                 WHERE status='active' AND (catalog_book_id=%s OR content_book_id=%s) ORDER BY CASE WHEN catalog_book_id=%s THEN 0 ELSE 1 END,created_at""",(catalog_book_id,row["source_content_book_id"],catalog_book_id));assets=[]
                 for item in self.accounts._many(cursor):
                     cursor.execute("SELECT variant_name,content_type,byte_size FROM asset_variants WHERE asset_id=%s AND deleted_at IS NULL ORDER BY variant_name",(item["id"],));variants=[{"name":variant["variant_name"],"contentType":variant["content_type"],"bytes":int(variant["byte_size"]),"url":f"/api/media/{item['id']}?variant={variant['variant_name']}"} for variant in self.accounts._many(cursor)]
                     assets.append({"id":item["id"],"kind":item["kind"],"contentType":item["content_type"],"bytes":int(item["original_bytes"])+int(item["generated_bytes"]),"url":f"/api/media/{item['id']}","variants":variants})
+                if trial:
+                    from urllib.parse import quote
+                    for asset in assets:
+                        asset["url"] += "?trialBook=" + quote(catalog_book_id, safe="")
+                        asset["variants"] = [variant for variant in asset["variants"] if str(variant["contentType"]).startswith(("audio/", "video/"))]
+                        for variant in asset["variants"]:variant["url"] += "&trialBook=" + quote(catalog_book_id, safe="")
+                    assets = [asset for asset in assets if str(asset["contentType"]).startswith(("audio/", "video/")) or str(asset["contentType"]).startswith("image/") or asset["variants"]]
                 playable=any(str(asset["contentType"]).startswith(("audio/","video/")) or any(str(variant["contentType"]).startswith(("audio/","video/")) for variant in asset["variants"]) for asset in assets)
                 cursor.execute("SELECT last_sentence_id,reading_seconds,completed_at FROM workspace_progress WHERE user_id=%s AND content_book_id=%s",(user_id,row["source_content_book_id"]));progress=self.accounts._one(cursor)or{}
-                return {"book":{"id":row["id"],"title":row["title"],"englishTitle":row["english_title"],"level":row["level"],"resourceType":row["resource_type"],"estimatedMinutes":int(row["estimated_minutes"]),"duration":float(row["duration"] or 0),"sentences":sentences,"mediaAssets":assets,"mediaReady":playable,"mediaNotice":"已连接受鉴权媒体，可在阅读器中播放。" if playable else "该读物当前只有正文，暂未找到可播放音视频。","progress":{"lastSentenceId":progress.get("last_sentence_id","") or "","readingSeconds":int(progress.get("reading_seconds",0)or 0),"completedAt":timestamp(progress.get("completed_at"))}}}
+                return {"book":{"id":row["id"],"title":row["title"],"englishTitle":row["english_title"],"level":row["level"],"resourceType":row["resource_type"],"estimatedMinutes":int(row["estimated_minutes"]),"duration":float(row["duration"] or 0),"sentences":sentences,"mediaAssets":assets,"trial":trial,"trialPercent":10,"trialEndSeconds":trial_end,"trialLimit":len(sentences),"mediaReady":playable,"mediaNotice":"已连接受鉴权媒体，可在阅读器中播放。" if playable else "该读物当前只有正文，暂未找到可播放音视频。","progress":{"lastSentenceId":"" if trial else progress.get("last_sentence_id","") or "","readingSeconds":0 if trial else int(progress.get("reading_seconds",0)or 0),"completedAt":timestamp(progress.get("completed_at"))}}}
 
     def _published_book(self,cursor:Any,catalog_book_id:str)->dict[str,Any]:
         cursor.execute("SELECT * FROM catalog_books WHERE id=%s AND publication_status='published' AND rights_status IN ('public_domain','licensed') FOR UPDATE",(catalog_book_id,))

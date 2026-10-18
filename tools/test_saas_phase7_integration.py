@@ -105,6 +105,28 @@ class PrivateWorkspaceTests(unittest.TestCase):
         with self.assertRaises(SaaSError) as denied:self.workspace.save_vocabulary(str(self.other["id"]),catalog_id,"s1",0,{"word":"My","rating":"hard"})
         self.assertEqual(denied.exception.code,"learning_book_not_found")
 
+    def test_trial_media_is_clipped_and_full_source_remains_private(self):
+        catalog_id='catalog-trial-video'
+        source=self.root/'trial-video.mp4'
+        subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','color=c=green:s=160x90:r=25','-t','10','-c:v','libx264','-pix_fmt','yuv420p',str(source)],check=True,capture_output=True)
+        owner_id,viewer_id=str(self.owner['id']),str(self.other['id'])
+        asset=self.media.register(owner_id,owner_id,'private','trial-video.mp4','video','video/mp4',content_book_id=self.book_id)
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE content_books SET duration=10 WHERE id=%s",(self.book_id,))
+                cursor.execute("INSERT INTO catalog_books(id,source_content_book_id,title,rights_status,publication_status) VALUES(%s,%s,'Trial','licensed','published')",(catalog_id,self.book_id))
+        with self.assertRaises(SaaSError):self.media.stream(viewer_id,asset['id'])
+        preview=self.media.trial_stream(viewer_id,asset['id'],catalog_id)
+        probe=subprocess.run(['ffprobe','-v','error','-show_entries','format=duration','-of','csv=p=0',str(preview['path'])],check=True,capture_output=True,text=True)
+        self.assertGreaterEqual(float(probe.stdout),.96)
+        self.assertLessEqual(float(probe.stdout),1.04)
+        reader=self.catalog.reader(viewer_id,catalog_id,trial=True)['book']
+        self.assertTrue(any('trialBook=' in item['url'] for item in reader['mediaAssets']))
+        with self.assertRaises(SaaSError):self.media.trial_stream(viewer_id,asset['id'],'unrelated-book')
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:cursor.execute("UPDATE catalog_books SET publication_status='archived' WHERE id=%s",(catalog_id,))
+        with self.assertRaises(SaaSError):self.media.trial_stream(viewer_id,asset['id'],catalog_id)
+
     def test_http_workspace_media_and_reward_activity(self):
         with socket.socket() as probe:probe.bind(("127.0.0.1",0));port=probe.getsockname()[1]
         environment={**os.environ,**self.environment,"READER_HOST":"127.0.0.1","READER_PORT":str(port)};root=Path(__file__).resolve().parents[1];process=subprocess.Popen([sys.executable,str(root/"tools/reader_server.py")],cwd=root,env=environment,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True);connection=None

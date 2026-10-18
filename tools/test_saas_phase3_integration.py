@@ -92,6 +92,29 @@ class PhaseThreePostgresTests(unittest.TestCase):
         self.assertEqual(len(self.catalog.library(str(self.bob["id"]))["items"]),0)
         self.assertNotEqual(first,second)
 
+    def test_uncollected_catalog_reader_is_limited_to_trial_mode(self):
+        book_id=self.publish(3)
+        trial=self.catalog.reader(str(self.alice["id"]),book_id,trial=True)["book"]
+        self.assertTrue(trial["trial"])
+        self.assertEqual(trial["trialLimit"],1)
+        self.assertEqual(trial["trialPercent"],10)
+        self.assertEqual(len(trial["sentences"]),1)
+        self.assertEqual(trial["mediaAssets"],[])
+        self.assertEqual(trial["progress"]["lastSentenceId"],"")
+        with self.assertRaises(SaaSError):
+            self.catalog.reader(str(self.alice["id"]),book_id)
+
+    def test_trial_timed_sentences_stop_at_ten_percent(self):
+        book_id=self.publish(4)
+        sentences=[{'id':str(i),'text':f'Sentence {i}', 'start':i*2, 'end':i*2+2} for i in range(100)]
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('UPDATE content_books SET duration=200,data_json=%s::jsonb WHERE id=%s', (json.dumps({'sentences':sentences}), 'source-4'))
+        trial=self.catalog.reader(str(self.alice['id']),book_id,trial=True)['book']
+        self.assertEqual(trial['trialEndSeconds'],20)
+        self.assertEqual([item['id'] for item in trial['sentences']],[str(i) for i in range(10)])
+        self.assertEqual(self.catalog.library(str(self.alice['id']))['items'],[])
+
     def test_official_library_and_material_access_are_not_metered_by_usage_count(self):
         books=[self.publish(index) for index in range(10,16)]
         user_id=str(self.alice["id"])
@@ -138,6 +161,15 @@ class PhaseThreePostgresTests(unittest.TestCase):
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection);connection.request("GET","/api/catalog?q=Reader%2050");response=connection.getresponse();public=json.loads(response.read());self.assertEqual(response.status,200);self.assertEqual(public["books"][0]["id"],book_id);connection.close();connections.remove(connection)
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection);connection.request("POST","/api/auth/login",json.dumps({"email":"alice@local.test","password":"alice password phase three"}),{"Content-Type":"application/json","X-Device-Id":"phase3-http-alice-01"});response=connection.getresponse();self.assertEqual(response.status,200);headers=response.getheaders();response.read();connection.close();connections.remove(connection)
             values=[value.split(";",1)[0] for name,value in headers if name.lower()=="set-cookie"];cookies="; ".join(values);csrf=next(value.split("=",1)[1] for value in values if value.startswith("shiyue_csrf="))
+            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection)
+            connection.request("GET",f"/api/catalog/books/{book_id}/reader?trial=1",headers={"Cookie":cookies})
+            response=connection.getresponse();trial=json.loads(response.read());self.assertEqual(response.status,200)
+            self.assertTrue(trial['book']['trial']);self.assertEqual(trial['book']['trialPercent'],10);self.assertEqual(len(trial['book']['sentences']),1)
+            connection.close();connections.remove(connection)
+            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection)
+            connection.request("GET",f"/api/catalog/books/{book_id}/reader",headers={"Cookie":cookies})
+            response=connection.getresponse();response.read();self.assertEqual(response.status,403)
+            connection.close();connections.remove(connection)
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection);connection.request("POST","/api/library/items",json.dumps({"bookId":book_id}),{"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf});response=connection.getresponse();self.assertEqual(response.status,201);response.read();connection.close();connections.remove(connection)
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection);connection.request("POST",f"/api/catalog/books/{book_id}/unlock",json.dumps({}),{"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf});response=connection.getresponse();unlocked=json.loads(response.read());self.assertEqual(response.status,200);self.assertTrue(unlocked["unlocked"]);connection.close();connections.remove(connection)
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection);connection.request("GET",f"/api/catalog/books/{book_id}/reader",headers={"Cookie":cookies});response=connection.getresponse();reader=json.loads(response.read());self.assertEqual(response.status,200);self.assertFalse(reader["book"]["mediaReady"]);self.assertEqual(len(reader["book"]["sentences"]),3);connection.close();connections.remove(connection)

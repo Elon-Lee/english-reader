@@ -787,7 +787,8 @@ class Handler(SimpleHTTPRequestHandler):
     def catalog_reader_get(self,path):
         try:
             book_id=unquote(path[len("/api/catalog/books/"):-len("/reader")].rstrip("/"))
-            self.reply(CATALOG.reader(str(self._saas_session["id"]),book_id))
+            trial=parse_qs(urlsplit(self.path).query).get("trial",["0"])[0]=="1"
+            self.reply(CATALOG.reader(str(self._saas_session["id"]),book_id,trial=trial))
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
         except SaaSConfigurationError as exc:self.reply({"code":"saas_unavailable","error":str(exc)},503)
     def catalog_admin_get(self):
@@ -880,7 +881,8 @@ class Handler(SimpleHTTPRequestHandler):
     def media_get(self,route):
         try:
             asset_id=unquote(route.path.rsplit("/",1)[1]);variant=(parse_qs(route.query).get("variant")or[None])[0]
-            result=MEDIA.stream(str(self._saas_session["id"]),asset_id,variant)
+            trial_book=(parse_qs(route.query).get('trialBook')or[''])[0]
+            result=MEDIA.trial_stream(str(self._saas_session["id"]),asset_id,trial_book,variant) if trial_book else MEDIA.stream(str(self._saas_session["id"]),asset_id,variant)
             self.serve_media_file(result["path"],result["target"]["content_type"],self.headers.get("Range","") or "")
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
         except SaaSConfigurationError as exc:self.reply({"code":"media_unavailable","error":str(exc)},503)

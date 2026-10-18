@@ -58,6 +58,12 @@
 - 不允许 SaaS API 回退到旧 SQLite 学习数据。
 - 新接口必须验证 tenant owner 或 admin 权限。
 
+## 官方试读 API（2026-10-18，本地未发布）
+
+- `GET /api/catalog/books/{id}/reader?trial=1` 保留已验证账号检查，返回前 10% 内容及 `trialPercent/trialEndSeconds/trialLimit`；普通 reader 仍要求当前书架记录。
+- 试读媒体 `/api/media/{assetId}?trialBook={catalogId}`（可带 variant）校验账号、发布/授权状态和资产关联，只输出裁剪原媒体，不放开完整资产权限；PDF 不支持试读全文。片段在 `.local/trial-clips` 缓存，依赖 ffmpeg。
+- 隔离库 phase3 与 phase7 已覆盖未收藏试读、完整阅读拒绝、10% 时间边界、原视频裁剪、错书与下架拒绝。
+
 ## 关键验证
 
 ```bash

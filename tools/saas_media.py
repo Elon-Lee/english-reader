@@ -7,12 +7,17 @@ import json
 import mimetypes
 import os
 import shutil
+import subprocess
+import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from saas_auth import SaaSError, SaaSService, new_id
 from saas_membership import MembershipService, as_json, timestamp
+
+TRIAL_CLIP_LOCK = threading.Lock()
 
 
 class MediaService:
@@ -171,6 +176,52 @@ class MediaService:
         _,path=self._safe_path(result["target"]["storage_path"])
         if not path.is_file():raise SaaSError("media_not_found","媒体文件不存在。",404)
         result["path"]=path;return result
+
+    def trial_stream(self, user_id: str, asset_id: str, catalog_id: str, variant_name: str | None = None) -> dict[str, Any]:
+        """Only serve a clipped original for a currently published catalog book."""
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""SELECT ma.*,src.duration FROM media_assets ma
+                JOIN catalog_books cb ON cb.id=%s AND (ma.catalog_book_id=cb.id OR ma.content_book_id=cb.source_content_book_id)
+                JOIN content_books src ON src.id=cb.source_content_book_id
+                JOIN users u ON u.id=%s AND u.status='active'
+                WHERE ma.id=%s AND ma.status='active' AND cb.publication_status='published'
+                AND cb.rights_status IN ('public_domain','licensed')""", (catalog_id, user_id, asset_id))
+                asset = self.accounts._one(cursor)
+                if not asset: raise SaaSError('media_access_denied', '试读媒体不存在或无权访问。', 403)
+                target = asset
+                if variant_name:
+                    cursor.execute('SELECT * FROM asset_variants WHERE asset_id=%s AND variant_name=%s AND deleted_at IS NULL', (asset_id, variant_name))
+                    target = self.accounts._one(cursor)
+                    if not target: raise SaaSError('media_not_found', '试读媒体不存在。', 404)
+        _, source = self._safe_path(target['storage_path'])
+        content_type = str(target['content_type'])
+        if not source.is_file(): raise SaaSError('media_not_found', '媒体文件不存在。', 404)
+        if content_type.startswith('image/'):
+            return {'path': source, 'target': {'content_type': content_type}}
+        # Never expose a complete document through the trial path.
+        if not content_type.startswith(('audio/', 'video/')):
+            raise SaaSError('trial_media_unsupported', '此资源暂不支持媒体试读。', 403)
+        seconds = float(asset.get('duration') or 0) * .10
+        if seconds <= 0: raise SaaSError('trial_duration_missing', '媒体时长尚未就绪，暂不能试读。', 409)
+        video = content_type.startswith('video/')
+        cache = self.media_root.parent / '.local' / 'trial-clips'
+        cache.mkdir(parents=True, exist_ok=True)
+        key = hashlib.sha256(f'{source}:{source.stat().st_mtime_ns}:{seconds}:v1'.encode()).hexdigest()
+        output = cache / (key + ('.mp4' if video else '.m4a'))
+        with TRIAL_CLIP_LOCK:
+            if not output.is_file():
+                with tempfile.TemporaryDirectory(dir=cache) as staging:
+                    temporary = Path(staging) / output.name
+                    command = ['ffmpeg', '-v', 'error', '-i', str(source), '-t', str(seconds), '-map', '0:v:0'] if video else ['ffmpeg', '-v', 'error', '-i', str(source), '-t', str(seconds)]
+                    command += ['-map', '0:a:0?', '-c:a', 'aac']
+                    if video: command += ['-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p']
+                    command += ['-movflags', '+faststart', '-y', str(temporary)]
+                    try: subprocess.run(command, check=True, capture_output=True, timeout=60)
+                    except (OSError, subprocess.SubprocessError):
+                        raise SaaSError('trial_clip_failed', '试读媒体准备失败，请稍后重试。', 503)
+                    temporary.replace(output)
+        return {'path': output, 'target': {'content_type': 'video/mp4' if video else 'audio/mp4'}}
 
     def list_assets(self,scope:str="",owner_id:str="",limit:int=100,offset:int=0)->dict[str,Any]:
         terms=[];values=[]
