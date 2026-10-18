@@ -57,6 +57,7 @@ React 阅读器的布局和交互语义与旧阅读器一致，同时使用 SaaS
 ## 未完成或需真实素材验证
 
 - 2026-10-18 修复阅读器会员触限弹窗，使其与会员中心采用相同的套餐卡片、购买/兑换和原操作继续流程；官方阅读器返回 `inLibrary` 后，已加入书架显示“移出书架”并带二次确认；视频清晰度切换保存并恢复播放、时间、音量和静音状态，自动播放失败时提示用户点击播放。前端静态产物已重新构建。已通过 `npm run build:modern`、`npm run test:modern`、`npm run check:js`、`python3 -m py_compile tools/saas_catalog.py` 和 `git diff --check`。
+- 2026-10-18 调整移出书架行为：删除收藏后刷新当前阅读 URL 并进入 `trial=1` 试读；播放器快捷提示中仅“开/关”两字使用状态色高亮，“句末暂停”保持普通文本。已通过 `npm run build:modern`、`npm run test:ui`、`npm run check:js` 和 `git diff --check`。
 
 - 已用真实官方视频读物验收媒体左侧/上方、关闭按钮、字幕自动滚动、悬词暂停与词典展示；顶部布局实测 `window.scrollY=0`，1280×720 视频按 629×354 显示并在 900px 字幕列中居中。已用纯 MP3 私人读物验收双栏左右留白相等、整体居中。
 - 主题审查截图与结论保存在 `.local/debug/product-design-reader-theme-20261012/`；左侧/上方布局、媒体 hover 浮层、词高亮、播放器和工具标签已完成真实浏览器复验。
