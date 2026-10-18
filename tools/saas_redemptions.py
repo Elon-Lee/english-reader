@@ -117,13 +117,13 @@ class RedemptionService:
         now = utcnow()
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
+                context = self.memberships._context(cursor, user_id)
                 key = str(idempotency_key or "").strip()[:255] or None
                 if key:
                     cursor.execute("SELECT * FROM membership_change_orders WHERE user_id=%s AND idempotency_key=%s", (user_id, key))
                     prior = self.accounts._one(cursor)
                     if prior:
                         return {"status": "redeemed", "idempotent": True, "changeOrder": self.memberships._change_order(prior)}
-                context = self.memberships._context(cursor, user_id)
                 cursor.execute(
                     """SELECT c.*,cpv.display_name,cpv.short_name,cpv.duration_days,cpv.amount_cents,cpv.plan_version_id,
                     pv.rank,pv.quotas_json FROM commerce_redemption_codes c
@@ -139,7 +139,9 @@ class RedemptionService:
                     if record["redeemed_by"] == user_id:
                         cursor.execute("SELECT starts_at,ends_at FROM subscriptions WHERE id=%s", (record["subscription_id"],))
                         subscription = self.accounts._one(cursor) or {}
-                        return {"status": "redeemed", "idempotent": True, "planName": record["display_name"], "startsAt": timestamp(subscription.get("starts_at")), "endsAt": timestamp(subscription.get("ends_at")), "membership": self.memberships._public_context(cursor, context, True)}
+                        cursor.execute("SELECT * FROM membership_change_orders WHERE user_id=%s AND source_code_id=%s", (user_id, record["id"]))
+                        prior = self.accounts._one(cursor)
+                        return {"status": "redeemed", "idempotent": True, "planName": record["display_name"], "startsAt": timestamp(subscription.get("starts_at")), "endsAt": timestamp(subscription.get("ends_at")), "membership": self.memberships._public_context(cursor, context, True), "changeOrder": self.memberships._change_order(prior) if prior else None}
                     raise SaaSError("invalid_redemption_code", "兑换码无效或已使用。", 400)
                 if record["status"] != "active":
                     raise SaaSError("invalid_redemption_code", "兑换码无效或已使用。", 400)

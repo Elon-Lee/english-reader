@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-import json,subprocess,tarfile,tempfile,unittest
+import inspect,json,subprocess,sys,tarfile,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from deployment import manager
+import deploy_remote
 
 
 class Job:
@@ -15,6 +16,8 @@ class SyntaxRemote:
     def __init__(self):self.scripts=[]
     def ssh(self,script):
         subprocess.run(["bash","-n"],input=script,text=True,check=True);self.scripts.append(script)
+        if "SHIYUE_SAAS_BACKUP_READY" in script:return "SHIYUE_SAAS_BACKUP_READY deadbeef\n"
+        if "SHIYUE_SAAS_UPGRADE_READY" in script:return "SHIYUE_SAAS_UPGRADE_READY\n"
         return "SHIYUE_DATABASE_RESTORED\nSHIYUE_SAAS_READY\n"
     def scp(self,*_args,**_kwargs):pass
 
@@ -70,6 +73,42 @@ class DeploymentReleasePipelineTests(unittest.TestCase):
         manager.prune_initial_database_to_published_content(job,remote,target)
         manager.activate_saas_release(job,remote,target,release)
         self.assertGreaterEqual(len(remote.scripts),6)
+        self.assertIn("SHIYUE_MIGRATIONS_READY",remote.scripts[-2])
+        self.assertIn("/app/reader",remote.scripts[-2])
+
+    def test_saas_upgrade_has_remote_backup_and_database_validation(self):
+        target={"id":1,"remote_root":"/srv/shiyue","service_port":8765,"install_recording":False,"use_https":False}
+        remote=SyntaxRemote();job=Job();release="code-20261017-120000-abcdef12"
+        backup=manager.backup_remote_saas_database(job,remote,target,release)
+        manager.check_remote_saas_upgrade_target(remote,target)
+        self.assertEqual(backup,"/srv/shiyue/backups/saas/pre-upgrade-code-20261017-120000-abcdef12.dump")
+        self.assertIn("pg_dump",remote.scripts[0])
+        self.assertIn("umask 077",remote.scripts[0])
+        self.assertIn("SHIYUE_SAAS_UPGRADE_READY",remote.scripts[1])
+        self.assertIn("saas.env",manager.saas_app_run_command(target,"/srv/shiyue/candidate"))
+        self.assertIn("ensure_migrated",manager.saas_migration_check_command())
+
+    def test_post_activation_verification_resolves_symlinked_mount(self):
+        source=inspect.getsource(manager.start_saas_upgrade)
+        self.assertIn('readlink -f "$mount_source"',source)
+        self.assertIn('"$current_release/reader"',source)
+
+    def test_deployment_http_upgrade_uses_saas_specific_worker(self):
+        server=(manager.ROOT/"tools/reader_server.py").read_text()
+        self.assertIn('"/api/deployment/saas-upgrade"}:self.reply({"jobId":deployment_manager.start_saas_upgrade(target_id)}',server)
+
+    def test_cli_upgrade_uses_saas_specific_worker(self):
+        target={"id":1,"name":"test","host":"localhost","port":22}
+        for flags in ([], ["--upgrade"]):
+            with self.subTest(flags=flags), patch.object(sys,"argv",["deploy_remote.py","--target","1",*flags]), \
+                    patch.object(deploy_remote,"resolve_target",return_value=target), \
+                    patch.object(manager,"start_saas_upgrade",return_value=123) as upgrade, \
+                    patch.object(manager,"start_upgrade") as legacy, \
+                    patch.object(deploy_remote,"follow_job") as follow:
+                deploy_remote.main()
+                upgrade.assert_called_once_with(1)
+                legacy.assert_not_called()
+                follow.assert_called_once_with(123,1800)
 
     def test_public_export_manifest_has_incremental_revision(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -143,6 +143,7 @@ class MbdPayService:
         event_id = f"{event_type}:{order_id}:{charge_id or hashlib.sha256(json.dumps(data,sort_keys=True).encode()).hexdigest()[:16]}"
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (f"mbdpay-event:{event_id}",))
                 cursor.execute("SELECT status FROM payment_provider_events WHERE provider='mbdpay' AND event_id=%s FOR UPDATE", (event_id,))
                 existing = self.accounts._one(cursor)
                 if existing and existing["status"] in {"processed", "ignored"}:
@@ -155,6 +156,10 @@ class MbdPayService:
         remote = self._verified_remote_order(order_id)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
+                cursor.execute("SELECT user_id FROM payment_orders WHERE id=%s AND provider='mbdpay'", (order_id,))
+                owner = self.accounts._one(cursor)
+                if not owner:raise SaaSError("payment_order_not_found", "支付通知无法关联本地订单。", 404)
+                cursor.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", (owner["user_id"],))
                 cursor.execute("SELECT * FROM payment_orders WHERE id=%s AND provider='mbdpay' FOR UPDATE", (order_id,))
                 order = self.accounts._one(cursor)
                 if not order:

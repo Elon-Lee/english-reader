@@ -43,12 +43,11 @@ class CatalogService:
         if not user_id or not book_ids: return {}
         cursor.execute(
             """SELECT cb.id,
-            EXISTS(SELECT 1 FROM user_library ul WHERE ul.user_id=%s AND ul.catalog_book_id=cb.id) AS in_library,
-            EXISTS(SELECT 1 FROM official_book_unlocks ou WHERE ou.user_id=%s AND ou.catalog_book_id=cb.id) AS unlocked
+            EXISTS(SELECT 1 FROM user_library ul WHERE ul.user_id=%s AND ul.catalog_book_id=cb.id) AS in_library
             FROM catalog_books cb WHERE cb.id=ANY(%s)""",
-            (user_id, user_id, book_ids),
+            (user_id, book_ids),
         )
-        return {row["id"]: {"inLibrary": bool(row["in_library"]), "unlocked": bool(row["unlocked"])} for row in self.accounts._many(cursor)}
+        return {row["id"]: {"inLibrary": bool(row["in_library"])} for row in self.accounts._many(cursor)}
 
     def _book(self, row: dict[str, Any], tags: list[dict[str, str]], state: dict[str, bool] | None = None, detail: bool = False) -> dict[str, Any]:
         result = {
@@ -57,11 +56,11 @@ class CatalogService:
             "level": row["level"], "resourceType": row["resource_type"], "estimatedMinutes": int(row["estimated_minutes"]),
             "sentenceCount": int(row["sentence_count"]), "wordCount": int(row["word_count"]), "coverUrl": row["cover_url"],
             "tags": tags, "featuredRank": int(row["featured_rank"]), "publishedAt": timestamp(row.get("published_at")),
-            "inLibrary": bool((state or {}).get("inLibrary")), "unlocked": bool((state or {}).get("unlocked")),
+            "inLibrary": bool((state or {}).get("inLibrary")), "unlocked": bool((state or {}).get("inLibrary")),
         }
         if detail:
             result.update({"description": row["description"], "preview": row["preview_json"] if isinstance(row["preview_json"], list) else json.loads(row["preview_json"] or "[]"),
-                           "readerReady": False, "readerNotice": "阅读正文和受鉴权媒体将在媒体访问阶段开放。"})
+                           "readerReady": result["inLibrary"], "readerNotice": "加入书架后即可阅读，音视频收藏数量受当前套餐限制。"})
         return result
 
     def catalog(self, user_id: str | None = None, query: str = "", series: str = "", level: str = "", resource_type: str = "", tag: str = "", limit: int = 60) -> dict[str, Any]:
@@ -110,7 +109,7 @@ class CatalogService:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("""SELECT cb.*,cs.slug AS series_slug,cs.title AS series_title,ul.shelf_state,ul.added_at,
-                EXISTS(SELECT 1 FROM official_book_unlocks ou WHERE ou.user_id=ul.user_id AND ou.catalog_book_id=cb.id) AS unlocked
+                TRUE AS unlocked
                 FROM user_library ul JOIN catalog_books cb ON cb.id=ul.catalog_book_id LEFT JOIN catalog_series cs ON cs.id=cb.series_id
                 WHERE ul.user_id=%s ORDER BY ul.added_at DESC""",(user_id,))
                 rows=self.accounts._many(cursor);ids=[row["id"] for row in rows];tags=self._tags(cursor,ids)
@@ -121,15 +120,15 @@ class CatalogService:
                 return {"items":items}
 
     def reader(self,user_id:str,catalog_book_id:str)->dict[str,Any]:
-        """Return unlocked text only; media stays behind the Phase 6 gateway."""
+        """Only current library members can read official content."""
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("""SELECT cb.id,cb.title,cb.english_title,cb.level,cb.resource_type,cb.estimated_minutes,cb.source_content_book_id,src.duration,src.data_json
                 FROM catalog_books cb JOIN content_books src ON src.id=cb.source_content_book_id
-                JOIN official_book_unlocks ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
+                JOIN user_library ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
                 WHERE cb.id=%s AND cb.publication_status='published' AND cb.rights_status IN ('public_domain','licensed')""",(user_id,catalog_book_id))
                 row=self.accounts._one(cursor)
-                if not row:raise SaaSError("catalog_book_locked","请先解锁读物后再开始阅读。",403)
+                if not row:raise SaaSError("catalog_book_locked","请先将读物加入书架后再开始阅读。",403)
                 data=as_json(row["data_json"]);sentences=[]
                 for item in data.get("sentences",[]) if isinstance(data.get("sentences",[]),list) else []:
                     if not isinstance(item,dict):continue
@@ -150,19 +149,13 @@ class CatalogService:
         if not row:raise SaaSError("catalog_book_not_found","读物不存在或尚未上架。",404)
         return row
 
-    def _consume_unlock(self,cursor:Any,user_id:str,context:dict[str,Any],book_id:str)->None:
-        cursor.execute("SELECT * FROM official_book_unlocks WHERE user_id=%s AND catalog_book_id=%s FOR UPDATE",(user_id,book_id))
-        if self.accounts._one(cursor):return
-        cursor.execute("""INSERT INTO official_book_unlocks(id,user_id,catalog_book_id,usage_period_id,reservation_id)
-        VALUES(%s,%s,%s,%s,NULL) ON CONFLICT (user_id,catalog_book_id) DO NOTHING""",(new_id(),user_id,book_id,context["period"]["id"]))
-
     def add_or_unlock(self,user_id:str,catalog_book_id:str,unlock:bool=True,shelf_state:str="active")->dict[str,Any]:
         if shelf_state not in SHELF_STATES:raise SaaSError("invalid_shelf_state","书架状态无效。",400)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                self._published_book(cursor,catalog_book_id)
                 cursor.execute("SELECT id FROM users WHERE id=%s AND status='active' FOR UPDATE",(user_id,))
                 if not self.accounts._one(cursor):raise SaaSError("account_unavailable","账号不可用。",403)
+                self._published_book(cursor,catalog_book_id)
                 context=self.memberships._context(cursor,user_id,lock_user=False)
                 cursor.execute("SELECT * FROM user_library WHERE user_id=%s AND catalog_book_id=%s FOR UPDATE",(user_id,catalog_book_id));existing=self.accounts._one(cursor)
                 if not existing:
@@ -170,17 +163,19 @@ class CatalogService:
                     kind="video" if resource.get("resource_type") in {"video","youtube"} else "audio" if resource.get("resource_type")=="audio" else ""
                     self.memberships.assert_media_capacity(cursor,user_id,context,kind)
                     cursor.execute("INSERT INTO user_library(id,user_id,catalog_book_id,shelf_state) VALUES(%s,%s,%s,%s)",(new_id(),user_id,catalog_book_id,shelf_state))
-                if unlock:self._consume_unlock(cursor,user_id,context,catalog_book_id)
-                self.memberships._audit(cursor,user_id,None,"catalog_library_add",{"catalogBookId":catalog_book_id,"unlock":unlock})
-                return {"bookId":catalog_book_id,"inLibrary":True,"unlocked":bool(unlock or self._state(cursor,user_id,[catalog_book_id]).get(catalog_book_id,{}).get("unlocked")),"readerReady":False,"readerNotice":"正文与媒体将在受鉴权阅读器阶段开放。"}
+                self.memberships._audit(cursor,user_id,None,"catalog_library_add",{"catalogBookId":catalog_book_id})
+                # Legacy API alias only: there is no independent unlock state.
+                return {"bookId":catalog_book_id,"inLibrary":True,"unlocked":True,"readerReady":True}
 
     def remove(self,user_id:str,catalog_book_id:str)->dict[str,Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
+                cursor.execute("SELECT id FROM users WHERE id=%s AND status='active' FOR UPDATE",(user_id,))
+                if not self.accounts._one(cursor):raise SaaSError("account_unavailable","账号不可用。",403)
                 cursor.execute("DELETE FROM user_library WHERE user_id=%s AND catalog_book_id=%s RETURNING id",(user_id,catalog_book_id))
-                if not self.accounts._one(cursor):raise SaaSError("library_item_not_found","该读物不在你的书架中。",404)
-                self.memberships._audit(cursor,user_id,None,"catalog_library_remove",{"catalogBookId":catalog_book_id})
-                return {"status":"removed","bookId":catalog_book_id}
+                if self.accounts._one(cursor):
+                    self.memberships._audit(cursor,user_id,None,"catalog_library_remove",{"catalogBookId":catalog_book_id})
+                return {"status":"removed","bookId":catalog_book_id,"inLibrary":False,"unlocked":False}
 
     def review(self,actor_id:str,source_book_id:str,rights_status:str,publication_status:str,updates:dict[str,Any]|None=None)->dict[str,Any]:
         rights_status,publication_status=str(rights_status),str(publication_status)

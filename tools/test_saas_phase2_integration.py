@@ -11,7 +11,8 @@ import sys
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import datetime, timedelta
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
@@ -139,6 +140,79 @@ class PhaseTwoPostgresTests(unittest.TestCase):
         duplicate = self.memberships.credit(user_id, "ai_grammar_generations", 5, "support-credit-1", str(self.admin["id"]), "support")
         self.assertEqual(before["available"], 25)
         self.assertEqual(duplicate["available"], 25)
+
+    def test_legacy_paid_media_migration_repairs_existing_and_future_periods(self):
+        user_id = str(self.user["id"])
+        created = self.memberships.create_manual_order(
+            str(self.admin["id"]), user_id, "pro-v1", utcnow() - timedelta(minutes=1),
+            utcnow() + timedelta(days=365), "legacy media regression", 0,
+        )
+        reservation = self.memberships.reserve(user_id, "storage_bytes", "legacy-storage", 1024)["reservation"]
+        self.memberships.settle(user_id, reservation["id"])
+        migration = (Path(__file__).with_name("saas_migrations") / "0034_legacy_paid_media_capacity.sql").read_text()
+        with self.accounts.transaction() as connection:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("""UPDATE plan_versions SET quotas_json=quotas_json
+                        - 'video_library_capacity' - 'audio_library_capacity'
+                        WHERE id IN ('advanced-v1','pro-v1')""")
+                    cursor.execute("""UPDATE usage_periods SET limits_json=limits_json
+                        - 'video_library_capacity' - 'audio_library_capacity' WHERE user_id=%s""", (user_id,))
+                    context = self.memberships._context(cursor, user_id)
+                    period_id = context["period"]["id"]
+                    before = self.memberships._public_context(cursor, context, True)
+                    self.assertEqual(before["mediaCapacity"]["video"]["limit"], 0)
+                    with self.assertRaises(SaaSError):
+                        self.memberships.assert_media_capacity(cursor, user_id, context, "video")
+                    cursor.execute(migration)
+                    cursor.execute(migration)  # Safe to reapply after an interrupted rollout.
+                    context = self.memberships._context(cursor, user_id)
+                    repaired = self.memberships._public_context(cursor, context, True)
+                    self.assertEqual(repaired["period"]["id"], period_id)
+                    self.assertEqual(repaired["subscription"], before["subscription"])
+                    self.assertEqual(datetime.fromisoformat(repaired["subscription"]["endsAt"]),
+                                     datetime.fromisoformat(created["subscription"]["endsAt"]))
+                    for kind, limit in (("video", 100), ("audio", 200)):
+                        self.assertEqual(repaired["mediaCapacity"][kind]["limit"], limit)
+                        usage = next(item for item in repaired["usage"] if item["feature"] == f"{kind}_library_capacity")
+                        self.assertEqual(usage["limit"], limit)
+                        self.assertEqual(self.memberships.assert_media_capacity(cursor, user_id, context, kind)["limit"], limit)
+                    storage = next(item for item in repaired["usage"] if item["feature"] == "storage_bytes")
+                    self.assertEqual((storage["used"], storage["limit"]), (1024, 100 * 1024 ** 3))
+                    cursor.execute("SELECT quotas_json FROM plan_versions WHERE id='advanced-v1'")
+                    advanced = cursor.fetchone()[0]
+                    self.assertEqual((advanced["video_library_capacity"], advanced["audio_library_capacity"]), (20, 50))
+                    # A new cycle must inherit the repaired plan as well.
+                    cursor.execute("UPDATE usage_periods SET period_key=period_key || ':old' WHERE id=%s", (period_id,))
+                    future = self.memberships._public_context(cursor, self.memberships._context(cursor, user_id), True)
+                    self.assertNotEqual(future["period"]["id"], period_id)
+                    self.assertEqual(future["mediaCapacity"]["video"]["limit"], 100)
+                    self.assertEqual(future["mediaCapacity"]["audio"]["limit"], 200)
+            finally:
+                connection.rollback()  # Do not alter shared plan fixtures for other tests.
+
+    def test_legacy_media_migration_preserves_explicit_limits(self):
+        migration = (Path(__file__).with_name("saas_migrations") / "0034_legacy_paid_media_capacity.sql").read_text()
+        user_id = str(self.user["id"])
+        self.memberships.create_manual_order(
+            str(self.admin["id"]), user_id, "pro-v1", utcnow() - timedelta(minutes=1),
+            utcnow() + timedelta(days=30), "explicit media limits regression", 0,
+        )
+        with self.accounts.transaction() as connection:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("""UPDATE plan_versions SET quotas_json=(quotas_json - 'audio_library_capacity')
+                        || '{"video_library_capacity":0}'::jsonb WHERE id='pro-v1'""")
+                    cursor.execute("""UPDATE usage_periods SET limits_json=(limits_json - 'video_library_capacity')
+                        || '{"audio_library_capacity":7}'::jsonb WHERE user_id=%s AND plan_version_id='pro-v1'""", (user_id,))
+                    cursor.execute(migration)
+                    context = self.memberships._context(cursor, user_id)
+                    self.assertEqual(context["plan"]["quotas_json"]["video_library_capacity"], 0)
+                    self.assertEqual(context["plan"]["quotas_json"]["audio_library_capacity"], 200)
+                    self.assertEqual(context["period"]["limits_json"]["video_library_capacity"], 0)
+                    self.assertEqual(context["period"]["limits_json"]["audio_library_capacity"], 7)
+            finally:
+                connection.rollback()
 
     def test_manual_order_updates_membership_and_suspend_reverts_to_free(self):
         user_id = str(self.user["id"])

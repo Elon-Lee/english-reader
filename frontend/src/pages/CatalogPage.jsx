@@ -21,7 +21,17 @@ export default function CatalogPage({ catalogBooks, openReader, selectScreen, on
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detail, setDetail] = useState(null)
+  const [pendingBookId, setPendingBookId] = useState('')
+  const actionPending = useRef(false)
+  const catalogRequest = useRef(0)
   const firstCatalogLoad = useRef(true)
+
+  useEffect(() => {
+    setItems(current => current.map(book => {
+      const latest = (catalogBooks || []).find(item => item.id === book.id)
+      return latest ? { ...book, inLibrary: latest.inLibrary } : book
+    }))
+  }, [catalogBooks])
 
   useEffect(() => {
     Promise.all([getJson('/api/catalog/series', { series: [] }), getJson('/api/catalog/tags', { tags: [] })]).then(([seriesData, tagsData]) => {
@@ -37,6 +47,7 @@ export default function CatalogPage({ catalogBooks, openReader, selectScreen, on
       return undefined
     }
     firstCatalogLoad.current = false
+    const requestId = ++catalogRequest.current
     const timer = setTimeout(async () => {
       setLoading(true)
       const params = new URLSearchParams({ limit: '60' })
@@ -45,11 +56,16 @@ export default function CatalogPage({ catalogBooks, openReader, selectScreen, on
       if (series) params.set('series', series)
       if (tag) params.set('tag', tag)
       if (resourceType) params.set('resourceType', resourceType)
-      const data = await getJson(`/api/catalog?${params.toString()}`, { books: [] })
-      setItems(data.books || [])
-      setLoading(false)
+      try {
+        const data = await getJson(`/api/catalog?${params.toString()}`)
+        if (requestId === catalogRequest.current) setItems(data.books || [])
+      } catch (error) {
+        if (requestId === catalogRequest.current) messageApi.error(error.message || '书城加载失败')
+      } finally {
+        if (requestId === catalogRequest.current) setLoading(false)
+      }
     }, 220)
-    return () => clearTimeout(timer)
+    return () => { clearTimeout(timer); catalogRequest.current += 1 }
   }, [level, query, resourceType, series, tag])
 
   const levels = useMemo(() => [...new Set((items || []).map(item => item.level).filter(Boolean))].sort(), [items])
@@ -67,18 +83,27 @@ export default function CatalogPage({ catalogBooks, openReader, selectScreen, on
   }
 
   const performAction = async (book, readAfter = false) => {
+    if (actionPending.current) return
+    actionPending.current = true
+    setPendingBookId(book.id)
     try {
       if (!book.inLibrary) await postJson('/api/library/items', { bookId: book.id, shelfState: 'active' })
-      if (readAfter && !book.unlocked) await postJson(`/api/catalog/books/${encodeURIComponent(book.id)}/unlock`, { bookId: book.id, shelfState: 'active' })
+      catalogRequest.current += 1
+      setLoading(false)
+      setItems(current => current.map(item => item.id === book.id ? { ...item, inLibrary: true } : item))
+      setDetail(current => current?.id === book.id ? { ...current, inLibrary: true } : current)
       await onRefresh?.()
-      messageApi.success(readAfter ? '读物已解锁，可以开始阅读' : '已加入我的书架')
-      if (readAfter) openReader({ ...book, source: '官方读物', inLibrary: true, unlocked: true })
+      messageApi.success('已加入我的书架')
+      if (readAfter) openReader({ ...book, source: '官方读物', inLibrary: true })
       else {
       const data = await getJson(`/api/catalog/books/${encodeURIComponent(book.id)}`, null)
       if (data?.book) setDetail(data.book)
       }
     } catch (error) {
       messageApi.error(error.message || '书架操作失败')
+    } finally {
+      actionPending.current = false
+      setPendingBookId('')
     }
   }
 
@@ -95,9 +120,9 @@ export default function CatalogPage({ catalogBooks, openReader, selectScreen, on
         <Button onClick={() => { setQuery(''); setLevel(''); setSeries(''); setTag(''); setResourceType('') }}>重置</Button>
       </Space>
     </Card>
-    {loading ? <Row gutter={[20, 20]}>{[0, 1, 2, 3, 4, 5].map(item => <Col xs={24} sm={12} xl={8} key={item}><Card><Skeleton active title paragraph={{ rows: 5 }} /></Card></Col>)}</Row> : <Row gutter={[20, 20]}>{items.length ? items.map(book => <Col xs={24} sm={12} xl={8} key={book.id}><Card hoverable className="book-card catalog-book-card" onClick={() => openDetail(book)}><div className="catalog-cover-placeholder"><span>{String(book.title || '书').slice(0, 2).toUpperCase()}</span></div><Space wrap><Tag>{book.level || '未分级'}</Tag><Tag color="gold">{book.resourceType || 'book'}</Tag>{book.unlocked && <Tag color="success">已解锁</Tag>}</Space><Title level={4} ellipsis={{ rows: 1 }}>{book.title}</Title><Text type="secondary" ellipsis>{book.englishTitle || book.author || book.description}</Text><Paragraph ellipsis={{ rows: 2 }}>{book.description || '查看详情、有限预览和版权信息。'}</Paragraph><Space><Text type="secondary">{book.estimatedMinutes || 0} 分钟</Text><Text type="secondary">{book.sentenceCount || 0} 句</Text></Space><Button block type={book.unlocked ? 'default' : 'primary'} onClick={event => { event.stopPropagation(); book.unlocked ? openReader({ ...book, source: '官方读物' }) : performAction(book, true) }} style={{ marginTop: 14 }}>{book.unlocked ? '开始阅读' : book.inLibrary ? '解锁并阅读' : '加入书架'}</Button></Card></Col>) : <Col span={24}><Empty description="没有符合筛选条件的官方读物" /></Col>}</Row>}
+    {loading ? <Row gutter={[20, 20]}>{[0, 1, 2, 3, 4, 5].map(item => <Col xs={24} sm={12} xl={8} key={item}><Card><Skeleton active title paragraph={{ rows: 5 }} /></Card></Col>)}</Row> : <Row gutter={[20, 20]}>{items.length ? items.map(book => <Col xs={24} sm={12} xl={8} key={book.id}><Card hoverable className="book-card catalog-book-card" onClick={() => openDetail(book)}><div className="catalog-cover-placeholder"><span>{String(book.title || '书').slice(0, 2).toUpperCase()}</span></div><Space wrap><Tag>{book.level || '未分级'}</Tag><Tag color="gold">{book.resourceType || 'book'}</Tag>{book.inLibrary && <Tag color="success">已加入书架</Tag>}</Space><Title level={4} ellipsis={{ rows: 1 }}>{book.title}</Title><Text type="secondary" ellipsis>{book.englishTitle || book.author || book.description}</Text><Paragraph ellipsis={{ rows: 2 }}>{book.description || '查看详情、有限预览和版权信息。'}</Paragraph><Space><Text type="secondary">{book.estimatedMinutes || 0} 分钟</Text><Text type="secondary">{book.sentenceCount || 0} 句</Text></Space><Button loading={pendingBookId === book.id} disabled={Boolean(pendingBookId) && pendingBookId !== book.id} block type={book.inLibrary ? 'default' : 'primary'} onClick={event => { event.stopPropagation(); book.inLibrary ? openReader({ ...book, source: '官方读物' }) : performAction(book, true) }} style={{ marginTop: 14 }}>{book.inLibrary ? '开始阅读' : '加入书架'}</Button></Card></Col>) : <Col span={24}><Empty description="没有符合筛选条件的官方读物" /></Col>}</Row>}
     <Modal width={760} title="读物详情" open={detailOpen} onCancel={() => setDetailOpen(false)} footer={null}>
-      {detailLoading ? <div className="modal-loading"><Card style={{ width: '100%' }}><Skeleton active title paragraph={{ rows: 9 }} /></Card></div> : detail?.error ? <Empty description={detail.error} /> : detail && <div className="catalog-detail"><div className="catalog-detail-heading"><div className="catalog-cover-placeholder large"><span>{String(detail.title || '书').slice(0, 2).toUpperCase()}</span></div><div><Space wrap><Tag>{detail.level || '未分级'}</Tag><Tag color="gold">{detail.resourceType || 'book'}</Tag>{detail.series?.title && <Tag>{detail.series.title}</Tag>}</Space><Title level={2}>{detail.title}</Title><Paragraph>{detail.englishTitle}{detail.author ? ` · ${detail.author}` : ''}</Paragraph><Space wrap>{(detail.tags || []).map(item => <Tag key={item.id || item.slug}>{item.title}</Tag>)}</Space></div></div><Paragraph>{detail.description || '暂无简介。'}</Paragraph>{detail.preview?.length > 0 && <Card size="small" title="有限预览" className="catalog-preview">{detail.preview.map((item, index) => <Paragraph key={item.id || index}>{item.text}</Paragraph>)}</Card>}<Card size="small" title="版权与阅读说明"><Paragraph>{detail.rightsNotice || detail.readerNotice || '该内容已通过平台版权状态审核；首次解锁可能消耗当前套餐的官方读物额度。'}</Paragraph></Card><Space className="catalog-detail-actions">{detail.unlocked ? <Button type="primary" onClick={() => openReader({ ...detail, source: '官方读物' })}>开始阅读</Button> : <Button type="primary" onClick={() => performAction(detail, true)}>{detail.inLibrary ? '解锁并开始阅读' : '加入书架'}</Button>}{!detail.inLibrary && <Button onClick={() => performAction(detail)}>仅加入书架</Button>}</Space></div>}
+      {detailLoading ? <div className="modal-loading"><Card style={{ width: '100%' }}><Skeleton active title paragraph={{ rows: 9 }} /></Card></div> : detail?.error ? <Empty description={detail.error} /> : detail && <div className="catalog-detail"><div className="catalog-detail-heading"><div className="catalog-cover-placeholder large"><span>{String(detail.title || '书').slice(0, 2).toUpperCase()}</span></div><div><Space wrap><Tag>{detail.level || '未分级'}</Tag><Tag color="gold">{detail.resourceType || 'book'}</Tag>{detail.series?.title && <Tag>{detail.series.title}</Tag>}</Space><Title level={2}>{detail.title}</Title><Paragraph>{detail.englishTitle}{detail.author ? ` · ${detail.author}` : ''}</Paragraph><Space wrap>{(detail.tags || []).map(item => <Tag key={item.id || item.slug}>{item.title}</Tag>)}</Space></div></div><Paragraph>{detail.description || '暂无简介。'}</Paragraph>{detail.preview?.length > 0 && <Card size="small" title="有限预览" className="catalog-preview">{detail.preview.map((item, index) => <Paragraph key={item.id || index}>{item.text}</Paragraph>)}</Card>}<Card size="small" title="版权与阅读说明"><Paragraph>{detail.rightsNotice || detail.readerNotice || '加入书架后即可阅读；官方和私人音视频合计收藏数量受当前套餐限制，移出书架可释放名额。'}</Paragraph></Card><Space className="catalog-detail-actions">{detail.inLibrary ? <Button type="primary" onClick={() => openReader({ ...detail, source: '官方读物' })}>开始阅读</Button> : <Button loading={pendingBookId === detail.id} disabled={Boolean(pendingBookId) && pendingBookId !== detail.id} type="primary" onClick={() => performAction(detail, true)}>{'加入书架'}</Button>}</Space></div>}
     </Modal>
   </div>
 }

@@ -79,9 +79,9 @@ class PhaseFivePostgresTests(unittest.TestCase):
     def test_adjustments_allowances_status_and_audit(self):
         actor,user_id=str(self.admin["id"]),str(self.user["id"])
         granted=self.admin_service.adjust_quota(actor,user_id,"ai_context_generations",5,"support grant","admin-adjust-1")
-        self.assertEqual(granted["available"],25)
+        self.assertEqual(granted["available"],55)
         deducted=self.admin_service.adjust_quota(actor,user_id,"ai_context_generations",-2,"correction","admin-adjust-2")
-        self.assertEqual(deducted["available"],23)
+        self.assertEqual(deducted["available"],53)
         allowance=self.admin_service.grant_invite_allowance(actor,user_id,2,"campaign allocation")
         self.assertEqual(allowance["quantity"],2)
         self.memberships.create_manual_order(actor,user_id,"advanced-v1",utcnow()-timedelta(minutes=1),utcnow()+timedelta(days=30),"paid")
@@ -118,7 +118,7 @@ class PhaseFivePostgresTests(unittest.TestCase):
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT limits_json->>'ai_context_generations' FROM usage_periods WHERE user_id=%s",(user_id,))
-                self.assertEqual(cursor.fetchone()[0],"20")
+                self.assertEqual(cursor.fetchone()[0],"50")
         self.assertTrue(any(item["id"]=="advanced-v2" for item in self.admin_service.plan_versions()["planVersions"]))
 
     def test_http_admin_permissions_csrf_and_operations(self):

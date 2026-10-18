@@ -89,7 +89,7 @@ class PhaseFourPostgresTests(unittest.TestCase):
         second=self.rewards.redeem(user_id,"ai_context_10","context-redemption")
         self.assertFalse(first["idempotent"]);self.assertTrue(second["idempotent"])
         usage=self.memberships.usage(user_id);context=next(row for row in usage["usage"] if row["feature"]=="ai_context_generations")
-        self.assertEqual(context["available"],30)
+        self.assertEqual(context["available"],60)
         self.assertEqual(self.rewards.status(user_id)["balance"],0)
 
     def test_completed_official_book_awards_once(self):

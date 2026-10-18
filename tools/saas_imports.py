@@ -7,6 +7,7 @@ The YouTube downloader remains isolated until it has the same tenant contract.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -44,6 +45,7 @@ class WorkspaceImportService:
         return user
 
     def _task(self,cursor:Any,user_id:str,task_id:str,lock:bool=True)->dict[str,Any]:
+        if lock:self._user(cursor,user_id)
         cursor.execute(f"SELECT * FROM workspace_import_tasks WHERE id=%s AND user_id=%s {'FOR UPDATE' if lock else ''}",(task_id,user_id));task=self.accounts._one(cursor)
         if not task:raise SaaSError("import_task_not_found","导入任务不存在或你无权访问。",404)
         return task
@@ -83,10 +85,21 @@ class WorkspaceImportService:
         except ValueError:return False
 
     def upload(self,user_id:str,task_id:str,filename:str,data:bytes,content_type:str="application/octet-stream")->dict[str,Any]:
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",(f"upload:{user_id}:{task_id}",))
+                return self._upload_once(user_id,task_id,filename,data,content_type)
+
+    def _upload_once(self,user_id:str,task_id:str,filename:str,data:bytes,content_type:str)->dict[str,Any]:
         if not data:raise SaaSError("empty_upload","上传文件为空。",400)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 task=self._task(cursor,user_id,task_id);kind=task["kind"]
+                if task["source_asset_id"] and task["status"] in {"queued","running","complete"}:
+                    cursor.execute("SELECT sha256 FROM media_assets WHERE id=%s AND status='active'",(task["source_asset_id"],))
+                    asset=self.accounts._one(cursor)
+                    if asset and asset["sha256"]==hashlib.sha256(data).hexdigest():return self._public(task)
+                    raise SaaSError("import_source_conflict","该任务已经上传其他源文件。",409)
                 if kind=="youtube":raise SaaSError("upload_not_required","YouTube 任务不接受文件上传。",409)
                 if task["status"] not in {"uploading","failed"}:raise SaaSError("import_task_not_uploadable","该任务当前不能上传源文件。",409)
                 limit=UPLOAD_LIMITS.get(kind,20*1024*1024)
@@ -94,7 +107,7 @@ class WorkspaceImportService:
                 # Avoid overwriting a prior source asset.  The media service
                 # re-checks private storage in its own transaction.
                 safe_name=re.sub(r"[^A-Za-z0-9._-]+","-",Path(filename or task["original_filename"] or "source").name).strip("-") or "source"
-                relative=f"private-uploads/{user_id}/{task_id}/{safe_name}"
+                relative=f"private-uploads/{user_id}/{task_id}/{new_id()}/{safe_name}"
         self.media.ensure_private_capacity(user_id,len(data))
         _,target=self.media._safe_path(relative);target.parent.mkdir(parents=True,exist_ok=True)
         target.write_bytes(data)
@@ -107,10 +120,16 @@ class WorkspaceImportService:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 task=self._task(cursor,user_id,task_id);old_asset=task.get("source_asset_id")
-                cursor.execute("UPDATE workspace_import_tasks SET source_asset_id=%s,original_filename=%s,status='queued',progress=15,step='源文件已上传，等待处理',error='',updated_at=NOW() WHERE id=%s",(asset["id"],safe_name,task_id))
-                if old_asset and old_asset!=asset["id"]:
-                    cursor.execute("UPDATE media_assets SET status='deleted',deleted_at=NOW() WHERE id=%s",(old_asset,))
-                cursor.execute("SELECT * FROM workspace_import_tasks WHERE id=%s",(task_id,));return self._public(self.accounts._one(cursor)or{})
+                aborted=task["status"] not in {"uploading","failed"}
+                if not aborted:
+                    cursor.execute("UPDATE workspace_import_tasks SET source_asset_id=%s,original_filename=%s,status='queued',progress=15,step='源文件已上传，等待处理',error='',updated_at=NOW() WHERE id=%s",(asset["id"],safe_name,task_id))
+                    if old_asset and old_asset!=asset["id"]:
+                        cursor.execute("UPDATE media_assets SET status='deleted',deleted_at=NOW() WHERE id=%s",(old_asset,))
+                    cursor.execute("SELECT * FROM workspace_import_tasks WHERE id=%s",(task_id,));uploaded=self._public(self.accounts._one(cursor)or{})
+        if aborted:
+            self.media.delete(user_id,asset["id"])
+            raise SaaSError("import_task_terminal","任务在上传期间已取消或结束。",409)
+        return uploaded
 
     def _source_path(self,cursor:Any,user_id:str,task:dict[str,Any])->Path:
         asset_id=task.get("source_asset_id")
@@ -300,6 +319,7 @@ class WorkspaceImportService:
                 with connection.cursor() as cursor:
                     task=self._task(cursor,user_id,task_id)
                     if task["status"]=="complete":return {"task":self._public(task),"idempotent":True}
+                    if task["status"]=="running":return {"task":self._public(task),"idempotent":True}
                     if task["status"] in {"cancelled","failed"}:raise SaaSError("import_task_terminal","该任务已经结束。",409)
                     if task["kind"] not in {"text","document","mp3","video","youtube"}:
                         cursor.execute("UPDATE workspace_import_tasks SET status='awaiting_processor',progress=20,step='等待 PostgreSQL 原生处理器迁移',updated_at=NOW() WHERE id=%s",(task_id,));cursor.execute("SELECT * FROM workspace_import_tasks WHERE id=%s",(task_id,));return {"task":self._public(self.accounts._one(cursor)or{}),"idempotent":False}

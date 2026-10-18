@@ -39,7 +39,7 @@ class WorkspaceAIService:
         if not book:
             cursor.execute("""SELECT src.* FROM catalog_books cb
             JOIN content_books src ON src.id=cb.source_content_book_id
-            JOIN official_book_unlocks ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
+            JOIN user_library ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
             WHERE cb.id=%s AND cb.publication_status='published' AND cb.rights_status IN ('public_domain','licensed')""",(user_id,book_id));book=self.accounts._one(cursor)
         if not book:raise SaaSError("workspace_book_not_found","私人读物不存在或你无权访问。",404)
         data=as_json(book["data_json"]);sentences=data.get("sentences",[]) if isinstance(data.get("sentences",[]),list) else []
@@ -68,6 +68,17 @@ class WorkspaceAIService:
         cursor.execute("SELECT * FROM workspace_ai_results WHERE owner_id=%s AND result_type=%s AND content_key=%s AND input_hash=%s",(user_id,result_type,content_key,input_hash));return self.accounts._one(cursor)
 
     def _generate(self,user_id:str,feature:str,result_type:str,content_key:str,input_hash:str,book_id:str,prompt:dict[str,Any])->dict[str,Any]:
+        # Serialize the same generation across workers without holding a user lock
+        # during the upstream call. A failed worker cannot release another's quota.
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                lock_key=f"ai:{user_id}:{result_type}:{content_key}:{input_hash}"
+                cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",(lock_key,))
+                cached=self._cached(cursor,user_id,result_type,content_key,input_hash)
+                if cached:return {"payload":as_json(cached["payload"]),"provider":cached["provider"],"cached":True,"charged":False}
+                return self._generate_once(user_id,feature,result_type,content_key,input_hash,book_id,prompt)
+
+    def _generate_once(self,user_id:str,feature:str,result_type:str,content_key:str,input_hash:str,book_id:str,prompt:dict[str,Any])->dict[str,Any]:
         quota_key=f"ai:{result_type}:{hashlib.sha256(f'{content_key}:{input_hash}'.encode()).hexdigest()}";reservation=self.memberships.reserve(user_id,feature,quota_key,1,{"bookId":book_id,"contentKey":content_key,"inputHash":input_hash})["reservation"]
         if reservation.get("state")=="released":reservation=self.memberships.reserve(user_id,feature,f"{quota_key}:retry:{new_id()}",1,{"bookId":book_id,"contentKey":content_key,"inputHash":input_hash,"retry":True})["reservation"]
         charged=reservation.get("state")=="reserved"

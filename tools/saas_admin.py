@@ -204,7 +204,7 @@ class AdminService:
             with connection.cursor() as cursor:self._audit(cursor,actor_id,"quota_adjustment",user_id,reason,{"feature":feature,"quantity":amount,"idempotencyKey":idempotency_key})
         return summary
 
-    def grant_invite_allowance(self, actor_id: str, user_id: str, quantity: Any, reason: str, expires_at: Any = None) -> dict[str, Any]:
+    def grant_invite_allowance(self, actor_id: str, user_id: str, quantity: Any, reason: str, expires_at: Any = None, idempotency_key: str | None = None) -> dict[str, Any]:
         try: amount=int(quantity)
         except (TypeError,ValueError) as exc:raise SaaSError("invalid_quantity","邀请码额度数量无效。",400) from exc
         if amount<1:raise SaaSError("invalid_quantity","邀请码额度必须大于零。",400)
@@ -214,9 +214,14 @@ class AdminService:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT id FROM users WHERE id=%s FOR UPDATE",(user_id,))
                 if not cursor.fetchone():raise SaaSError("user_not_found","用户不存在。",404)
+                payload={"quantity":amount,"reason":reason[:1000],"expiresAt":timestamp(expiry)}
+                key,prior=self.memberships._operation(cursor,actor_id,user_id,"invite_allowance",payload,idempotency_key)
+                if prior:return {**prior,"idempotent":True}
                 allowance_id=new_id();cursor.execute("INSERT INTO member_invite_allowances(id,user_id,quantity_remaining,source,note,expires_at,created_by) VALUES(%s,%s,%s,'admin',%s,%s,%s)",(allowance_id,user_id,amount,reason[:1000],expiry,actor_id))
                 self._audit(cursor,actor_id,"invite_allowance_granted",user_id,reason,{"allowanceId":allowance_id,"quantity":amount,"expiresAt":timestamp(expiry)})
-                return {"id":allowance_id,"userId":user_id,"quantity":amount,"expiresAt":timestamp(expiry)}
+                result={"id":allowance_id,"userId":user_id,"quantity":amount,"expiresAt":timestamp(expiry),"idempotent":False}
+                self.memberships._save_operation(cursor,actor_id,user_id,"invite_allowance",key,payload,result)
+                return result
 
     def plan_versions(self) -> dict[str, Any]:
         with self.accounts.transaction() as connection:

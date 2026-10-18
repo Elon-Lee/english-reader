@@ -91,7 +91,7 @@ class WorkspaceAITests(unittest.TestCase):
                 cursor.execute("""INSERT INTO catalog_books(id,source_content_book_id,title,english_title,rights_status,publication_status)
                 VALUES(%s,%s,'AI Official','AI Official','licensed','published')""",(catalog_id,self.book_id))
                 cursor.execute("SELECT id FROM usage_periods WHERE user_id=%s ORDER BY starts_at DESC LIMIT 1",(owner,));period=self.accounts._one(cursor)
-                cursor.execute("INSERT INTO official_book_unlocks(id,user_id,catalog_book_id,usage_period_id) VALUES(%s,%s,%s,%s)",(new_id(),owner,catalog_id,period["id"]))
+                cursor.execute("INSERT INTO user_library(id,user_id,catalog_book_id) VALUES(%s,%s,%s)",(new_id(),owner,catalog_id))
         result=self.ai.context(owner,catalog_id,"s1",1,"survive")
         self.assertEqual(result["bookId"],catalog_id)
         self.assertEqual(result["word"],"survive")

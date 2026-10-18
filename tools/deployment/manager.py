@@ -236,7 +236,7 @@ def release_metadata(release):
     dirty=False
     try:
         commit=subprocess.run(["git","rev-parse","HEAD"],cwd=ROOT,text=True,capture_output=True,timeout=15,check=True).stdout.strip()
-        dirty=bool(subprocess.run(["git","status","--porcelain","--untracked-files=no"],cwd=ROOT,text=True,capture_output=True,timeout=15,check=True).stdout.strip())
+        dirty=bool(subprocess.run(["git","status","--porcelain"],cwd=ROOT,text=True,capture_output=True,timeout=15,check=True).stdout.strip())
     except (FileNotFoundError,subprocess.SubprocessError):pass
     return {"releaseId":release,"gitCommit":commit,"sourceDirty":dirty,"builtAt":now(),"packageFormat":2}
 
@@ -245,6 +245,7 @@ def code_files():
     files += list((ROOT/"tools").glob("*.py"))+[ROOT/"tools/deployment",ROOT/"tools/saas_migrations",ROOT/"tools/vendor/ECDICT/lemma.en.txt"]
     return files
 def build_code_package(job,release):
+    metadata=release_metadata(release)
     build_frontend_assets(job)
     target=STATE/f"{release}.tar.gz";STATE.mkdir(parents=True,exist_ok=True)
     def archive_filter(info):
@@ -254,9 +255,9 @@ def build_code_package(job,release):
     with tarfile.open(target,"w:gz") as archive:
         for path in code_files():
             if path.exists():archive.add(path,arcname=path.relative_to(ROOT),filter=archive_filter)
-        metadata=json.dumps(release_metadata(release),ensure_ascii=False,indent=2).encode("utf-8")
-        info=tarfile.TarInfo(".shiyue-release.json");info.size=len(metadata);info.mtime=int(time.time());info.mode=0o644
-        archive.addfile(info,io.BytesIO(metadata))
+        metadata_bytes=json.dumps(metadata,ensure_ascii=False,indent=2).encode("utf-8")
+        info=tarfile.TarInfo(".shiyue-release.json");info.size=len(metadata_bytes);info.mtime=int(time.time());info.mode=0o644
+        archive.addfile(info,io.BytesIO(metadata_bytes))
     digest=hashlib.sha256(target.read_bytes()).hexdigest();job.write(f"代码包：{target.name} · {target.stat().st_size/1024/1024:.1f} MiB · sha256={digest}");return target,digest
 
 def local_env_values():
@@ -463,6 +464,18 @@ def saas_health_check_command(port,container="shiyue-saas"):
     code=f"import json,urllib.request; h=json.loads(urllib.request.urlopen('http://127.0.0.1:{int(port)}/api/health',timeout=20).read()); assert h.get('status')=='ok' and h.get('saasEnabled') and h.get('redisReady'); print(json.dumps(h,ensure_ascii=False))"
     return f"docker exec {shlex.quote(container)} python3 -c {shlex.quote(code)}"
 
+def saas_migration_check_command(container="shiyue-saas-candidate"):
+    code="""import sys
+sys.path.insert(0,'/app/tools')
+from pathlib import Path
+from saas_auth import SaaSService
+import os
+service=SaaSService(os.environ.get('DATABASE_URL',''))
+service.ensure_migrated()
+versions=sorted(path.name for path in Path('/app/tools/saas_migrations').glob('*.sql'))
+print('SHIYUE_MIGRATIONS_READY '+','.join(versions))"""
+    return f"docker exec {shlex.quote(container)} python3 -c {shlex.quote(code)}"
+
 def ensure_remote_saas_config(job,remote,target):
     root=target["remote_root"];destination=f"{root}/shared/config/saas.env"
     found=remote.ssh(f"test -s {shlex.quote(destination)} && echo SHIYUE_SAAS_ENV_READY || true")
@@ -494,6 +507,38 @@ test -s {root}/releases/{release}/tools/reader_server.py
 test -d {root}/releases/{release}/tools/saas_migrations
 rm -f "$archive"
 """)
+
+def backup_remote_saas_database(job,remote,target,release):
+    root=target["remote_root"];backup=f"{root}/backups/saas/pre-upgrade-{release}.dump"
+    script=f"""set -euo pipefail
+umask 077
+set -a; . {shlex.quote(root)}/shared/config/saas.env; set +a
+docker exec shiyue-postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > {shlex.quote(backup)}
+test -s {shlex.quote(backup)}
+chmod 600 {shlex.quote(backup)}
+sha256sum {shlex.quote(backup)} | awk '{{print "SHIYUE_SAAS_BACKUP_READY " $1}}'
+"""
+    output=remote.ssh(script)
+    if "SHIYUE_SAAS_BACKUP_READY" not in output:raise ValueError("远程 SaaS 数据库备份未完成")
+    job.write(f"远程数据库备份已完成：{Path(backup).name}")
+    return backup
+
+def check_remote_saas_upgrade_target(remote,target):
+    root=shlex.quote(target["remote_root"])
+    output=remote.ssh(f"""set -euo pipefail
+docker info >/dev/null
+docker inspect shiyue-saas >/dev/null
+docker inspect shiyue-postgres >/dev/null
+docker inspect shiyue-redis >/dev/null
+docker image inspect {shlex.quote(SAAS_IMAGE)} >/dev/null
+test -s {root}/shared/config/saas.env
+test -s {root}/current/.shiyue-release.json
+test -s {root}/current/reader/site/index.html
+test "$(docker inspect -f '{{{{.State.Running}}}}' shiyue-saas)" = true
+docker exec shiyue-saas python3 -c 'import json,urllib.request; h=json.load(urllib.request.urlopen("http://127.0.0.1:{int(target['service_port'])}/api/health",timeout=20)); assert h.get("status")=="ok" and h.get("runtimeMode")=="saas" and h.get("saasEnabled") and h.get("redisReady")'
+echo SHIYUE_SAAS_UPGRADE_READY
+""")
+    if "SHIYUE_SAAS_UPGRADE_READY" not in output:raise ValueError("远程 SaaS 服务未通过升级前检查")
 
 def ensure_remote_saas_services(job,remote,target,release):
     root=target["remote_root"];release_path=f"{root}/releases/{release}";env=f"{root}/shared/config/saas.env"
@@ -766,17 +811,20 @@ rm -f {shlex.quote(remote_bundle)} {shlex.quote(remote_manifest)}
 def activate_saas_release(job,remote,target,release):
     root=target["remote_root"];release_path=f"{root}/releases/{release}";port=int(target["service_port"]);candidate_port=port+10000
     candidate=saas_app_run_command(target,release_path,"shiyue-saas-candidate",candidate_port,False);candidate_health=saas_health_check_command(candidate_port,"shiyue-saas-candidate")
-    root_check_code=f"import urllib.request; h=urllib.request.urlopen('http://127.0.0.1:{candidate_port}/',timeout=20).read().decode(); assert '/assets/index.js' in h and 'modern-assets' not in h; print('SHIYUE_ROOT_SITE_READY')"
+    root_check_code=f"import re,urllib.request; base='http://127.0.0.1:{candidate_port}'; h=urllib.request.urlopen(base+'/',timeout=20).read().decode(); assert 'modern-assets' not in h; m=re.search(r'src=[\\\"\\\']([^\\\"\\\']*assets/index\\.js[^\\\"\\\']*)',h); assert m, 'root page has no built JS'; r=urllib.request.urlopen(base+m.group(1),timeout=20); assert r.status==200 and len(r.read())>0; print('SHIYUE_ROOT_SITE_READY')"
     job.update(91,"候选端口验收完整 SaaS 服务")
     script=f"""set -euo pipefail
 docker rm -f shiyue-saas-candidate >/dev/null 2>&1 || true
 {candidate}
+mount_source=$(docker inspect -f '{{{{range .Mounts}}}}{{{{if eq .Destination "/app/reader"}}}}{{{{.Source}}}}{{{{end}}}}{{{{end}}}}' shiyue-saas-candidate)
+[ "$mount_source" = {shlex.quote(release_path + '/reader')} ]
 healthy=0
 for attempt in $(seq 1 60); do
   if {candidate_health} >/tmp/shiyue-saas-candidate-health.json 2>/tmp/shiyue-saas-candidate-error.log; then healthy=1; break; fi
   sleep 1
 done
 if [ "$healthy" -ne 1 ]; then docker logs --tail 200 shiyue-saas-candidate >&2 || true; exit 5; fi
+{saas_migration_check_command()}
 docker exec shiyue-saas-candidate python3 -c {shlex.quote(root_check_code)}
 cat /tmp/shiyue-saas-candidate-health.json
 docker rm -f shiyue-saas-candidate >/dev/null
@@ -857,6 +905,36 @@ def start_upgrade(target_id):
         db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close()
         job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"initialHealth":health,"codeBytes":package.stat().st_size,"diocoConfigured":dioco["configured"],"diocoReady":dioco_ready},"程序升级完成")
     return run_task("program_upgrade",worker,target_id)
+
+def start_saas_upgrade(target_id):
+    def worker(job,remote,target):
+        release=new_release_id("code");job.update(5,"检查远程 SaaS 生产栈",release_id=release)
+        check_remote_saas_upgrade_target(remote,target)
+        job.update(15,"生成 SaaS 程序发布包");package,digest=build_code_package(job,release)
+        with tarfile.open(package,"r:gz") as archive:build_info=json.load(archive.extractfile(".shiyue-release.json"))
+        job.write(f"本地发布来源：commit={build_info.get('gitCommit') or 'unknown'}，工作区未提交改动={bool(build_info.get('sourceDirty'))}")
+        job.update(38,"上传并校验 SaaS 程序包");remote.scp(package,f"/tmp/{package.name}")
+        prepare_remote_saas_release(remote,target,release,package.name,digest)
+        job.update(52,"备份远程 SaaS 数据库");backup=backup_remote_saas_database(job,remote,target,release)
+        job.update(60,"同步远程词典服务配置");dioco=sync_remote_private_config(job,remote,target)
+        job.update(70,"启动候选版本并执行 SaaS 健康检查")
+        activation=activate_saas_release(job,remote,target,release)
+        health=remote.ssh(saas_health_check_command(target["service_port"]))
+        job.update(95,"核对线上版本指针与运行容器")
+        root=shlex.quote(target["remote_root"])
+        verification=remote.ssh(f"""set -euo pipefail
+current_release=$(readlink -f {root}/current)
+test "$(basename "$current_release")" = {shlex.quote(release)}
+test "$(docker inspect -f '{{{{.State.Running}}}}' shiyue-saas)" = true
+mount_source=$(docker inspect -f '{{{{range .Mounts}}}}{{{{if eq .Destination "/app/reader"}}}}{{{{.Source}}}}{{{{end}}}}{{{{end}}}}' shiyue-saas)
+test "$(readlink -f "$mount_source")" = "$current_release/reader"
+echo SHIYUE_SAAS_RELEASE_ACTIVE
+""")
+        if "SHIYUE_SAAS_RELEASE_ACTIVE" not in verification:raise ValueError("线上 SaaS 容器与 current 发布版本不一致")
+        db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":health,"mode":"saas"}),now()));db.commit();db.close()
+        job.complete({"targetId":target["id"],"releaseId":release,"health":health,"backup":backup,"candidate":activation["candidate"],"verification":verification,"buildInfo":build_info,"diocoConfigured":dioco["configured"]},"SaaS 程序升级完成")
+    return run_task("saas_upgrade",worker,target_id)
+
 def start_saas_deploy(target_id):
     def worker(job,remote,target):
         release=new_release_id("code");job.update(4,"检查远程 SaaS 运行环境",release_id=release);_,oci_arch=remote_arch(remote)
@@ -1022,7 +1100,7 @@ def recent_jobs(target_id=None,limit=20):
 def dashboard_status(target_id=None):
     db=connect();books=db.execute("SELECT COUNT(*) FROM books WHERE status='ready'").fetchone()[0]
     clause=" AND target_id=?" if target_id is not None else "";params=(int(target_id),) if target_id is not None else ()
-    code=db.execute(f"SELECT result_json FROM deployment_jobs WHERE kind IN ('code_deploy','program_upgrade') AND status='complete'{clause} ORDER BY id DESC LIMIT 1",params).fetchone()
+    code=db.execute(f"SELECT result_json FROM deployment_jobs WHERE kind IN ('code_deploy','program_upgrade','saas_upgrade','saas_deploy') AND status='complete'{clause} ORDER BY id DESC LIMIT 1",params).fetchone()
     content=db.execute(f"SELECT result_json FROM deployment_jobs WHERE kind IN ('resource_sync','code_deploy','content_rollback') AND status='complete'{clause} ORDER BY id DESC LIMIT 1",params).fetchone();db.close()
     def value(row,key):
         if not row:return ""

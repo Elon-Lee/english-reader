@@ -532,7 +532,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if not target_id:self.reply({"error":"请选择远程节点"},400);return
                 if self.path == "/api/deployment/test":self.reply({"jobId":deployment_manager.start_test(target_id)},202);return
                 if self.path == "/api/deployment/deploy":self.reply({"jobId":deployment_manager.start_deploy(target_id)},202);return
-                if self.path == "/api/deployment/upgrade":self.reply({"jobId":deployment_manager.start_upgrade(target_id)},202);return
+                if self.path in {"/api/deployment/upgrade","/api/deployment/saas-upgrade"}:self.reply({"jobId":deployment_manager.start_saas_upgrade(target_id)},202);return
                 if self.path == "/api/deployment/sync":self.reply({"jobId":deployment_manager.start_sync(target_id)},202);return
                 if self.path == "/api/deployment/uninstall":self.reply({"jobId":deployment_manager.start_uninstall(target_id,str(item.get("confirmName","")).strip())},202);return
                 if self.path == "/api/deployment/delete-config":self.reply({"result":deployment_manager.delete_target_config(target_id)});return
@@ -835,10 +835,10 @@ class Handler(SimpleHTTPRequestHandler):
             if path=="/api/admin/platform-config":
                 self.reply(ADMIN.update_platform_config(actor_id,item));return
             if path=="/api/admin/quotas/adjust":
-                key=str(item.get("idempotencyKey","")).strip() or f"admin-{uuid.uuid4().hex}"
+                key=str(item.get("idempotencyKey","")).strip() or hashlib.sha256(json.dumps(item,sort_keys=True).encode()).hexdigest()
                 self.reply(ADMIN.adjust_quota(actor_id,str(item.get("userId","")).strip(),str(item.get("feature","")).strip(),item.get("quantity"),str(item.get("reason","")or""),key));return
             if path=="/api/admin/member-invite-allowances":
-                self.reply(ADMIN.grant_invite_allowance(actor_id,str(item.get("userId","")).strip(),item.get("quantity"),str(item.get("reason","")or""),item.get("expiresAt")),201);return
+                self.reply(ADMIN.grant_invite_allowance(actor_id,str(item.get("userId","")).strip(),item.get("quantity"),str(item.get("reason","")or""),item.get("expiresAt"),item.get("idempotencyKey")),201);return
             if path=="/api/admin/plan-versions":
                 self.reply(ADMIN.create_plan_version(actor_id,item.get("id"),item.get("planSlug"),item.get("name"),item.get("rank"),item.get("periodDays"),item.get("quotas"),item.get("pricing")),201);return
             if path=="/api/admin/media-assets":
@@ -848,12 +848,12 @@ class Handler(SimpleHTTPRequestHandler):
             if path=="/api/admin/account-deletions/cleanup":
                 result=ACCOUNTS.cleanup_due_deletions();ADMIN.record_action(actor_id,"account_deletion_cleanup",None,"",result);self.reply(result);return
             if path=="/api/admin/manual-orders":
-                result=MEMBERSHIPS.create_manual_order(actor_id,str(item.get("userId","")).strip(),str(item.get("planVersion","")).strip(),item.get("startsAt"),item.get("endsAt"),str(item.get("note","")or""),item.get("amountCents",0));REWARDS.on_first_paid(str(item.get("userId","")).strip());ADMIN.record_action(actor_id,"manual_order_created",str(item.get("userId","")).strip(),str(item.get("note","")or""),{"orderId":result["order"]["id"],"plan":item.get("planVersion")});self.reply(result,201);return
+                result=MEMBERSHIPS.create_manual_order(actor_id,str(item.get("userId","")).strip(),str(item.get("planVersion","")).strip(),item.get("startsAt"),item.get("endsAt"),str(item.get("note","")or""),item.get("amountCents",0),item.get("idempotencyKey"));REWARDS.on_first_paid(str(item.get("userId","")).strip());ADMIN.record_action(actor_id,"manual_order_created",str(item.get("userId","")).strip(),str(item.get("note","")or""),{"orderId":result["order"]["id"],"plan":item.get("planVersion")});self.reply(result,201);return
             if path=="/api/admin/subscriptions":
                 action=str(item.get("action","create")).strip()
                 if action=="create":
-                    result=MEMBERSHIPS.create_manual_order(actor_id,str(item.get("userId","")).strip(),str(item.get("planVersion","")).strip(),item.get("startsAt"),item.get("endsAt"),str(item.get("note","")or""),item.get("amountCents",0));REWARDS.on_first_paid(str(item.get("userId","")).strip());ADMIN.record_action(actor_id,"manual_subscription_created",str(item.get("userId","")).strip(),str(item.get("note","")or""),{"subscriptionId":result["subscription"]["id"]});self.reply(result,201);return
-                result=MEMBERSHIPS.update_subscription(actor_id,str(item.get("subscriptionId","")).strip(),action,item.get("endsAt"),str(item.get("note","")or""));ADMIN.record_action(actor_id,f"subscription_{action}",None,str(item.get("note","")or""),{"subscriptionId":item.get("subscriptionId")});self.reply(result);return
+                    result=MEMBERSHIPS.create_manual_order(actor_id,str(item.get("userId","")).strip(),str(item.get("planVersion","")).strip(),item.get("startsAt"),item.get("endsAt"),str(item.get("note","")or""),item.get("amountCents",0),item.get("idempotencyKey"));REWARDS.on_first_paid(str(item.get("userId","")).strip());ADMIN.record_action(actor_id,"manual_subscription_created",str(item.get("userId","")).strip(),str(item.get("note","")or""),{"subscriptionId":result["subscription"]["id"]});self.reply(result,201);return
+                result=MEMBERSHIPS.update_subscription(actor_id,str(item.get("subscriptionId","")).strip(),action,item.get("endsAt"),str(item.get("note","")or""),item.get("idempotencyKey"));ADMIN.record_action(actor_id,f"subscription_{action}",None,str(item.get("note","")or""),{"subscriptionId":item.get("subscriptionId")});self.reply(result);return
             if path=="/api/admin/commerce/products":
                 self.reply(COMMERCE.create_product(actor_id,item.get("slug"),item.get("family"),item.get("displayOrder",100)),201);return
             if path=="/api/admin/commerce/redemption-batches":
@@ -1009,7 +1009,10 @@ class Handler(SimpleHTTPRequestHandler):
             if path=="/api/rewards/redeem":self.reply(REWARDS.redeem(user_id,str(item.get("code","")).strip(),str(item.get("idempotencyKey","")).strip()));return
             if path=="/api/rewards/activity":self.reply(REWARDS.activity(user_id,item.get("readingSeconds",0),item.get("sentences",0),item.get("reviews",0),str(item.get("idempotencyKey","")).strip()));return
             if path=="/api/rewards/complete-book":self.reply(REWARDS.complete_book(user_id,str(item.get("bookId","")).strip()));return
-            if path=="/api/member-invites":self.reply(REWARDS.issue_invite(user_id),201);return
+            if path=="/api/member-invites":
+                key=str(item.get("idempotencyKey","")).strip()
+                if not key or len(key)>255:raise SaaSError("invalid_idempotency_key","操作标识无效。",400)
+                self.reply(REWARDS.issue_invite(user_id,key),201);return
             self.reply({"error":"not found"},404)
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
         except SaaSConfigurationError as exc:self.reply({"code":"saas_unavailable","error":str(exc)},503)
@@ -1022,15 +1025,15 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             actor_id=str(self._saas_session["id"])
             if path=="/api/admin/manual-orders":
-                result=MEMBERSHIPS.create_manual_order(actor_id,str(item.get("userId","")).strip(),str(item.get("planVersion","")).strip(),item.get("startsAt"),item.get("endsAt"),str(item.get("note","") or ""),item.get("amountCents",0))
+                result=MEMBERSHIPS.create_manual_order(actor_id,str(item.get("userId","")).strip(),str(item.get("planVersion","")).strip(),item.get("startsAt"),item.get("endsAt"),str(item.get("note","") or ""),item.get("amountCents",0),item.get("idempotencyKey"))
                 REWARDS.on_first_paid(str(item.get("userId","")).strip())
                 self.reply(result,201);return
             action=str(item.get("action","create")).strip()
             if action=="create":
-                result=MEMBERSHIPS.create_manual_order(actor_id,str(item.get("userId","")).strip(),str(item.get("planVersion","")).strip(),item.get("startsAt"),item.get("endsAt"),str(item.get("note","") or ""),item.get("amountCents",0))
+                result=MEMBERSHIPS.create_manual_order(actor_id,str(item.get("userId","")).strip(),str(item.get("planVersion","")).strip(),item.get("startsAt"),item.get("endsAt"),str(item.get("note","") or ""),item.get("amountCents",0),item.get("idempotencyKey"))
                 REWARDS.on_first_paid(str(item.get("userId","")).strip())
                 self.reply(result,201);return
-            result=MEMBERSHIPS.update_subscription(actor_id,str(item.get("subscriptionId","")).strip(),action,item.get("endsAt"),str(item.get("note","") or ""))
+            result=MEMBERSHIPS.update_subscription(actor_id,str(item.get("subscriptionId","")).strip(),action,item.get("endsAt"),str(item.get("note","") or ""),item.get("idempotencyKey"))
             self.reply(result);return
         except SaaSError as exc:
             self.reply(exc.payload(),exc.status)

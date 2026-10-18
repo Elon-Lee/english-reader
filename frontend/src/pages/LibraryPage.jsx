@@ -26,7 +26,7 @@ export default function LibraryPage({ libraryBooks, importTasks, openReader, ope
 
   const removeBook = book => Modal.confirm({
     title: book.source === '官方读物' ? `将《${book.title}》移出书架？` : `永久删除《${book.title}》？`,
-    content: book.source === '官方读物' ? '已消耗的解锁额度不会退回，以后仍可重新加入书架。' : '该操作会删除私人读物、阅读进度、生词和标注；媒体文件进入待清理状态。',
+    content: book.source === '官方读物' ? '移出后将停止该读物的阅读和媒体访问，并释放收藏名额。学习记录会保留，重新加入时需符合当前套餐的收藏上限。' : '该操作会删除私人读物、阅读进度、生词和标注；媒体文件进入待清理状态。',
     okText: book.source === '官方读物' ? '移出书架' : '永久删除',
     okButtonProps: { danger: true },
     onOk: async () => {

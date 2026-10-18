@@ -95,7 +95,7 @@ class PrivateWorkspaceTests(unittest.TestCase):
                 cursor.execute("""INSERT INTO catalog_books(id,source_content_book_id,title,english_title,rights_status,publication_status)
                 VALUES(%s,%s,'官方读物','Official Reader','licensed','published')""",(catalog_id,self.book_id))
                 cursor.execute("SELECT id FROM usage_periods WHERE user_id=%s ORDER BY starts_at DESC LIMIT 1",(owner_id,));period=self.accounts._one(cursor)
-                cursor.execute("INSERT INTO official_book_unlocks(id,user_id,catalog_book_id,usage_period_id) VALUES(%s,%s,%s,%s)",(new_id(),owner_id,catalog_id,period["id"]))
+                cursor.execute("INSERT INTO user_library(id,user_id,catalog_book_id) VALUES(%s,%s,%s)",(new_id(),owner_id,catalog_id))
         saved=self.workspace.save_vocabulary(owner_id,catalog_id,"s1",0,{"word":"My","rating":"easy"})
         self.assertEqual(saved["bookId"],catalog_id)
         items=self.workspace.vocabulary(owner_id,catalog_id)["items"]

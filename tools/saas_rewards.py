@@ -28,6 +28,11 @@ class RewardService:
         self.accounts, self.memberships = accounts, memberships
 
     def _user(self, cursor: Any, user_id: str) -> dict[str, Any]:
+        cursor.execute("SELECT inviter_id FROM member_invites WHERE invitee_id=%s", (user_id,))
+        invite = self.accounts._one(cursor)
+        recipients = {user_id, str(invite["inviter_id"])} if invite else {user_id}
+        for recipient in sorted(recipients):
+            cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (f"growth-award:{recipient}",))
         cursor.execute("SELECT id,timezone,status FROM users WHERE id=%s FOR UPDATE", (user_id,))
         user = self.accounts._one(cursor)
         if not user or user["status"] != "active":
@@ -47,6 +52,7 @@ class RewardService:
         return {"balance": balance, "monthEarned": earned, "monthCap": MONTHLY_GROWTH_CAP}
 
     def _award(self, cursor: Any, user_id: str, event_type: str, event_key: str, points: int, day: date, metadata: dict[str, Any] | None = None) -> int:
+        cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (f"growth-award:{user_id}",))
         cursor.execute("SELECT points FROM reward_ledger WHERE user_id=%s AND event_type=%s AND event_key=%s", (user_id, event_type, event_key))
         existing = self.accounts._one(cursor)
         if existing: return 0
@@ -124,8 +130,8 @@ class RewardService:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 user=self._user(cursor,user_id);day=local_day(user["timezone"])
-                cursor.execute("SELECT 1 FROM official_book_unlocks WHERE user_id=%s AND catalog_book_id=%s",(user_id,catalog_book_id))
-                if not cursor.fetchone():raise SaaSError("catalog_book_locked","请先解锁读物后再标记完成。",403)
+                cursor.execute("SELECT 1 FROM user_library WHERE user_id=%s AND catalog_book_id=%s",(user_id,catalog_book_id))
+                if not cursor.fetchone():raise SaaSError("catalog_book_locked","请先将读物加入书架后再标记完成。",403)
                 cursor.execute("SELECT reading_seconds FROM reward_daily_activity WHERE user_id=%s AND activity_day=%s",(user_id,day));activity=self.accounts._one(cursor)
                 if not activity or int(activity["reading_seconds"] or 0)<60:raise SaaSError("reading_time_insufficient","阅读满 1 分钟并到达正文底部后才会自动记录完成。",409)
                 granted=self._award(cursor,user_id,"official_book_completed",catalog_book_id,10,day,{"catalogBookId":catalog_book_id})
@@ -134,6 +140,7 @@ class RewardService:
     def _credit_feature(self,cursor:Any,user_id:str,feature:str,quantity:int,redemption_id:str)->None:
         if feature not in FEATURES:raise SaaSError("invalid_reward","奖励权益无效。",400)
         context=self.memberships._context(cursor,user_id)
+        context=self.memberships._quota_context(cursor,context,feature)
         cursor.execute("""INSERT INTO usage_ledger(id,user_id,usage_period_id,feature,quantity,reason,idempotency_key,metadata_json)
         VALUES(%s,%s,%s,%s,%s,'credit',%s,%s::jsonb) ON CONFLICT DO NOTHING""",(new_id(),user_id,context["period"]["id"],feature,-quantity,f"reward:{redemption_id}",json.dumps({"rewardRedemptionId":redemption_id})))
 
@@ -182,10 +189,13 @@ class RewardService:
                 if cursor.fetchone() and not blocked:self._award(cursor,invite["inviter_id"],"member_invite_paid",invite["id"],30,day,{"inviteeId":user_id})
                 cursor.execute("UPDATE member_invites SET status='paid',first_paid_at=COALESCE(first_paid_at,NOW()) WHERE id=%s",(invite["id"],))
 
-    def issue_invite(self,user_id:str)->dict[str,Any]:
+    def issue_invite(self,user_id:str,idempotency_key:str|None=None)->dict[str,Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 user=self._user(cursor,user_id);context=self.memberships._context(cursor,user_id)
+                if idempotency_key:
+                    key,prior=self.memberships._operation(cursor,user_id,user_id,"issue_member_invite",{},idempotency_key)
+                    if prior:return {**prior,"idempotent":True}
                 if int(context["plan"]["rank"])<1:raise SaaSError("invite_not_available","当前套餐没有邀请名额，请升级或等待活动发放。",403)
                 cursor.execute("""SELECT * FROM member_invite_allowances WHERE user_id=%s AND quantity_remaining>0
                 AND (expires_at IS NULL OR expires_at>NOW()) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1""",(user_id,))
@@ -197,7 +207,9 @@ class RewardService:
                     if not cursor.fetchone():break
                 else:raise RuntimeError("unable to create invitation code")
                 invitation_id,member_id,batch_id=new_id(),new_id(),"invite-batch-"+new_id();cursor.execute("UPDATE member_invite_allowances SET quantity_remaining=quantity_remaining-1 WHERE id=%s",(allowance["id"],));cursor.execute("INSERT INTO invitation_batches(id,requested_count,max_uses,created_by,note,channel) VALUES(%s,1,1,%s,'会员邀请','member')",(batch_id,user_id));cursor.execute("INSERT INTO invitations(id,code,max_uses,created_by,note,channel,batch_id) VALUES(%s,%s,1,%s,'会员邀请','member',%s)",(invitation_id,code,user_id,batch_id));cursor.execute("INSERT INTO member_invites(id,inviter_id,invitation_id) VALUES(%s,%s,%s)",(member_id,user_id,invitation_id))
-                return {"id":member_id,"code":code,"status":"active"}
+                result={"id":member_id,"code":code,"status":"active","idempotent":False}
+                if idempotency_key:self.memberships._save_operation(cursor,user_id,user_id,"issue_member_invite",key,{},result)
+                return result
 
     def status(self,user_id:str)->dict[str,Any]:
         with self.accounts.transaction() as connection:

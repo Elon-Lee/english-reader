@@ -276,6 +276,7 @@ class PaddleBillingService:
 
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
+                cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (f"paddle-event:{event_id}",))
                 cursor.execute("SELECT status FROM payment_provider_events WHERE provider='paddle' AND event_id=%s FOR UPDATE", (event_id,))
                 existing = self.accounts._one(cursor)
                 if existing and existing["status"] in {"processed", "ignored"}:
@@ -317,20 +318,23 @@ class PaddleBillingService:
         order = None
         order_id = str(custom.get("local_order_id", "") or "").strip()
         if order_id:
-            cursor.execute("SELECT * FROM payment_orders WHERE id=%s FOR UPDATE", (order_id,))
+            cursor.execute("SELECT * FROM payment_orders WHERE id=%s", (order_id,))
             order = self.accounts._one(cursor)
         transaction_id = str(data.get("id", "") or "") if str(data.get("id", "")).startswith("txn_") else str(data.get("transaction_id", "") or "")
         if not order and transaction_id:
-            cursor.execute("SELECT * FROM payment_orders WHERE provider='paddle' AND external_transaction_id=%s FOR UPDATE", (transaction_id,))
+            cursor.execute("SELECT * FROM payment_orders WHERE provider='paddle' AND external_transaction_id=%s", (transaction_id,))
             order = self.accounts._one(cursor)
         user_id = str((order or {}).get("user_id") or custom.get("user_id") or "").strip()
         plan_version = str((order or {}).get("plan_version_id") or custom.get("plan_version_id") or "").strip()
         interval = str((order or {}).get("billing_interval") or custom.get("billing_interval") or "").strip()
         if not user_id or not plan_version or interval not in {"month", "year"}:
             raise SaaSError("paddle_event_unmatched", "Paddle 事件无法关联本地用户或套餐。", 409)
-        cursor.execute("SELECT 1 FROM users WHERE id=%s", (user_id,))
+        cursor.execute("SELECT 1 FROM users WHERE id=%s FOR UPDATE", (user_id,))
         if not cursor.fetchone():
             raise SaaSError("paddle_event_unmatched", "Paddle 事件关联的用户不存在。", 409)
+        if order:
+            cursor.execute("SELECT * FROM payment_orders WHERE id=%s FOR UPDATE", (order["id"],))
+            order = self.accounts._one(cursor)
         self.memberships._plan(cursor, plan_version)
         return order, user_id, plan_version, interval
 

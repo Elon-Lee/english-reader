@@ -315,6 +315,11 @@ class CommerceService:
         version_id = str(version_id or "").strip()
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
+                cursor.execute("SELECT product_id FROM commerce_product_versions WHERE id=%s", (version_id,))
+                target = self.accounts._one(cursor)
+                if not target:
+                    raise SaaSError("product_version_not_found", "商品版本不存在。", 404)
+                cursor.execute("SELECT id FROM commerce_products WHERE id=%s FOR UPDATE", (target["product_id"],))
                 cursor.execute("SELECT * FROM commerce_product_versions WHERE id=%s FOR UPDATE", (version_id,))
                 version = self.accounts._one(cursor)
                 if not version:

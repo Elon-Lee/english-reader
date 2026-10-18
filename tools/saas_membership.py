@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -442,6 +443,8 @@ class MembershipService:
                 )
                 existing = self.accounts._one(cursor)
                 if existing:
+                    if int(existing["quantity"]) != quantity:
+                        raise SaaSError("idempotency_conflict", "同一操作标识不能用于不同的额度数量。", 409)
                     return {"reservation": self._reservation(existing), "membership": self._public_context(cursor, context, True), "idempotent": True}
                 if feature in AI_FEATURES and context["plan"]["slug"] != "free":
                     reservation = {
@@ -527,6 +530,7 @@ class MembershipService:
             with connection.cursor() as cursor:
                 context = self._context(cursor, user_id)
                 quota_context = self._quota_context(cursor, context, feature)
+                self._check_ledger_replay(cursor, user_id, feature, key, -quantity, "credit")
                 cursor.execute(
                     """INSERT INTO usage_ledger(id,user_id,usage_period_id,feature,quantity,reason,idempotency_key,metadata_json)
                     VALUES(%s,%s,%s,%s,%s,'credit',%s,%s::jsonb) ON CONFLICT DO NOTHING""",
@@ -549,6 +553,7 @@ class MembershipService:
                 # Usage ledger stores consumption as positive and credits as
                 # negative, so a positive user-facing grant maps to -quantity.
                 ledger_quantity = -quantity
+                self._check_ledger_replay(cursor, user_id, feature, key, ledger_quantity, "adjustment")
                 cursor.execute(
                     """INSERT INTO usage_ledger(id,user_id,usage_period_id,feature,quantity,reason,idempotency_key,metadata_json)
                     VALUES(%s,%s,%s,%s,%s,'adjustment',%s,%s::jsonb) ON CONFLICT DO NOTHING""",
@@ -557,7 +562,28 @@ class MembershipService:
                 self._audit(cursor, user_id, actor_id, "quota_adjustment", {"feature": feature, "quantity": quantity, "key": key, "note": note[:1000]})
                 return self._feature_summary(cursor, quota_context, feature)
 
-    def create_manual_order(self, actor_id: str, user_id: str, plan_version: str, starts_at: Any, ends_at: Any, note: str = "", amount_cents: int = 0) -> dict[str, Any]:
+    def _check_ledger_replay(self, cursor: Any, user_id: str, feature: str, key: str, quantity: int, reason: str) -> None:
+        cursor.execute("SELECT quantity,reason FROM usage_ledger WHERE user_id=%s AND feature=%s AND idempotency_key=%s", (user_id, feature, key))
+        prior = self.accounts._one(cursor)
+        if prior and (int(prior["quantity"]) != quantity or prior["reason"] != reason):
+            raise SaaSError("idempotency_conflict", "同一操作标识不能用于不同的额度请求。", 409)
+
+    def _operation(self, cursor: Any, actor_id: str, user_id: str, operation: str, payload: dict[str, Any], key: Any = None) -> tuple[str, dict[str, Any] | None]:
+        """Caller holds the target user lock until the business write and receipt commit."""
+        encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        key = str(key or "").strip() or hashlib.sha256(encoded.encode()).hexdigest()
+        if len(key) > 255:
+            raise SaaSError("invalid_idempotency_key", "操作标识无效。", 400)
+        cursor.execute("SELECT request_json,response_json FROM entitlement_operations WHERE actor_id=%s AND user_id=%s AND operation=%s AND idempotency_key=%s", (actor_id, user_id, operation, key))
+        prior = self.accounts._one(cursor)
+        if prior and as_json(prior["request_json"]) != payload:
+            raise SaaSError("idempotency_conflict", "同一操作标识不能用于不同的请求。", 409)
+        return key, as_json(prior["response_json"]) if prior else None
+
+    def _save_operation(self, cursor: Any, actor_id: str, user_id: str, operation: str, key: str, payload: dict[str, Any], result: dict[str, Any]) -> None:
+        cursor.execute("INSERT INTO entitlement_operations(actor_id,user_id,operation,idempotency_key,request_json,response_json) VALUES(%s,%s,%s,%s,%s::jsonb,%s::jsonb)", (actor_id, user_id, operation, key, json.dumps(payload), json.dumps(result)))
+
+    def create_manual_order(self, actor_id: str, user_id: str, plan_version: str, starts_at: Any, ends_at: Any, note: str = "", amount_cents: int = 0, idempotency_key: str | None = None) -> dict[str, Any]:
         start, end = parse_time(starts_at, "startsAt"), parse_time(ends_at, "endsAt")
         if end <= start:
             raise SaaSError("invalid_subscription", "结束时间必须晚于开始时间。", 400)
@@ -572,6 +598,10 @@ class MembershipService:
                 cursor.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", (user_id,))
                 if not cursor.fetchone():
                     raise SaaSError("user_not_found", "用户不存在。", 404)
+                payload = {"planVersion": plan_version, "startsAt": timestamp(start), "endsAt": timestamp(end), "note": str(note or "")[:1000], "amountCents": amount_cents}
+                key, prior = self._operation(cursor, actor_id, user_id, "manual_order", payload, idempotency_key)
+                if prior:
+                    return {**prior, "idempotent": True}
                 self._plan(cursor, plan_version)
                 order_id, subscription_id = new_id(), new_id()
                 cursor.execute(
@@ -586,24 +616,35 @@ class MembershipService:
                 )
                 context = self._context(cursor, user_id)
                 self._audit(cursor, user_id, actor_id, "manual_subscription_created", {"orderId": order_id, "subscriptionId": subscription_id, "plan": plan_version})
-                return {"order": self._order({"id": order_id, "user_id": user_id, "plan_version_id": plan_version, "status": "completed", "starts_at": start, "ends_at": end, "amount_cents": amount_cents, "currency": "CNY", "note": note, "created_at": utcnow()}),
+                result = {"order": self._order({"id": order_id, "user_id": user_id, "plan_version_id": plan_version, "status": "completed", "starts_at": start, "ends_at": end, "amount_cents": amount_cents, "currency": "CNY", "note": note, "created_at": utcnow()}),
                         "subscription": {"id": subscription_id, "status": "active", "startsAt": timestamp(start), "endsAt": timestamp(end)},
-                        "membership": self._public_context(cursor, context, True)}
+                        "membership": self._public_context(cursor, context, True), "idempotent": False}
+                self._save_operation(cursor, actor_id, user_id, "manual_order", key, payload, result)
+                return result
 
-    def update_subscription(self, actor_id: str, subscription_id: str, action: str, ends_at: Any | None = None, note: str = "") -> dict[str, Any]:
+    def update_subscription(self, actor_id: str, subscription_id: str, action: str, ends_at: Any | None = None, note: str = "", idempotency_key: str | None = None) -> dict[str, Any]:
         if action not in {"suspend", "activate", "extend"}:
             raise SaaSError("invalid_subscription_action", "不支持的订阅操作。", 400)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
+                cursor.execute("SELECT user_id FROM subscriptions WHERE id=%s", (subscription_id,))
+                owner = self.accounts._one(cursor)
+                if not owner:
+                    raise SaaSError("subscription_not_found", "订阅不存在。", 404)
+                cursor.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", (owner["user_id"],))
                 cursor.execute("SELECT * FROM subscriptions WHERE id=%s FOR UPDATE", (subscription_id,))
                 subscription = self.accounts._one(cursor)
                 if not subscription:
                     raise SaaSError("subscription_not_found", "订阅不存在。", 404)
+                payload = {"subscriptionId": subscription_id, "action": action, "endsAt": timestamp(parse_time(ends_at, "endsAt")) if ends_at is not None else None, "note": str(note or "")[:1000]}
+                if idempotency_key:
+                    key, prior = self._operation(cursor, actor_id, subscription["user_id"], "subscription_update", payload, idempotency_key)
+                    if prior:return {**prior, "idempotent": True}
                 if action == "extend":
                     if ends_at is None:
                         raise SaaSError("invalid_subscription", "延期需要新的结束时间。", 400)
                     new_end = parse_time(ends_at, "endsAt")
-                    if new_end <= subscription["ends_at"]:
+                    if new_end < subscription["ends_at"]:
                         raise SaaSError("invalid_subscription", "新的结束时间必须晚于原结束时间。", 400)
                     cursor.execute("UPDATE subscriptions SET ends_at=%s,note=%s,updated_at=NOW() WHERE id=%s", (new_end, str(note or "")[:1000], subscription_id))
                 else:
@@ -613,7 +654,9 @@ class MembershipService:
                 self._audit(cursor, subscription["user_id"], actor_id, f"subscription_{action}", {"subscriptionId": subscription_id, "note": note[:1000]})
                 cursor.execute("SELECT * FROM subscriptions WHERE id=%s", (subscription_id,))
                 updated = self.accounts._one(cursor) or subscription
-                return {"subscription": {"id": updated["id"], "status": updated["status"], "startsAt": timestamp(updated["starts_at"]), "endsAt": timestamp(updated["ends_at"])}, "membership": self._public_context(cursor, context, True)}
+                result = {"subscription": {"id": updated["id"], "status": updated["status"], "startsAt": timestamp(updated["starts_at"]), "endsAt": timestamp(updated["ends_at"])}, "membership": self._public_context(cursor, context, True), "idempotent": False}
+                if idempotency_key:self._save_operation(cursor, actor_id, subscription["user_id"], "subscription_update", key, payload, result)
+                return result
 
     def orders(self, user_id: str) -> list[dict[str, Any]]:
         with self.accounts.transaction() as connection:

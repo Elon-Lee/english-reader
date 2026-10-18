@@ -29,10 +29,10 @@ class WorkspaceService:
         cursor.execute(f"SELECT id FROM content_books WHERE id=%s AND owner_id=%s AND visibility IN ('private','draft') {'FOR UPDATE' if lock else ''}",(book_id,user_id));private=self.accounts._one(cursor)
         if private:return str(private["id"]),str(private["id"])
         cursor.execute("""SELECT cb.id AS catalog_id,cb.source_content_book_id FROM catalog_books cb
-        JOIN official_book_unlocks ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
+        JOIN user_library ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
         WHERE cb.id=%s AND cb.publication_status='published' AND cb.rights_status IN ('public_domain','licensed')""",(user_id,book_id));official=self.accounts._one(cursor)
         if official:return str(official["source_content_book_id"]),str(official["catalog_id"])
-        raise SaaSError("learning_book_not_found","读物不存在、尚未解锁或你无权访问。",404)
+        raise SaaSError("learning_book_not_found","读物不存在、未加入书架或你无权访问。",404)
 
     def _asset_summaries(self,cursor:Any,book_id:str)->list[dict[str,Any]]:
         cursor.execute("SELECT id,kind,content_type,original_bytes,generated_bytes FROM media_assets WHERE content_book_id=%s AND scope='private' AND status='active' ORDER BY created_at",(book_id,))
@@ -92,7 +92,7 @@ class WorkspaceService:
                     storage_id,public_id=self._learning_book(cursor,user_id,book_id);where+=" AND cv.book_id=%s";values=[public_id,*values,storage_id];public_book_id="%s"
                 cursor.execute(f"""SELECT cv.legacy_id,{public_book_id} AS public_book_id,cv.sentence_id,cv.word_index,cv.payload FROM content_vocabulary cv
                 JOIN content_books cb ON cb.id=cv.book_id LEFT JOIN catalog_books catalog ON catalog.source_content_book_id=cv.book_id
-                LEFT JOIN official_book_unlocks ou ON ou.catalog_book_id=catalog.id AND ou.user_id=%s {where} ORDER BY cv.legacy_id DESC""",values)
+                LEFT JOIN user_library ou ON ou.catalog_book_id=catalog.id AND ou.user_id=%s {where} ORDER BY cv.legacy_id DESC""",values)
                 return {"items":[{"id":int(row["legacy_id"]),"bookId":row["public_book_id"],"sentenceId":row["sentence_id"],"wordIndex":int(row["word_index"]),"payload":as_json(row["payload"])} for row in self.accounts._many(cursor)]}
 
     def annotations(self,user_id:str,book_id:str="")->dict[str,Any]:

@@ -114,6 +114,7 @@ class MediaService:
             names.add(name);parsed.append({"variant_name":name,**self._file_record(value.get("storagePath"),str(value.get("contentType","")or""))})
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
+                cursor.execute("SELECT id FROM users WHERE id=%s FOR UPDATE",(actor_id,))
                 cursor.execute("SELECT * FROM media_assets WHERE id=%s FOR UPDATE",(asset_id,));asset=self.accounts._one(cursor)
                 if not asset:raise SaaSError("media_not_found","媒体不存在。",404)
                 if asset["owner_id"]!=actor_id:raise SaaSError("media_access_denied","你无权修改该媒体。",403)
@@ -146,11 +147,11 @@ class MediaService:
         if not asset:raise SaaSError("media_not_found","媒体不存在或已删除。",404)
         allowed=asset["owner_id"]==user_id
         if not allowed and asset["scope"]=="official" and asset.get("catalog_book_id"):
-            cursor.execute("""SELECT EXISTS(SELECT 1 FROM catalog_books cb JOIN official_book_unlocks ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
+            cursor.execute("""SELECT EXISTS(SELECT 1 FROM catalog_books cb JOIN user_library ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
             WHERE cb.id=%s AND cb.publication_status='published' AND cb.rights_status IN ('public_domain','licensed')) AS allowed""",(user_id,asset["catalog_book_id"]))
             allowed=bool((self.accounts._one(cursor)or{"allowed":False})["allowed"])
         if not allowed and asset.get("content_book_id"):
-            cursor.execute("""SELECT EXISTS(SELECT 1 FROM catalog_books cb JOIN official_book_unlocks ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
+            cursor.execute("""SELECT EXISTS(SELECT 1 FROM catalog_books cb JOIN user_library ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
             WHERE cb.source_content_book_id=%s AND cb.publication_status='published' AND cb.rights_status IN ('public_domain','licensed')) AS allowed""",(user_id,asset["content_book_id"]))
             allowed=bool((self.accounts._one(cursor)or{"allowed":False})["allowed"])
         if not allowed:raise SaaSError("media_access_denied","你无权访问该媒体。",403)
@@ -184,6 +185,10 @@ class MediaService:
     def delete(self,actor_id:str,asset_id:str,is_admin:bool=False)->dict[str,Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
+                cursor.execute("SELECT owner_id FROM media_assets WHERE id=%s",(asset_id,));owner=self.accounts._one(cursor)
+                if not owner:raise SaaSError("media_not_found","媒体不存在。",404)
+                if owner["owner_id"]!=actor_id and not is_admin:raise SaaSError("media_access_denied","你无权删除该媒体。",403)
+                cursor.execute("SELECT id FROM users WHERE id=%s FOR UPDATE",(owner["owner_id"],))
                 cursor.execute("SELECT * FROM media_assets WHERE id=%s FOR UPDATE",(asset_id,));asset=self.accounts._one(cursor)
                 if not asset:raise SaaSError("media_not_found","媒体不存在。",404)
                 if asset["owner_id"]!=actor_id and not is_admin:raise SaaSError("media_access_denied","你无权删除该媒体。",403)

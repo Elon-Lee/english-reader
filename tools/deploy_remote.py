@@ -63,12 +63,12 @@ def main():
         package_only();return
     if not args.target:parser.error("部署时必须提供 --target")
     target=resolve_target(args.target)
-    action="SaaS 根站完整部署" if args.saas else "公共资源增量同步" if args.sync_public else "完整部署" if args.full else "程序升级"
+    action="SaaS 根站完整部署" if args.saas else "公共资源增量同步" if args.sync_public else "完整部署" if args.full else "SaaS 程序升级"
     print(f"目标：{target['id']} · {target['name']} · {target['host']}:{target['port']} · {action}",flush=True)
     if args.saas:job_id=manager.start_saas_deploy(target["id"])
     elif args.sync_public:job_id=manager.start_saas_public_sync(target["id"])
     elif args.full:job_id=manager.start_deploy(target["id"])
-    else:job_id=manager.start_upgrade(target["id"])
+    else:job_id=manager.start_saas_upgrade(target["id"])
     print(f"部署任务：{job_id}",flush=True)
     follow_job(job_id,max(30,args.timeout))
 

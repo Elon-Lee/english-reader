@@ -48,10 +48,9 @@ class DeploymentDiocoConfigTests(unittest.TestCase):
         self.assertFalse(result["uploaded"]);self.assertEqual(result["source"],"remote");self.assertIsNone(remote.uploaded)
 
     def test_all_remote_update_flows_repair_missing_credentials(self):
-        for function in (manager.start_deploy,manager.start_upgrade,manager.start_sync):
+        for function in (manager.start_deploy,manager.start_saas_upgrade,manager.start_sync):
             self.assertIn("sync_remote_private_config",inspect.getsource(function))
         self.assertIn("remote_dioco_check",inspect.getsource(manager.start_deploy))
-        self.assertIn("remote_dioco_check",inspect.getsource(manager.start_upgrade))
         self.assertIn("remote_dioco_check",inspect.getsource(manager.start_sync))
 
 

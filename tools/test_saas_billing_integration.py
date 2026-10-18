@@ -8,6 +8,7 @@ import json
 import os
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from urllib.parse import urlsplit
 
@@ -87,7 +88,10 @@ class PaddleBillingPostgresTests(unittest.TestCase):
         timestamp = int(time.time())
         digest = hmac.new(self.environment["PADDLE_WEBHOOK_SECRET"].encode(), str(timestamp).encode() + b":" + body, hashlib.sha256).hexdigest()
         signature = f"ts={timestamp};h1={digest}"
-        self.assertEqual(self.billing.handle_webhook(body, signature)["status"], "processed")
+        with ThreadPoolExecutor(max_workers=12) as workers:
+            results = list(workers.map(lambda _: self.billing.handle_webhook(body, signature), range(12)))
+        self.assertEqual(sum(row["status"] == "processed" for row in results), 1)
+        self.assertEqual(sum(row["status"] == "duplicate" for row in results), 11)
         self.assertEqual(self.billing.handle_webhook(body, signature)["status"], "duplicate")
         self.assertEqual(self.memberships.membership(str(self.user["id"]))["plan"]["id"], "advanced-v1")
         with self.accounts.transaction() as connection:
