@@ -1,50 +1,50 @@
 import Cover from '../components/BookCover'
 import React, { useMemo } from 'react'
 import { Button, Card, Col, Progress, Row, Space, Statistic, Typography } from 'antd'
-import { CloudUploadOutlined, CustomerServiceOutlined, PlusOutlined, ReadOutlined } from '@ant-design/icons'
+import { BookOutlined, PlusOutlined, ReadOutlined } from '@ant-design/icons'
+import { displayDate, isReviewDue } from '../utils/presentation.mjs'
 
 const { Paragraph, Text, Title } = Typography
-
-function dateKey(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
+const localDate = date => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date)
 
 function weekState(learningDays) {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const monday = new Date(today)
-  monday.setDate(today.getDate() - ((today.getDay() + 6) % 7))
+  const todayKey = localDate(new Date())
+  const monday = new Date(`${todayKey}T12:00:00+08:00`)
+  monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7))
   const activity = new Map(learningDays.map(item => [item.day, item.payload || {}]))
   return Array.from({ length: 7 }, (_, index) => {
-    const date = new Date(monday)
-    date.setDate(monday.getDate() + index)
-    const payload = activity.get(dateKey(date)) || {}
-    return { date, completed: Number(payload.reading_seconds || 0) > 0 || Number(payload.sentences || 0) > 0 || Number(payload.reviews || 0) > 0, future: date > today }
+    const date = new Date(monday); date.setUTCDate(monday.getUTCDate() + index)
+    const key = localDate(date), payload = activity.get(key) || {}
+    return { key, completed: Number(payload.reading_seconds || 0) > 0 || Number(payload.sentences || 0) > 0 || Number(payload.reviews || 0) > 0, future: key > todayKey }
   })
 }
 
-
-
-function Action({ icon, title, copy, action, onClick }) {
-  return <Col span={8}><Card className="action-card"><div className="action-icon">{icon}</div><Title level={4}>{title}</Title><Paragraph>{copy}</Paragraph><Button type="link" onClick={onClick}>{action} →</Button></Card></Col>
-}
-
-export default function WorkspacePage({ allBooks, selectScreen, openReader, openImport, learningDays, rewardStatus }) {
+export default function WorkspacePage({ allBooks, selectScreen, openReader, openImport, learningDays, rewardStatus, vocabulary = [] }) {
   const week = useMemo(() => weekState(learningDays), [learningDays])
-  const weekKeys = new Set(week.map(item => dateKey(item.date)))
-  const minutes = learningDays.filter(item => weekKeys.has(item.day)).reduce((sum, day) => sum + Number(day.payload?.reading_seconds || 0) / 60, 0)
+  const weekKeys = new Set(week.map(item => item.key))
+  const minutes = Math.floor(learningDays.filter(item => weekKeys.has(item.day)).reduce((sum, day) => sum + Number(day.payload?.reading_seconds || 0), 0) / 60)
   const streak = Number(rewardStatus?.streak || 0)
   const goalPercent = Math.min(100, Math.round(minutes / 120 * 100))
-  const continueBook = allBooks.find(book => book.progress > 0 && book.progress < 100) || allBooks[0]
-  return <div className="page-stack">
-    <div className="page-intro"><div><Text className="eyebrow">GOOD MORNING · {new Date().toLocaleDateString('zh-CN')}</Text><Title level={1}>继续你的英语阅读</Title><Paragraph>把碎片时间变成可积累的理解力。今天完成 12 分钟学习，就能保持连续记录。</Paragraph></div><Button type="primary" size="large" icon={<PlusOutlined />} onClick={openImport}>导入新读物</Button></div>
+  const activeBooks = allBooks.filter(book => book.shelfState !== 'later')
+  const recent = [...activeBooks].filter(book => book.readingProgress?.updatedAt).sort((a, b) => new Date(b.readingProgress.updatedAt) - new Date(a.readingProgress.updatedAt))
+  const continueBook = recent.find(book => !book.readingProgress?.completedAt) || activeBooks.find(book => !book.readingProgress?.completedAt) || activeBooks[0]
+  const position = continueBook?.readingProgress?.sentencePosition
+  const due = vocabulary.filter(item => isReviewDue(item)).length
+  const others = activeBooks.filter(book => book.id !== continueBook?.id).sort((a, b) => (new Date(b.readingProgress?.updatedAt).getTime() || 0) - (new Date(a.readingProgress?.updatedAt).getTime() || 0)).slice(0, 3)
+  return <div className="page-stack learning-workspace">
+    <div className="page-intro"><div><Text className="eyebrow">{displayDate(new Date())} · 你的学习空间</Text><Title level={1}>{recent.length ? '接着上次，读懂下一句' : '从一篇感兴趣的内容开始'}</Title><Paragraph>原声听读、语境理解和生词复习，都从这里继续。</Paragraph></div><Button icon={<PlusOutlined />} onClick={openImport}>导入材料</Button></div>
     <Row gutter={[20, 20]}>
-      <Col span={16}><Card className="hero-card"><div className="hero-card-content"><div className="hero-card-copy"><Text className="card-kicker">继续学习</Text><Title level={2}>{continueBook?.title || '还没有读物'}</Title><Paragraph>{continueBook?.subtitle || '导入第一本读物，开始你的学习记录。'}</Paragraph><Space><Button type="primary" onClick={() => continueBook ? openReader(continueBook) : openImport()}>{continueBook ? '继续阅读' : '导入读物'} →</Button><Button onClick={() => selectScreen('library')}>查看书架</Button></Space></div>{continueBook && <Cover book={continueBook} large />}</div></Card></Col>
-      <Col span={8}><Card className="streak-card"><Text className="card-kicker">本周学习目标</Text><Statistic value={goalPercent} suffix="%" valueStyle={{ color: '#17392b', fontSize: 42, fontWeight: 700 }} /><Progress percent={goalPercent} showInfo={false} strokeColor="#f08b67" trailColor="#f7e3da" /><Text type="secondary">{Math.max(0, 120 - Math.round(minutes))} 分钟达到本周目标 · 当前连续 {streak} 天</Text><div className="streak-days">{week.map((item, index) => <span className={item.completed ? 'done' : item.future ? 'future' : ''} key={dateKey(item.date)} title={`${dateKey(item.date)}${item.completed ? ' 已完成学习' : ' 未完成学习'}`}>{item.completed ? '✓' : ['一', '二', '三', '四', '五', '六', '日'][index]}</span>)}</div></Card></Col>
+      <Col span={16}><Card className="hero-card"><div className="hero-card-content"><div className="hero-card-copy">
+        <Text className="card-kicker">{continueBook ? position ? '继续上次学习' : continueBook.readingProgress?.completedAt ? '再次阅读' : '从这篇开始' : '开始你的第一次学习'}</Text>
+        <Title level={2}>{continueBook?.title || '挑选读物，或者带上自己的材料'}</Title>
+        <Paragraph>{continueBook?.subtitle || (continueBook ? continueBook.source : '去书城试读官方内容，或导入自己的文章、音频和视频。')}</Paragraph>
+        {continueBook && <div className="continue-progress"><Text>{continueBook.readingProgress?.completedAt ? '已完成阅读' : position ? `上次停在第 ${position} / ${continueBook.sentenceCount} 句` : '还未开始阅读'}</Text>{position > 0 && <Progress percent={continueBook.progress} strokeColor="#2f6f50" showInfo={false} />}</div>}
+        <Space wrap><Button type="primary" size="large" onClick={() => continueBook ? openReader(continueBook) : selectScreen('catalog')}>{continueBook ? position ? '继续学习' : continueBook.readingProgress?.completedAt ? '再次阅读' : '开始阅读' : '去书城挑选'} →</Button><Button size="large" onClick={() => continueBook ? selectScreen('library') : openImport()}>{continueBook ? '我的书架' : '导入自己的材料'}</Button></Space>
+      </div>{continueBook && <Cover book={continueBook} large />}</div></Card></Col>
+      <Col span={8}><Card className="daily-review-card"><div className="action-icon"><ReadOutlined /></div><Text className="card-kicker">生词复习</Text><Statistic title="当前待复习" value={due} suffix="个" /><Paragraph>{due ? '回到当时的语境，把读过的词记得更牢。' : vocabulary.length ? '到期生词已复习完，去读一段新内容吧。' : '阅读时收藏不熟悉的单词，在这里安排复习。'}</Paragraph><Button block onClick={() => selectScreen(due || vocabulary.length ? 'vocab' : 'catalog')}>{due ? '开始复习' : vocabulary.length ? '查看全部生词' : '去阅读，积累生词'}</Button></Card></Col>
     </Row>
-    <div className="section-header"><Title level={3}>你的阅读进度</Title><Button type="link" onClick={() => selectScreen('library')}>查看全部</Button></div>
-    <Row gutter={[16, 16]}>{allBooks.slice(0, 3).map(book => <Col span={8} key={book.id}><Card hoverable className="book-card" onClick={() => openReader(book)}><Title level={4}>{book.title}</Title><Text type="secondary">{book.subtitle}</Text><Progress percent={book.progress || 0} strokeColor="#2f6f50" /></Card></Col>)}</Row>
-    <div className="section-header"><Title level={3}>今天可以做什么</Title></div>
-    <Row gutter={[16, 16]}><Action icon={<ReadOutlined />} title="完成一次精读" copy="选一段未读内容，跟读并标记 3 个新词。" action="开始阅读" onClick={() => selectScreen('library')} /><Action icon={<CustomerServiceOutlined />} title="复习生词" copy="查看真实复习队列和学习活动。" action="去复习" onClick={() => selectScreen('vocab')} /><Action icon={<CloudUploadOutlined />} title="导入个人内容" copy="支持 TXT、Markdown、PDF、MP3 与视频。" action="开始导入" onClick={openImport} /></Row>
+    <Card className="weekly-learning-card"><div><Text className="card-kicker">本周积累</Text><Title level={3}>{minutes} <small>分钟听读</small></Title><Text type="secondary">{minutes >= 120 ? '已达到本周参考目标' : `距离每周 120 分钟参考目标还差 ${120 - minutes} 分钟`}{streak > 0 ? ` · 连续学习 ${streak} 天` : ''}</Text></div><div className="weekly-learning-progress"><Progress percent={goalPercent} showInfo={false} strokeColor="#2f6f50" /><div className="streak-days">{week.map((item, index) => <span className={item.completed ? 'done' : item.future ? 'future' : ''} key={item.key} title={`${item.key} ${item.completed ? '已学习' : item.future ? '尚未到来' : '暂无学习记录'}`}>{item.completed ? '✓' : ['一', '二', '三', '四', '五', '六', '日'][index]}</span>)}</div><Button type="link" onClick={() => selectScreen('stats')}>查看学习记录 →</Button></div></Card>
+    <div className="section-header"><Title level={3}>书架中的其他读物</Title><Button type="link" onClick={() => selectScreen('library')}>查看全部</Button></div>
+    {others.length ? <Row gutter={[16, 16]}>{others.map(book => <Col span={8} key={book.id}><Card className="book-card workspace-book-card"><Text type="secondary">{book.source}</Text><Title level={4}>{book.title}</Title><Text type="secondary">{book.readingProgress?.completedAt ? '已读完' : book.readingProgress?.sentencePosition ? `读至第 ${book.readingProgress.sentencePosition} 句` : '待开始'}</Text><Button type="link" onClick={() => openReader(book)}>打开读物 →</Button></Card></Col>)}</Row> : <Card className="workspace-discover"><BookOutlined /><div><Text strong>{continueBook ? '为下一次学习找一篇好内容' : '你的书架还空着'}</Text><Paragraph>先试读，再把适合自己的官方材料加入书架。</Paragraph></div><Button onClick={() => selectScreen('catalog')}>浏览书城</Button></Card>}
   </div>
 }

@@ -677,21 +677,23 @@ class MembershipService:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    """SELECT id,user_id,plan_version_id,status,starts_at,ends_at,amount_cents,currency,note,created_at,'manual' AS provider
+                    """SELECT orders.*,COALESCE(orders.product_name,pv.display_name) AS plan_name FROM (
+                    SELECT id,user_id,plan_version_id,status,starts_at,ends_at,amount_cents,currency,note,created_at,'manual' AS provider,NULL::text AS product_name
                     FROM manual_orders WHERE user_id=%s
                     UNION ALL
                     SELECT id,user_id,plan_version_id,status,starts_at,ends_at,amount_cents,currency,
-                    CASE WHEN error_message<>'' THEN error_message ELSE billing_interval END AS note,created_at,provider
+                    CASE WHEN error_message<>'' THEN error_message ELSE billing_interval END AS note,created_at,provider,NULL::text AS product_name
                     FROM payment_orders WHERE user_id=%s
                     UNION ALL
                     SELECT rc.id,rc.redeemed_by AS user_id,cpv.plan_version_id,'completed' AS status,
                     s.starts_at,s.ends_at,cpv.amount_cents,'CNY' AS currency,'云猫寄售兑换' AS note,
-                    rc.redeemed_at AS created_at,'cloudcat' AS provider
+                    rc.redeemed_at AS created_at,'cloudcat' AS provider,cpv.display_name AS product_name
                     FROM commerce_redemption_codes rc
                     JOIN commerce_product_versions cpv ON cpv.id=rc.product_version_id
                     JOIN subscriptions s ON s.id=rc.subscription_id
                     WHERE rc.redeemed_by=%s AND rc.status='redeemed'
-                    ORDER BY created_at DESC""",
+                    ) orders LEFT JOIN plan_versions pv ON pv.id=orders.plan_version_id
+                    ORDER BY orders.created_at DESC""",
                     (user_id, user_id, user_id),
                 )
                 return [self._order(row) for row in self.accounts._many(cursor)]
@@ -727,4 +729,4 @@ class MembershipService:
 
     @staticmethod
     def _order(row: dict[str, Any]) -> dict[str, Any]:
-        return {"id": row["id"], "planVersion": row["plan_version_id"], "status": row["status"], "startsAt": timestamp(row["starts_at"]), "endsAt": timestamp(row["ends_at"]), "amountCents": int(row["amount_cents"]), "currency": row["currency"], "note": row["note"], "provider": row.get("provider", "manual"), "createdAt": timestamp(row.get("created_at"))}
+        return {"id": row["id"], "planVersion": row["plan_version_id"], "planName": row.get("plan_name"), "status": row["status"], "startsAt": timestamp(row["starts_at"]), "endsAt": timestamp(row["ends_at"]), "amountCents": int(row["amount_cents"]), "currency": row["currency"], "note": row["note"], "provider": row.get("provider", "manual"), "createdAt": timestamp(row.get("created_at"))}

@@ -1,5 +1,11 @@
 # SaaS 后端交接
 
+## 2026-10-19 商业化页面只读契约
+
+- 私人/官方书架返回统一 `readingProgress`：保存句子位置、百分比、更新时间；未完成不因时长或舍入显示完成。官方查询按书架所有者关联进度，保留租户隔离。
+- `/api/membership/orders` 新增商品版本/权益版本名称 `planName`，保留每个订单来源的用户过滤及不可变版本。无迁移、无正式数据改写。
+- commerce 12、phase7 4、phase2 10 项隔离库回归及 35 项 HTTP smoke 通过；smoke 断言已适配 API-only 后台和媒体用户用量汇总。临时库已删除，本地 8790 已重启加载，未发布生产。详见 `../commercial-design-audit/HANDOFF.md`。
+
 ## 2026-10-19 内容管理调整
 
 - 验证：隔离临时 PostgreSQL 的 phase3/6（排除旧页面断言）/7/8、权益并发与视频画质共 45 项通过；含真实 FFmpeg、管理员导入 HTTP 登录/CSRF/角色隔离及文件清理。构建、modern/UI/JS、Python 编译、diff 检查通过。旧 phase6 的 `/terms` 页面断言和完整 HTTP smoke 的后台 `/` 首页断言均仍因 API-only 架构返回 404，不属于本轮接口失败；未执行真实 YouTube 网络下载或浏览器人工验收。临时测试库均已删除。

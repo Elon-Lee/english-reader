@@ -102,6 +102,13 @@ class PrivateWorkspaceTests(unittest.TestCase):
         self.assertEqual(items[0]["bookId"],catalog_id);self.assertEqual(items[0]["payload"]["rating"],"easy")
         progress=self.workspace.save_progress(owner_id,catalog_id,"s2");self.assertEqual(progress["lastSentenceId"],"s2")
         official_reader=self.catalog.reader(owner_id,catalog_id)["book"];self.assertEqual(official_reader["progress"]["lastSentenceId"],"s2")
+        saved_book=self.catalog.library(owner_id)["items"][0]
+        self.assertEqual(saved_book["progress"]["sentencePosition"],2)
+        self.assertEqual(saved_book["progress"]["percent"],50)
+        self.assertIsNotNone(saved_book["progress"]["updatedAt"])
+        self.catalog.add_or_unlock(str(self.other["id"]),catalog_id)
+        self.assertEqual(self.catalog.library(str(self.other["id"]))["items"][0]["progress"]["sentencePosition"],0)
+        self.catalog.remove(str(self.other["id"]),catalog_id)
         with self.assertRaises(SaaSError) as denied:self.workspace.save_vocabulary(str(self.other["id"]),catalog_id,"s1",0,{"word":"My","rating":"hard"})
         self.assertEqual(denied.exception.code,"learning_book_not_found")
 

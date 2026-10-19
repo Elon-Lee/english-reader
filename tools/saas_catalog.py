@@ -11,6 +11,7 @@ from typing import Any
 
 from saas_auth import SaaSError, SaaSService, new_id
 from saas_membership import MembershipService, as_json, can_watch_hd_video, timestamp
+from saas_progress import reading_progress
 
 
 RIGHTS = {"public_domain", "licensed", "private", "prohibited"}
@@ -120,14 +121,18 @@ class CatalogService:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("""SELECT cb.*,(SELECT COALESCE(NULLIF(src.cover_url,''),src.data_json->>'cover') FROM content_books src WHERE src.id=cb.source_content_book_id) AS source_cover,cs.slug AS series_slug,cs.title AS series_title,ul.shelf_state,ul.added_at,
-                TRUE AS unlocked
+                TRUE AS unlocked,src.data_json AS source_data,wp.last_sentence_id,wp.reading_seconds,wp.completed_at,wp.updated_at AS progress_updated_at
                 FROM user_library ul JOIN catalog_books cb ON cb.id=ul.catalog_book_id LEFT JOIN catalog_series cs ON cs.id=cb.series_id
+                LEFT JOIN content_books src ON src.id=cb.source_content_book_id
+                LEFT JOIN workspace_progress wp ON wp.content_book_id=cb.source_content_book_id AND wp.user_id=ul.user_id
                 WHERE ul.user_id=%s ORDER BY ul.added_at DESC""",(user_id,))
                 rows=self.accounts._many(cursor);ids=[row["id"] for row in rows];tags=self._tags(cursor,ids)
                 items=[]
                 for row in rows:
                     book=self._book(row,tags.get(row["id"],[]),{"inLibrary":True,"unlocked":bool(row["unlocked"])})
-                    book["shelfState"],book["addedAt"]=row["shelf_state"],timestamp(row["added_at"]);items.append(book)
+                    book["shelfState"],book["addedAt"]=row["shelf_state"],timestamp(row["added_at"])
+                    book["progress"] = reading_progress(row, row.get("source_data"))
+                    items.append(book)
                 return {"items":items}
 
     def reader(self,user_id:str,catalog_book_id:str,trial:bool=False)->dict[str,Any]:

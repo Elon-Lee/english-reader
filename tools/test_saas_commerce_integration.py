@@ -183,6 +183,8 @@ class CommercePostgresTests(unittest.TestCase):
         order = next(item for item in self.memberships.orders(str(user["id"])) if item["provider"] == "cloudcat")
         self.assertEqual(order["status"], "completed")
         self.assertEqual(order["amountCents"], 1900)
+        self.assertEqual(order["planName"], "兑换测试月卡")
+        self.assertEqual(self.memberships.orders(str(self.create_verified_user()["id"])), [])
         repeated = self.redemptions.redeem(str(user["id"]), batch["codes"][0])
         self.assertTrue(repeated["idempotent"])
         other = self.create_verified_user()

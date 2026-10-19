@@ -57,7 +57,7 @@ def main()->int:
         else:raise RuntimeError("SaaS reader did not become healthy")
         check("SaaS health",health.get("saasEnabled") is True,health);check("CSP","content-security-policy" in headers,headers)
         _,_,commerce=request("/api/commerce/products");check("CloudCat monthly catalog",{"free","advanced-30","pro-30"}.issubset({item.get("slug") for item in commerce.get("products",[])}) and all(item.get("family")=="free" or not item.get("purchaseUrl") or item.get("purchaseUrl","").startswith("https://catfk.com/") for item in commerce.get("products",[])) and commerce.get("payment",{}).get("methods")==["cloudcat"] and commerce.get("payment",{}).get("automaticRenewal") is False,commerce)
-        _,_,homepage=request("/");check("public product homepage",isinstance(homepage,bytes) and "把英语材料真正读懂".encode() in homepage)
+        _,_,homepage=request("/",expected=(404,));check("API-only backend boundary",homepage.get("code")=="backend_only",homepage)
         status,_,_=request("/api/workspace/books",expected=(401,));check("unauthenticated isolation",status==401)
         try:
             from saas_auth import SaaSService
@@ -97,7 +97,7 @@ def main()->int:
         if login.get("user",{}).get("isAdmin"):
             _,_,admin_dashboard=request("/api/admin/dashboard");check("admin dashboard",isinstance(admin_dashboard.get("users"),dict),admin_dashboard)
             _,_,catalog_sources=request("/api/admin/catalog/sources");check("catalog moderation",isinstance(catalog_sources.get("sources"),list),catalog_sources)
-            _,_,media_assets=request("/api/admin/media-assets?limit=5");check("media inventory",isinstance(media_assets.get("assets"),list),media_assets)
+            _,_,media_assets=request("/api/admin/media-assets?limit=5");check("media inventory",isinstance(media_assets.get("users"),list) and isinstance(media_assets.get("total"),int),media_assets)
             _,_,platform_config=request("/api/admin/platform-config");check("platform config",platform_config.get("dioco",{}).get("source")=="database",platform_config)
             _,_,generated_invites=request("/api/admin/invitations","POST",{"code":"","count":2,"maxUses":1,"channel":"smoke","note":"batch smoke"},expected=(201,));check("batch invitation generation",generated_invites.get("count")==2 and all(item.get("code") for item in generated_invites.get("invitations",[])),generated_invites)
             _,_,searched_invites=request("/api/admin/invitations?q=batch%20smoke&limit=5");check("invitation search",searched_invites.get("total",0)>=2,searched_invites)

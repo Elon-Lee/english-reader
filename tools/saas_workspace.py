@@ -9,6 +9,7 @@ from typing import Any
 from saas_auth import SaaSError, SaaSService, new_id, utcnow
 from saas_membership import as_json, can_watch_hd_video, timestamp
 from saas_rewards import local_day
+from saas_progress import reading_progress
 
 
 class WorkspaceService:
@@ -47,13 +48,13 @@ class WorkspaceService:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 self._user(cursor,user_id)
-                cursor.execute("""SELECT cb.*,wp.last_sentence_id,wp.reading_seconds,wp.completed_at FROM content_books cb
+                cursor.execute("""SELECT cb.*,wp.last_sentence_id,wp.reading_seconds,wp.completed_at,wp.updated_at AS progress_updated_at FROM content_books cb
                 LEFT JOIN workspace_progress wp ON wp.content_book_id=cb.id AND wp.user_id=%s
                 WHERE cb.owner_id=%s AND cb.visibility IN ('private','draft') AND NOT EXISTS (SELECT 1 FROM catalog_books official WHERE official.source_content_book_id=cb.id) ORDER BY cb.updated_at DESC""",(user_id,user_id))
                 books=[]
                 for row in self.accounts._many(cursor):
                     data=as_json(row["data_json"]);sentences=data.get("sentences",[]) if isinstance(data.get("sentences",[]),list) else []
-                    books.append({"id":row["id"],"title":row["title"],"englishTitle":row["english_title"],"series":row["series"],"coverUrl":row["cover_url"] or data.get("cover", ""),"level":row["level"],"resourceType":row["source_type"],"sentenceCount":len(sentences),"duration":float(row["duration"]),"updatedAt":timestamp(row["updated_at"]),"progress":{"lastSentenceId":row["last_sentence_id"] or "","readingSeconds":int(row["reading_seconds"] or 0),"completedAt":timestamp(row["completed_at"])},"mediaCount":len(self._asset_summaries(cursor,row["id"]) )})
+                    books.append({"id":row["id"],"title":row["title"],"englishTitle":row["english_title"],"series":row["series"],"coverUrl":row["cover_url"] or data.get("cover", ""),"level":row["level"],"resourceType":row["source_type"],"sentenceCount":len(sentences),"duration":float(row["duration"]),"updatedAt":timestamp(row["updated_at"]),"progress":reading_progress(row, data),"mediaCount":len(self._asset_summaries(cursor,row["id"]) )})
                 return {"books":books}
 
     def delete_book(self,user_id:str,book_id:str,confirm_title:str="")->dict[str,Any]:

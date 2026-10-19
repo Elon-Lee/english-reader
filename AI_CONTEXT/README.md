@@ -19,6 +19,8 @@
 
 ## 全局完成状态
 
+- 2026-10-19 PC 商业化改版已在本地完成：首页、套餐、学习空间、书城、会员中心及公开政策路由；真实阅读位置与订单名称接口已接入，无数据库迁移。26 项隔离库回归、35 项 HTTP smoke、前端构建与检查通过；未发布生产。详见 commercial-design-audit。
+
 - 2026-10-19 本地实现私人/官方导入隔离、运营内容管理官方导入及审核、用户媒体占用只读汇总、读物永久删除清理媒体；新 YouTube 高清最高 480p、流畅最高 240p，历史文件不重编码。45 项隔离库回归及前端检查通过，本地迁移 0037 和后台重启已完成；旧 HTTP smoke 的首页断言仍不兼容 API-only 后台，尚未发布生产。
 
 - 2026-10-19 确认待审核内容采用媒体增量传输与 PostgreSQL 书目合并；移除仅适用旧 SQLite/reader 的失效内容回滚入口、接口和脚本，保留代码回滚。构建及 33 项部署回归通过，完整 HTTP smoke 受测试库缺少 migration 0036 阻断；尚未发布生产。详见 platform-operations。
@@ -63,6 +65,7 @@
 | 当前工作内容 | 必读任务文档 |
 |---|---|
 | PC 页面、路由、分页、工作台视觉 | `tasks/pc-workspace/HANDOFF.md` |
+| PC 商业化改版、布局配色、购买流程与验收 | `tasks/commercial-design-audit/HANDOFF.md` |
 | 阅读器、媒体、字幕、快捷键、词典 | `tasks/reader/HANDOFF.md` |
 | 账号、会员、数据库、API、安全 | `tasks/backend-saas/HANDOFF.md` |
 | 公开官网、商品版本、折扣、云猫寄售、套餐兑换 | `tasks/public-commerce/HANDOFF.md` |

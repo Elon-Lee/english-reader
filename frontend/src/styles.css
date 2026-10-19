@@ -1,4 +1,5 @@
 :root { color: #17392b; background: #f6f5f1; font-synthesis: none; }
+:root { --study-ink: #17392b; --study-muted: #596b60; --study-surface: #fbfbf8; --study-line: #e0e6df; }
 .reader-trial-inline{margin:24px 0;padding:24px;border:1px solid #d8e3d3;border-radius:12px;background:#edf3e8;text-align:center}.reader-trial-inline h4{margin:12px 0 8px}
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
@@ -128,3 +129,101 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
 .catalog-book-card .ant-card-body>.ant-btn{margin-top:auto!important;min-height:38px}
 .catalog-book-card .ant-card-body>.ant-space:last-of-type{margin-bottom:14px}
 .import-history-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+
+/* PC commercial experience: preserve the existing brand, clarify tasks and plans. */
+.public-plan-label { min-height: 50px; }
+.public-plan-action { display: grid; gap: 8px; }
+.public-capacity-note.ant-typography { margin: 22px 0 0; color: var(--study-muted); font-size: 13px; line-height: 1.8; }
+.public-faq { max-width: 1000px; margin: 0 auto; padding: 0 40px 80px; }
+.public-faq h2.ant-typography { margin: 0 0 24px; font-size: 28px; color: var(--study-ink); }
+.public-faq .ant-collapse { background: transparent; border-color: var(--study-line); }
+.public-faq .ant-collapse-header { padding: 20px 24px !important; font-size: 16px; }
+.public-faq .ant-collapse-content-box { color: var(--study-muted); line-height: 1.9; }
+.public-hero h1 > span { display: block; }
+.signup-note { display: block; margin-top: 14px; color: var(--study-muted); font-size: 13px; }
+.public-sale-price .ant-tag { margin: 0; color: #596b60; background: #f4f6f1; border-color: #dbe3d8; }
+.public-sale-price del { color: #65756a; }
+.purchase-reassurance.ant-typography { margin: 0; font-size: 13px; line-height: 1.8; color: var(--study-muted); }
+.public-purchase-summary-page { max-width: 900px; min-height: 60vh; margin: auto; padding: 80px 40px; }
+.public-purchase-summary-page .public-price { margin: 24px 0; }
+.public-purchase-modal .ant-modal-title { margin-bottom: 20px; color: var(--study-muted); font-size: 14px; font-weight: 500; }
+.membership-ai-summary { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.membership-ai-summary .ant-tag { margin: 0; padding: 5px 10px; }
+.quota-value { display: block; font-size: 20px; margin-bottom: 12px; }
+.quota-card .ant-typography:last-child { margin: 10px 0 0; line-height: 1.7; }
+.membership-history .ant-tabs-nav { margin-bottom: 16px; }
+.order-id { display: inline-block; max-width: 180px; overflow-wrap: anywhere; font-size: 12px; }
+.continue-progress { max-width: 420px; margin: 18px 0; }
+.daily-review-card { height: 100%; border-color: var(--study-line); }
+.daily-review-card .ant-statistic { margin: 14px 0; }
+.daily-review-card .ant-statistic-content { color: var(--study-ink); font-size: 36px; font-weight: 650; }
+.daily-review-card .ant-typography { color: var(--study-muted); }
+.weekly-learning-card { border-color: var(--study-line); background: #fff; }
+.weekly-learning-card .ant-card-body { display: flex; align-items: center; gap: 32px; justify-content: space-between; }
+.weekly-learning-card h3.ant-typography { margin: 8px 0; font-size: 28px; color: var(--study-ink); }
+.weekly-learning-card h3 small { font-size: 14px; font-weight: 400; color: var(--study-muted); }
+.weekly-learning-progress { flex: 1; max-width: 440px; }
+.weekly-learning-progress .streak-days { margin-top: 8px; }
+.weekly-learning-progress .streak-days span { color: #52675a; background: #edf2eb; }
+.weekly-learning-progress .streak-days .done { color: #fff; background: #2f6f50; }
+.weekly-learning-progress .streak-days .future { background: transparent; color: #65746a; border: 1px solid #e0e6df; }
+.workspace-book-card .ant-card-body { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; height: 100%; }
+.workspace-book-card h4.ant-typography { margin: 0; font-size: 17px; line-height: 1.5; }
+.workspace-book-card .ant-btn { margin-top: auto; padding-left: 0; }
+.workspace-discover .ant-card-body { display: flex; align-items: center; gap: 20px; }
+.workspace-discover .anticon { font-size: 30px; color: #2f6f50; }
+.workspace-discover .ant-typography { margin: 4px 0; }
+.workspace-discover .ant-btn { margin-left: auto; }
+.catalog-book-card > .ant-card-body { display: flex; flex-direction: column; height: 100%; }
+.catalog-book-card h4.ant-typography { min-height: 52px; line-height: 1.5; margin: 16px 0 8px; }
+.catalog-book-card .ant-card-body > div.ant-typography { color: var(--study-muted); min-height: 44px; margin: 8px 0 16px; }
+.catalog-book-card .ant-card-body > .ant-btn-primary { margin-top: auto !important; }
+.catalog-book-card .ant-card-body > .ant-space { margin-bottom: 12px; }
+.catalog-secondary-action { min-height: 38px; text-align: center; }
+.public-policy { max-width: 860px; min-height: 70vh; margin: auto; padding: 48px 32px 80px; }
+.public-policy h1.ant-typography { margin: 24px 0; color: var(--study-ink); }
+.public-policy h2.ant-typography { margin-top: 32px; font-size: 23px; color: var(--study-ink); }
+.public-policy div.ant-typography { font-size: 16px; line-height: 1.9; color: var(--study-muted); }
+@media (min-width: 992px) {
+  .modern-content { padding-top: 28px; padding-bottom: 48px; }
+  .modern-header { height: 64px; }
+  .page-stack { gap: 20px; }
+  .page-intro { align-items: center; padding: 0 0 6px; }
+  .page-intro h1.ant-typography { margin: 10px 0 8px; font-size: 32px; line-height: 1.35; letter-spacing: -.025em; }
+  .page-intro .ant-typography:not(h1):not(.eyebrow) { color: var(--study-muted); line-height: 1.8; }
+  .section-header { margin-top: 4px; }
+  .section-header h3.ant-typography { font-size: 21px; }
+  .public-hero { min-height: min(760px, calc(100vh - 72px)); grid-template-columns: minmax(360px, .9fr) minmax(0, 1.2fr); gap: 48px; padding: 72px 48px 88px; max-width: 1440px; overflow: visible; }
+  .public-hero h1.ant-typography { font-size: clamp(48px, 4.1vw, 68px); line-height: 1.18; letter-spacing: -.04em; margin: 22px 0 24px; text-wrap: balance; }
+  .public-hero-copy > div.ant-typography { max-width: 470px; color: var(--study-muted); font-size: 17px; line-height: 1.9; margin-bottom: 26px; }
+  .public-hero-notes { gap: 12px; margin-top: 26px; font-size: 12px; }
+  .public-floating-note { bottom: -22px; right: 12px; padding: 14px 18px; }
+  .public-device-frame { transform: none; border-radius: 18px; box-shadow: 0 24px 65px #143b2a18; }
+  .public-pain { padding-block: 72px; }
+  .public-pain h2.ant-typography { font-size: 42px; line-height: 1.3; margin: 16px 0 36px; }
+  .public-product-story, .public-product-story.reverse { padding: 80px 40px; gap: 56px; }
+  .public-story-copy h2.ant-typography { margin: 16px 0; font-size: 36px; line-height: 1.35; text-wrap: balance; }
+  .public-story-copy > div.ant-typography { color: var(--study-muted); font-size: 16px; line-height: 1.85; }
+  .public-section.public-pricing { padding: 64px 40px; }
+  .public-section-heading { margin-bottom: 32px; max-width: 1000px; }
+  .public-section-heading h1.ant-typography, .public-section-heading h2.ant-typography { font-size: 40px; line-height: 1.35; margin: 14px 0; color: var(--study-ink); }
+  .public-section-heading > div.ant-typography { font-size: 16px; color: var(--study-muted); line-height: 1.8; }
+  .public-price-card > .ant-card-body { padding: 24px; }
+  .public-price-card .ant-space-vertical { gap: 14px !important; }
+  .public-price-card h3.ant-typography { font-size: 25px; line-height: 1.4; margin: 0 0 8px; }
+  .public-price-card .ant-space-item:nth-child(2) > div.ant-typography { min-height: 44px; margin: 0; color: var(--study-muted); }
+  .public-price-card ul { min-height: 0; }
+  .public-price-card li { padding: 6px 0; font-size: 14px; color: #42594b; }
+  .public-price { flex-wrap: wrap; row-gap: 2px; }
+  .public-price span { color: #5e7064; }
+  .public-final-cta { padding: 80px 30px; }
+  .public-final-cta h2.ant-typography { font-size: 42px; line-height: 1.3; margin: 16px auto 20px; }
+  .public-final-cta > div.ant-typography { margin-bottom: 28px; color: var(--study-muted); font-size: 17px; }
+  .hero-card, .hero-card-content { min-height: 310px; }
+  .hero-card-content { padding: 28px; gap: 24px; }
+  .hero-card h2.ant-typography { font-size: 26px; line-height: 1.4; margin: 14px 0 10px; text-wrap: balance; }
+  .hero-card .book-cover-large.is-video { width: 30%; max-width: 260px; }
+  .ant-modal .public-section.public-pricing { padding: 16px 0; }
+  .ant-modal .public-section-heading h2.ant-typography { font-size: 26px; }
+  .plan-copy { overflow-wrap: anywhere; }
+}
