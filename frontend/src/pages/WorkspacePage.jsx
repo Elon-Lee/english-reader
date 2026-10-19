@@ -1,3 +1,4 @@
+import Cover from '../components/BookCover'
 import React, { useMemo } from 'react'
 import { Button, Card, Col, Progress, Row, Space, Statistic, Typography } from 'antd'
 import { CloudUploadOutlined, CustomerServiceOutlined, PlusOutlined, ReadOutlined } from '@ant-design/icons'
@@ -22,9 +23,7 @@ function weekState(learningDays) {
   })
 }
 
-function Cover({ book, large = false }) {
-  return <div className={`book-cover ${large ? 'book-cover-large' : ''}`} style={{ '--cover': book.accent || '#dce9d8' }}><span>{book.cover || String(book.title || '书').slice(0, 2).toUpperCase()}</span><small>{book.title}</small></div>
-}
+
 
 function Action({ icon, title, copy, action, onClick }) {
   return <Col span={8}><Card className="action-card"><div className="action-icon">{icon}</div><Title level={4}>{title}</Title><Paragraph>{copy}</Paragraph><Button type="link" onClick={onClick}>{action} →</Button></Card></Col>

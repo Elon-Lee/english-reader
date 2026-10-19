@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
+from saas_catalog import CatalogService
 from saas_imports import WorkspaceImportService
 from saas_media import MediaService
 from saas_membership import MembershipService
@@ -195,6 +196,25 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         self.assertEqual(completed["task"]["status"],"complete");asset_id=completed["task"]["sourceAssetId"]
         self.assertIn(70,[event[1] for event in progress_events]);self.assertIn(85,[event[1] for event in progress_events])
         reader=self.workspace.reader(owner,completed["task"]["outputBookId"])["book"];self.assertEqual(reader["resourceType"],"youtube");self.assertEqual(reader["title"],"Private YouTube")
+        summary=self.workspace.list_books(owner)["books"][0]
+        self.assertEqual(summary["series"],"Test Channel")
+        self.assertEqual(summary["coverUrl"],f"/api/media/{asset_id}?variant=cover")
+        catalog=CatalogService(self.accounts,self.memberships)
+        with self.assertRaises(SaaSError) as denied:
+            catalog.review(str(self.admin["id"]),summary["id"],"licensed","published")
+        self.assertEqual(denied.exception.code,"private_content")
+        self.assertEqual(catalog.review_sources()["sources"],[])
+        migration=(Path(__file__).parent/"saas_migrations/0036_youtube_channel_series.sql").read_text()
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE content_books SET series='私人导入' WHERE id=%s",(summary["id"],))
+                cursor.execute(migration)
+        self.assertEqual(self.workspace.list_books(owner)["books"][0]["series"],"Test Channel")
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE content_books SET series='Custom Series' WHERE id=%s",(summary["id"],))
+                cursor.execute(migration)
+        self.assertEqual(self.workspace.list_books(owner)["books"][0]["series"],"Custom Series")
         variants=reader["mediaAssets"][0]["variants"];self.assertEqual([item["name"] for item in variants],["audio","cover","low","subtitles-en","subtitles-zh-CN"])
         self.assertTrue(self.media.stream(owner,asset_id,"subtitles-en")["path"].is_file())
         with self.assertRaises(SaaSError) as denied:self.media.stream(other,asset_id,"subtitles-zh-CN")
@@ -206,12 +226,105 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         usage=self.memberships.usage(owner);youtube=next(row for row in usage["usage"] if row["feature"]=="youtube_imports");video=next(row for row in usage["usage"] if row["feature"]=="video_imports")
         self.assertEqual(youtube["used"],0);self.assertEqual(youtube["reserved"],0);self.assertEqual(video["used"],0)
 
+    @unittest.skipUnless(shutil.which("ffmpeg"),"FFmpeg required")
+    def test_official_import_review_storage_and_permanent_delete(self):
+        admin,owner=str(self.admin["id"]),str(self.owner["id"])
+        official=WorkspaceImportService(self.accounts,self.memberships,self.media,whisper_cli=self.fake_whisper,whisper_model=self.fake_model,audio_duration=lambda path:2.0,yt_dlp=self.fake_ytdlp,node=Path(sys.executable),official=True)
+        with self.assertRaises(SaaSError) as denied:
+            official.create(owner,"text","Denied","test.txt","official-denied")
+        self.assertEqual(denied.exception.code,"admin_required")
+        private=self.imports.create(owner,"text","Private","private.txt","private-forged",metadata={"officialImport":True})["task"]
+        self.imports.upload(owner,private["id"],"private.txt",b"Keep private.","text/plain")
+        private_book=self.imports.complete(owner,private["id"])["task"]["outputBookId"]
+        task=official.create(admin,"youtube","Official video","","official-video","https://youtu.be/fake123")["task"]
+        with self.assertRaises(SaaSError):self.imports.complete(admin,task["id"])
+        with patch.object(official,"_run_ytdlp",wraps=official._run_ytdlp) as downloader:
+            completed=official.complete(admin,task["id"])["task"]
+        download_args=next(call.args[0] for call in downloader.call_args_list if "-f" in call.args[0])
+        self.assertIn("height<=480",download_args[download_args.index("-f")+1])
+        self.assertNotIn("720",download_args[download_args.index("-f")+1])
+        book_id,asset_id=completed["outputBookId"],completed["sourceAssetId"]
+        catalog=CatalogService(self.accounts,self.memberships)
+        sources=catalog.review_sources()["sources"]
+        self.assertEqual([row["sourceBookId"] for row in sources],[book_id])
+        self.assertEqual(sources[0]["publicationStatus"],"draft")
+        self.assertEqual(catalog.catalog(owner)["books"],[])
+        self.assertEqual(self.workspace.list_books(admin)["books"],[])
+        self.assertEqual(self.imports.list(admin)["total"],0)
+        self.assertEqual(official.list(admin)["total"],1)
+        # A previously approved personal import becomes private again; official imports stay registered.
+        migration=(Path(__file__).parent/"saas_migrations/0037_private_import_ownership.sql").read_text()
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("INSERT INTO catalog_books(id,source_content_book_id,title,resource_type,rights_status,publication_status) VALUES(%s,%s,'Private','book','licensed','published')",(new_id(),private_book))
+                cursor.execute("UPDATE content_books SET visibility='published' WHERE id=%s",(private_book,))
+                cursor.execute(migration);cursor.execute(migration)
+        self.assertEqual(self.workspace.list_books(owner)["books"][0]["id"],private_book)
+        self.assertEqual([row["sourceBookId"] for row in catalog.review_sources()["sources"]],[book_id])
+        usage=self.memberships.usage(admin)["usage"]
+        self.assertEqual(next(row for row in usage if row["feature"]=="storage_bytes")["used"],0)
+        self.assertEqual(next(row for row in usage if row["feature"]=="video_library_capacity")["used"],0)
+        detail=self.media.user_storage(admin)
+        self.assertEqual(detail["total"],1);video=detail["videos"][0]
+        self.assertEqual(video["bookId"],book_id);self.assertTrue(video["contentPath"])
+        self.assertEqual(video["scope"],"official")
+        paths=[self.root/video["storagePath"]]+[self.root/v["storagePath"] for v in video["variants"]]
+        low=next(self.root/v["storagePath"] for v in video["variants"] if v["name"]=="low")
+        probe=json.loads(subprocess.check_output(["ffprobe","-v","error","-select_streams","v:0","-show_entries","stream=width,height","-of","json",str(low)]))["streams"][0]
+        self.assertLessEqual(probe["height"],240);self.assertLessEqual(probe["width"],320)
+        summary=next(row for row in self.media.user_storage()["users"] if row["id"]==admin)
+        self.assertEqual(summary["totalBytes"],sum(path.stat().st_size for path in paths))
+        published=catalog.review(admin,book_id,"licensed","published")["book"]
+        expected=f"/api/media/{asset_id}?variant=cover&trialBook={published['id']}"
+        self.assertEqual(catalog.detail(published["id"],owner)["book"]["coverUrl"],expected)
+        self.assertTrue(self.media.trial_stream(owner,asset_id,published["id"],"cover")["path"].is_file())
+        with self.assertRaises(SaaSError):catalog.delete_book(admin,book_id,"wrong title")
+        deleted=catalog.delete_book(admin,book_id,"Official video")
+        self.assertEqual(deleted["pendingFiles"],0);self.assertGreater(deleted["removedFiles"],0)
+        self.assertTrue(all(not path.exists() for path in paths))
+        self.assertEqual(self.media.user_storage(admin)["total"],0)
+        self.assertEqual(self.workspace.list_books(owner)["books"][0]["id"],private_book)
+        private_asset=self.workspace.reader(owner,private_book)["book"]["mediaAssets"][0]["id"]
+        private_path=self.media.stream(owner,private_asset)["path"]
+        self.workspace.delete_book(owner,private_book,"Private")
+        self.assertFalse(private_path.exists())
+
     def test_youtube_download_failure_releases_reservation(self):
         owner=str(self.owner["id"]);url="https://youtu.be/failure"
         created=self.failing_youtube_imports.create(owner,"youtube","Failure","","failed-youtube-task",url)
         with self.assertRaises(SaaSError) as failed:self.failing_youtube_imports.complete(owner,created["task"]["id"])
         self.assertEqual(failed.exception.code,"youtube_download_failed")
         usage=self.memberships.usage(owner);youtube=next(row for row in usage["usage"] if row["feature"]=="youtube_imports");self.assertEqual(youtube["used"],0);self.assertEqual(youtube["reserved"],0)
+
+    def test_paginated_history_and_delete_invalid_are_owner_scoped(self):
+        owner,other=str(self.owner["id"]),str(self.other["id"])
+        ids=[]
+        for index in range(11):
+            ids.append(self.imports.create(owner,"text",f"Task {index}","test.txt",f"page-{index}")["task"]["id"])
+        foreign=self.imports.create(other,"text","Other","test.txt","other-failed")["task"]["id"]
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE workspace_import_tasks SET status='failed' WHERE id=ANY(%s)",(ids[:4]+[foreign],))
+                cursor.execute("UPDATE workspace_import_tasks SET status='running' WHERE id=%s",(ids[4],))
+                cursor.execute("UPDATE workspace_import_tasks SET status='cancelled' WHERE id=%s",(ids[5],))
+        first=self.imports.list(owner,8,1);second=self.imports.list(owner,8,2)
+        self.assertEqual(first["total"],11);self.assertEqual(first["failedCount"],4);self.assertEqual(first["invalidCount"],5)
+        self.assertEqual(len(first["tasks"]),8);self.assertEqual(len(second["tasks"]),3)
+        self.assertFalse({t["id"] for t in first["tasks"]}&{t["id"] for t in second["tasks"]})
+        self.assertEqual(self.imports.delete_invalid(owner)["deletedCount"],5)
+        self.assertEqual(self.imports.delete_invalid(owner)["deletedCount"],0)
+        self.assertEqual(self.imports.list(owner)["total"],6)
+        self.assertEqual(self.imports.list(other)["failedCount"],1)
+        remaining=self.imports.list(owner)
+        self.assertEqual(remaining["invalidCount"],0)
+        self.assertEqual({t["id"] for t in remaining["tasks"]},set(ids[4:])- {ids[5]})
+        cancelled=self.imports.create(owner,"text","Cancelled only","cancel.txt","cancel-only")["task"]["id"]
+        self.imports.cancel(owner,cancelled)
+        self.assertEqual(self.imports.list(owner)["failedCount"],0)
+        self.assertEqual(self.imports.list(owner)["invalidCount"],1)
+        self.assertEqual(self.imports.delete_invalid(owner)["deletedCount"],1)
+        self.assertEqual(self.imports.list(owner,8,3)["tasks"],[])
+        with self.assertRaises(SaaSError):self.imports.list(owner,"invalid",1)
 
     def test_http_text_upload_complete_and_cancel(self):
         with socket.socket() as probe:probe.bind(("127.0.0.1",0));port=probe.getsockname()[1]
@@ -230,6 +343,37 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
             source=b"HTTP first. HTTP second?";connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("POST",f"/api/workspace/imports/{task_id}/upload",source,{"Content-Type":"text/plain","Content-Length":str(len(source)),"X-Upload-Filename":"http.txt","Cookie":cookies,"X-CSRF-Token":csrf});response=connection.getresponse();self.assertEqual(response.status,200);response.read();connection.close();connection=None
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("POST",f"/api/workspace/imports/{task_id}/complete",json.dumps({}),{"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf});response=connection.getresponse();completed=json.loads(response.read());self.assertEqual(response.status,200);self.assertEqual(completed["task"]["status"],"complete");connection.close();connection=None
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("GET","/api/workspace/imports",headers={"Cookie":cookies});response=connection.getresponse();tasks=json.loads(response.read());self.assertEqual(response.status,200);self.assertEqual(tasks["tasks"][0]["id"],task_id);connection.close();connection=None
+            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("GET","/api/workspace/imports?page=2&limit=1",headers={"Cookie":cookies});response=connection.getresponse();page=json.loads(response.read());self.assertEqual(response.status,200);self.assertEqual(page["total"],1);self.assertEqual(page["tasks"],[]);connection.close();connection=None
+            for headers,expected in [({},401),({"Cookie":cookies},403),({"Cookie":cookies,"X-CSRF-Token":csrf},200)]:
+                connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("POST","/api/workspace/imports/delete-invalid","{}",{"Content-Type":"application/json",**headers});response=connection.getresponse();data=json.loads(response.read());self.assertEqual(response.status,expected,data);connection.close();connection=None
+            def request(method,path,body=None,headers=None):
+                client=http.client.HTTPConnection("127.0.0.1",port,timeout=10)
+                try:
+                    client.request(method,path,body,headers or {})
+                    response=client.getresponse();return response.status,json.loads(response.read()),response.getheaders()
+                finally:client.close()
+            self.assertEqual(request("GET","/api/admin/content-imports")[0],401)
+            self.assertEqual(request("GET","/api/admin/content-imports",headers={"Cookie":cookies})[0],403)
+            self.assertEqual(request("GET","/api/admin/media-assets",headers={"Cookie":cookies})[0],403)
+            self.assertEqual(request("DELETE",f"/api/media/{completed['task']['sourceAssetId']}",headers={"Cookie":cookies,"X-CSRF-Token":csrf})[0],409)
+            status,_,headers=request("POST","/api/auth/login",json.dumps({"email":"admin@local.test","password":"phase8 admin password"}),{"Content-Type":"application/json","X-Device-Id":"phase8-admin-http"})
+            self.assertEqual(status,200)
+            cookies="; ".join(value.split(";",1)[0] for name,value in headers if name.lower()=="set-cookie")
+            csrf=next(value.split("=",1)[1] for value in cookies.split("; ") if value.startswith("shiyue_csrf="))
+            admin_headers={"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf}
+            self.assertEqual(request("POST","/api/admin/content-imports","{}",{"Content-Type":"application/json","Cookie":cookies})[0],403)
+            status,created,_=request("POST","/api/admin/content-imports",json.dumps({"kind":"text","title":"Official HTTP","filename":"official.txt","idempotencyKey":"http-official"}),admin_headers)
+            self.assertEqual(status,201,created);official_id=created["task"]["id"]
+            status,_,_=request("POST",f"/api/admin/content-imports/{official_id}/upload",b"Official upload.",{**admin_headers,"Content-Type":"text/plain","X-Upload-Filename":"official.txt"})
+            self.assertEqual(status,200)
+            status,done,_=request("POST",f"/api/admin/content-imports/{official_id}/complete","{}",admin_headers)
+            self.assertEqual(status,200,done);self.assertEqual(done["task"]["status"],"complete")
+            self.assertEqual(request("GET","/api/admin/content-imports",headers=admin_headers)[1]["total"],1)
+            self.assertEqual(request("GET","/api/workspace/imports",headers=admin_headers)[1]["total"],0)
+            self.assertEqual(len(request("GET","/api/admin/catalog/sources",headers=admin_headers)[1]["sources"]),1)
+            status,summary,_=request("GET","/api/admin/media-assets",headers=admin_headers)
+            self.assertEqual(status,200);self.assertEqual(len(summary["users"]),2)
+            self.assertEqual(request("POST","/api/admin/catalog/delete",json.dumps({"sourceBookId":done["task"]["outputBookId"],"confirmTitle":"Official HTTP"}),admin_headers)[0],200)
         finally:
             if connection:connection.close()
             process.terminate()

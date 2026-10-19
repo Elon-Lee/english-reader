@@ -51,11 +51,14 @@ class CatalogService:
         return {row["id"]: {"inLibrary": bool(row["in_library"])} for row in self.accounts._many(cursor)}
 
     def _book(self, row: dict[str, Any], tags: list[dict[str, str]], state: dict[str, bool] | None = None, detail: bool = False) -> dict[str, Any]:
+        cover = (row.get("source_cover") or row["cover_url"]) if row["resource_type"] in {"video", "youtube"} else row["cover_url"]
+        if str(cover or "").startswith("/api/media/"):
+            cover += ("&" if "?" in cover else "?") + "trialBook=" + row["id"]
         result = {
             "id": row["id"], "title": row["title"], "englishTitle": row["english_title"], "author": row["author"],
             "series": {"id": row.get("series_id"), "slug": row.get("series_slug", ""), "title": row.get("series_title", "")},
             "level": row["level"], "resourceType": row["resource_type"], "estimatedMinutes": int(row["estimated_minutes"]),
-            "sentenceCount": int(row["sentence_count"]), "wordCount": int(row["word_count"]), "coverUrl": row["cover_url"],
+            "sentenceCount": int(row["sentence_count"]), "wordCount": int(row["word_count"]), "coverUrl": cover,
             "tags": tags, "featuredRank": int(row["featured_rank"]), "publishedAt": timestamp(row.get("published_at")),
             "favoriteCount": int(row.get("favorite_count", 0) or 0), "readingCount": int(row.get("reader_count", 0) or 0),
             "inLibrary": bool((state or {}).get("inLibrary")), "unlocked": bool((state or {}).get("inLibrary")),
@@ -76,7 +79,7 @@ class CatalogService:
         limit = max(1, min(100, int(limit or 60)))
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(f"""SELECT cb.*,cs.slug AS series_slug,cs.title AS series_title,
+                cursor.execute(f"""SELECT cb.*,(SELECT COALESCE(NULLIF(src.cover_url,''),src.data_json->>'cover') FROM content_books src WHERE src.id=cb.source_content_book_id) AS source_cover,cs.slug AS series_slug,cs.title AS series_title,
                 (SELECT COUNT(*) FROM user_library ul WHERE ul.catalog_book_id=cb.id) AS favorite_count,
                 (SELECT COUNT(DISTINCT wp.user_id) FROM workspace_progress wp WHERE wp.content_book_id=cb.source_content_book_id) AS reader_count
                 FROM catalog_books cb
@@ -104,7 +107,7 @@ class CatalogService:
     def detail(self, catalog_book_id: str, user_id: str | None = None) -> dict[str, Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("""SELECT cb.*,cs.slug AS series_slug,cs.title AS series_title,
+                cursor.execute("""SELECT cb.*,(SELECT COALESCE(NULLIF(src.cover_url,''),src.data_json->>'cover') FROM content_books src WHERE src.id=cb.source_content_book_id) AS source_cover,cs.slug AS series_slug,cs.title AS series_title,
                 (SELECT COUNT(*) FROM user_library ul WHERE ul.catalog_book_id=cb.id) AS favorite_count,
                 (SELECT COUNT(DISTINCT wp.user_id) FROM workspace_progress wp WHERE wp.content_book_id=cb.source_content_book_id) AS reader_count
                 FROM catalog_books cb LEFT JOIN catalog_series cs ON cs.id=cb.series_id
@@ -116,7 +119,7 @@ class CatalogService:
     def library(self, user_id: str) -> dict[str, Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("""SELECT cb.*,cs.slug AS series_slug,cs.title AS series_title,ul.shelf_state,ul.added_at,
+                cursor.execute("""SELECT cb.*,(SELECT COALESCE(NULLIF(src.cover_url,''),src.data_json->>'cover') FROM content_books src WHERE src.id=cb.source_content_book_id) AS source_cover,cs.slug AS series_slug,cs.title AS series_title,ul.shelf_state,ul.added_at,
                 TRUE AS unlocked
                 FROM user_library ul JOIN catalog_books cb ON cb.id=ul.catalog_book_id LEFT JOIN catalog_series cs ON cs.id=cb.series_id
                 WHERE ul.user_id=%s ORDER BY ul.added_at DESC""",(user_id,))
@@ -212,6 +215,8 @@ class CatalogService:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT * FROM content_books WHERE id=%s FOR UPDATE",(source_book_id,));source=self.accounts._one(cursor)
                 if not source:raise SaaSError("source_book_not_found","原始内容不存在。",404)
+                cursor.execute("SELECT 1 FROM workspace_import_tasks WHERE output_book_id=%s AND COALESCE(metadata_json->>'officialImport','false')<>'true'",(source_book_id,))
+                if cursor.fetchone():raise SaaSError("private_content","私人导入读物不能在内容管理中发布。",409)
                 data=as_json(source["data_json"]);sentences=data.get("sentences",[]) if isinstance(data.get("sentences",[]),list) else []
                 series_title=str(updates.get("seriesTitle",source.get("series","") or "未分组")).strip() or "未分组";slug=slugify(series_title)
                 cursor.execute("SELECT id FROM catalog_series WHERE slug=%s FOR UPDATE",(slug,));series=self.accounts._one(cursor)
@@ -234,7 +239,7 @@ class CatalogService:
                         tag_row={"id":new_id()};cursor.execute("INSERT INTO catalog_tags(id,slug,title) VALUES(%s,%s,%s)",(tag_row["id"],tag_slug,tag))
                     cursor.execute("INSERT INTO catalog_book_tags(catalog_book_id,tag_id) VALUES(%s,%s)",(book_id,tag_row["id"]))
                 self.memberships._audit(cursor,actor_id,actor_id,"catalog_review",{"sourceBookId":source_book_id,"catalogBookId":book_id,"rights":rights_status,"publication":publication_status})
-                cursor.execute("SELECT cb.*,cs.slug AS series_slug,cs.title AS series_title FROM catalog_books cb LEFT JOIN catalog_series cs ON cs.id=cb.series_id WHERE cb.id=%s",(book_id,));row=self.accounts._one(cursor)
+                cursor.execute("SELECT cb.*,(SELECT COALESCE(NULLIF(src.cover_url,''),src.data_json->>'cover') FROM content_books src WHERE src.id=cb.source_content_book_id) AS source_cover,cs.slug AS series_slug,cs.title AS series_title FROM catalog_books cb LEFT JOIN catalog_series cs ON cs.id=cb.series_id WHERE cb.id=%s",(book_id,));row=self.accounts._one(cursor)
                 return {"book":self._book(row,self._tags(cursor,[book_id]).get(book_id,[]),detail=True)}
 
     def review_sources(self)->dict[str,Any]:
@@ -243,8 +248,28 @@ class CatalogService:
                 cursor.execute("""SELECT cb.id AS source_book_id,cb.title,cb.english_title,cb.series,cb.level,cb.source_type,cb.cover_url,
                 cat.id AS catalog_book_id,cat.rights_status,cat.publication_status,cat.title AS catalog_title,
                 cat.english_title AS catalog_english_title,cat.level AS catalog_level,cat.author,cat.description,cat.featured_rank,
-                cs.title AS catalog_series FROM content_books cb LEFT JOIN catalog_books cat ON cat.source_content_book_id=cb.id
-                LEFT JOIN catalog_series cs ON cs.id=cat.series_id ORDER BY cb.updated_at DESC""")
+                cs.title AS catalog_series FROM content_books cb JOIN catalog_books cat ON cat.source_content_book_id=cb.id
+                LEFT JOIN catalog_series cs ON cs.id=cat.series_id
+                WHERE NOT EXISTS (SELECT 1 FROM workspace_import_tasks t WHERE t.output_book_id=cb.id AND COALESCE(t.metadata_json->>'officialImport','false')<>'true') ORDER BY cb.updated_at DESC""")
                 sources=self.accounts._many(cursor)
                 tags=self._tags(cursor,[row["catalog_book_id"] for row in sources if row["catalog_book_id"]])
                 return {"sources":[{"sourceBookId":row["source_book_id"],"title":row["catalog_title"] if row["catalog_book_id"] else row["title"],"englishTitle":row["catalog_english_title"] if row["catalog_book_id"] else row["english_title"],"series":row["catalog_series"] or row["series"],"level":row["catalog_level"] if row["catalog_book_id"] else row["level"],"author":row["author"] or "","description":row["description"] or "","featuredRank":int(row["featured_rank"] or 0),"tags":tags.get(row["catalog_book_id"],[]),"resourceType":row["source_type"],"coverUrl":row["cover_url"],"catalogBookId":row["catalog_book_id"],"rightsStatus":row["rights_status"] or "private","publicationStatus":row["publication_status"] or "draft"} for row in sources]}
+
+    def delete_book(self,actor_id:str,source_book_id:str,confirm_title:str)->dict[str,Any]:
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=%s AND r.name='admin'",(actor_id,))
+                if not cursor.fetchone():raise SaaSError("admin_required","仅管理员可以永久删除官方内容。",403)
+                cursor.execute("SELECT id,title FROM catalog_books WHERE source_content_book_id=%s FOR UPDATE",(source_book_id,));book=self.accounts._one(cursor)
+                if not book:raise SaaSError("catalog_book_not_found","官方内容不存在。",404)
+                if confirm_title!=book["title"]:raise SaaSError("book_title_mismatch","确认标题与读物标题不一致。",400)
+                cursor.execute("SELECT id FROM media_assets WHERE content_book_id=%s OR catalog_book_id=%s FOR UPDATE",(source_book_id,book["id"]));asset_ids=[row["id"] for row in self.accounts._many(cursor)]
+                cursor.execute("UPDATE media_assets SET status='deleted',deleted_at=NOW() WHERE (content_book_id=%s OR catalog_book_id=%s) AND status='active'",(source_book_id,book["id"]))
+                cursor.execute("UPDATE asset_variants SET deleted_at=NOW() WHERE asset_id IN (SELECT id FROM media_assets WHERE content_book_id=%s OR catalog_book_id=%s) AND deleted_at IS NULL",(source_book_id,book["id"]))
+                cursor.execute("DELETE FROM official_book_unlocks WHERE catalog_book_id=%s",(book["id"],))
+                cursor.execute("DELETE FROM catalog_books WHERE id=%s",(book["id"],))
+                cursor.execute("DELETE FROM content_books WHERE id=%s",(source_book_id,))
+                self.memberships._audit(cursor,actor_id,actor_id,"catalog_permanent_delete",{"sourceBookId":source_book_id,"title":book["title"]})
+        from saas_media import MediaService
+        cleanup=MediaService(self.accounts,self.memberships).remove_deleted_files(asset_ids)
+        return {"status":"deleted","bookId":source_book_id,**cleanup}

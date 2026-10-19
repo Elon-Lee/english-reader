@@ -22,7 +22,7 @@ TRIAL_CLIP_LOCK = threading.Lock()
 
 class MediaService:
     def __init__(self, accounts: SaaSService, memberships: MembershipService, media_root: Path | None = None):
-        root = media_root or Path(os.environ.get("MEDIA_ROOT", "") or accounts.environment.get("MEDIA_ROOT", "") or (accounts and Path(__file__).resolve().parents[1] / "books"))
+        root = media_root or Path(accounts.environment.get("MEDIA_ROOT", "") or os.environ.get("MEDIA_ROOT", "") or (accounts and Path(__file__).resolve().parents[1] / "books"))
         self.accounts, self.memberships, self.media_root = accounts, memberships, root.expanduser().resolve()
 
     def _safe_path(self, relative: Any) -> tuple[str, Path]:
@@ -61,7 +61,7 @@ class MediaService:
                     raise SaaSError("quota_exceeded","私人学习空间不足。",409,{"feature":"storage_bytes","plan":context["plan"]["id"],"used":used,"limit":limit,"resetAt":timestamp(context["period"]["ends_at"]),"recommendedPlan":self.memberships._recommended_plan(context["plan"]["id"])})
                 return {"used":used,"limit":limit,"available":max(0,limit-used)}
 
-    def register(self, actor_id: str, owner_id: str, scope: str, storage_path: str, kind: str = "media", content_type: str = "", catalog_book_id: str | None = None, content_book_id: str | None = None, variants: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    def register(self, actor_id: str, owner_id: str, scope: str, storage_path: str, kind: str = "media", content_type: str = "", catalog_book_id: str | None = None, content_book_id: str | None = None, variants: list[dict[str, Any]] | None = None, *, allow_staging: bool = False) -> dict[str, Any]:
         if scope not in {"official","private"}:raise SaaSError("invalid_media_scope","媒体范围无效。",400)
         primary=self._file_record(storage_path,content_type);variants=variants or []
         if not isinstance(variants,list):raise SaaSError("invalid_media_variant","媒体变体必须是数组。",400)
@@ -78,9 +78,12 @@ class MediaService:
                 cursor.execute("SELECT id FROM users WHERE id=%s FOR UPDATE",(owner_id,))
                 if not cursor.fetchone():raise SaaSError("user_not_found","媒体所有者不存在。",404)
                 if scope=="official":
-                    if not catalog_book_id:raise SaaSError("catalog_book_required","官方媒体必须关联官方读物。",400)
-                    cursor.execute("SELECT id FROM catalog_books WHERE id=%s FOR UPDATE",(catalog_book_id,))
-                    if not cursor.fetchone():raise SaaSError("catalog_book_not_found","官方读物不存在。",404)
+                    cursor.execute("SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=%s AND r.name='admin'",(actor_id,))
+                    if not cursor.fetchone():raise SaaSError("admin_required","官方媒体仅允许管理员登记。",403)
+                    if not catalog_book_id and not allow_staging:raise SaaSError("catalog_book_required","官方媒体必须关联官方读物。",400)
+                    if catalog_book_id:
+                        cursor.execute("SELECT id FROM catalog_books WHERE id=%s FOR UPDATE",(catalog_book_id,))
+                        if not cursor.fetchone():raise SaaSError("catalog_book_not_found","官方读物不存在。",404)
                 if scope=="private":
                     context=self.memberships._context(cursor,owner_id);limit=int(as_json(context["period"]["limits_json"]).get("storage_bytes",0));used=self._private_bytes(cursor,owner_id)
                     if used+total>limit:
@@ -100,7 +103,7 @@ class MediaService:
                 return {"id":asset_id,"scope":scope,"ownerId":owner_id,"storagePath":primary["storage_path"],"originalBytes":primary["byte_size"],"generatedBytes":generated,"totalBytes":total,"variants":[{"name":item["variant_name"],"bytes":item["byte_size"]} for item in parsed_variants]}
 
     def add_variants(self, actor_id: str, asset_id: str, variants: list[dict[str, Any]]) -> dict[str, Any]:
-        """Attach generated files to an existing private source asset.
+        """Attach generated files to an existing imported source asset.
 
         Import processors register the uploaded source immediately, then create
         derivatives outside a database transaction.  This method performs the
@@ -123,7 +126,10 @@ class MediaService:
                 cursor.execute("SELECT * FROM media_assets WHERE id=%s FOR UPDATE",(asset_id,));asset=self.accounts._one(cursor)
                 if not asset:raise SaaSError("media_not_found","媒体不存在。",404)
                 if asset["owner_id"]!=actor_id:raise SaaSError("media_access_denied","你无权修改该媒体。",403)
-                if asset["scope"]!="private" or asset["status"]!="active":raise SaaSError("media_not_active","媒体当前不能添加变体。",409)
+                if asset["status"]!="active":raise SaaSError("media_not_active","媒体当前不能添加变体。",409)
+                if asset["scope"]=="official":
+                    cursor.execute("SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=%s AND r.name='admin'",(actor_id,))
+                    if not cursor.fetchone():raise SaaSError("admin_required","官方媒体仅允许管理员修改。",403)
                 cursor.execute("SELECT * FROM asset_variants WHERE asset_id=%s AND variant_name=ANY(%s)",(asset_id,list(names)))
                 existing={row["variant_name"]:row for row in self.accounts._many(cursor)};pending=[]
                 for item in parsed:
@@ -136,14 +142,15 @@ class MediaService:
                 added=sum(item["byte_size"] for item in pending)
                 if added:
                     context=self.memberships._context(cursor,asset["owner_id"]);limit=int(as_json(context["period"]["limits_json"]).get("storage_bytes",0));used=self._private_bytes(cursor,asset["owner_id"])
-                    if used+added>limit:
+                    if asset["scope"]=="private" and used+added>limit:
                         raise SaaSError("quota_exceeded","私人学习空间不足。",409,{"feature":"storage_bytes","plan":context["plan"]["id"],"used":used,"limit":limit,"resetAt":timestamp(context["period"]["ends_at"]),"recommendedPlan":self.memberships._recommended_plan(context["plan"]["id"])})
                     for item in pending:
                         cursor.execute("INSERT INTO asset_variants(id,asset_id,variant_name,content_type,byte_size,sha256,storage_path) VALUES(%s,%s,%s,%s,%s,%s,%s)",(new_id(),asset_id,item["variant_name"],item["content_type"],item["byte_size"],item["sha256"],item["storage_path"]))
                     cursor.execute("UPDATE media_assets SET generated_bytes=generated_bytes+%s WHERE id=%s",(added,asset_id))
-                    cursor.execute("UPDATE asset_usage SET charged_bytes=charged_bytes+%s WHERE asset_id=%s AND user_id=%s",(added,asset_id,asset["owner_id"]))
-                    cursor.execute("""INSERT INTO usage_ledger(id,user_id,usage_period_id,feature,quantity,reason,idempotency_key,metadata_json)
-                    VALUES(%s,%s,%s,'storage_bytes',%s,'storage_settlement',%s,%s::jsonb)""",(new_id(),asset["owner_id"],context["period"]["id"],added,f"asset:{asset_id}:variants:"+",".join(sorted(item["variant_name"] for item in pending)),json.dumps({"assetId":asset_id,"bytes":added,"variants":[item["variant_name"] for item in pending]})))
+                    if asset["scope"]=="private":
+                        cursor.execute("UPDATE asset_usage SET charged_bytes=charged_bytes+%s WHERE asset_id=%s AND user_id=%s",(added,asset_id,asset["owner_id"]))
+                        cursor.execute("""INSERT INTO usage_ledger(id,user_id,usage_period_id,feature,quantity,reason,idempotency_key,metadata_json)
+                        VALUES(%s,%s,%s,'storage_bytes',%s,'storage_settlement',%s,%s::jsonb)""",(new_id(),asset["owner_id"],context["period"]["id"],added,f"asset:{asset_id}:variants:"+",".join(sorted(item["variant_name"] for item in pending)),json.dumps({"assetId":asset_id,"bytes":added,"variants":[item["variant_name"] for item in pending]})))
                 cursor.execute("SELECT generated_bytes FROM media_assets WHERE id=%s",(asset_id,));generated=int((self.accounts._one(cursor)or{"generated_bytes":0})["generated_bytes"])
                 return {"id":asset_id,"addedBytes":added,"generatedBytes":generated,"variants":[{"name":item["variant_name"],"bytes":item["byte_size"]} for item in parsed]}
 
@@ -237,6 +244,27 @@ class MediaService:
                 cursor.execute(f"SELECT COUNT(*) AS total FROM media_assets {where}",values);total=int((self.accounts._one(cursor)or{"total":0})["total"]);page_size=max(1,min(100,int(limit)));start=max(0,int(offset));cursor.execute(f"SELECT * FROM media_assets {where} ORDER BY created_at DESC LIMIT %s OFFSET %s",(*values,page_size,start))
                 return {"assets":[{"id":r["id"],"ownerId":r["owner_id"],"scope":r["scope"],"kind":r["kind"],"contentType":r["content_type"],"originalBytes":int(r["original_bytes"]),"generatedBytes":int(r["generated_bytes"]),"storagePath":r["storage_path"],"catalogBookId":r["catalog_book_id"],"status":r["status"],"createdAt":timestamp(r["created_at"])} for r in self.accounts._many(cursor)],"total":total,"limit":page_size,"offset":start}
 
+    def user_storage(self,owner_id:str="",limit:Any=20,offset:Any=0)->dict[str,Any]:
+        page_size=max(1,min(100,int(limit)));start=max(0,int(offset))
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                if owner_id:
+                    cursor.execute("SELECT COUNT(*) AS total FROM media_assets WHERE owner_id=%s AND status='active' AND content_type LIKE 'video/%%'",(owner_id,));total=int(self.accounts._one(cursor)["total"])
+                    cursor.execute("""SELECT ma.*,cb.title,cb.source_path FROM media_assets ma LEFT JOIN content_books cb ON cb.id=ma.content_book_id
+                    WHERE ma.owner_id=%s AND ma.status='active' AND ma.content_type LIKE 'video/%%' ORDER BY ma.created_at DESC,ma.id LIMIT %s OFFSET %s""",(owner_id,page_size,start));rows=self.accounts._many(cursor);videos=[]
+                    for row in rows:
+                        cursor.execute("SELECT variant_name,storage_path,byte_size FROM asset_variants WHERE asset_id=%s AND deleted_at IS NULL ORDER BY variant_name",(row["id"],))
+                        videos.append({"id":row["id"],"bookId":row["content_book_id"],"title":row["title"] or row["storage_path"].rsplit('/',1)[-1],"scope":row["scope"],"originalBytes":int(row["original_bytes"]),"generatedBytes":int(row["generated_bytes"]),"storagePath":row["storage_path"],"contentPath":row["source_path"] or "","variants":[{"name":v["variant_name"],"storagePath":v["storage_path"],"bytes":int(v["byte_size"])} for v in self.accounts._many(cursor)]})
+                    return {"videos":videos,"total":total}
+                cursor.execute("SELECT COUNT(DISTINCT owner_id) AS total FROM media_assets WHERE status='active'");total=int(self.accounts._one(cursor)["total"])
+                cursor.execute("""SELECT u.id,u.email,u.display_name,SUM(ma.original_bytes+ma.generated_bytes) AS total_bytes,
+                COALESCE(SUM(ma.original_bytes+ma.generated_bytes) FILTER (WHERE ma.scope='private'),0) AS private_bytes,
+                COALESCE(SUM(ma.original_bytes+ma.generated_bytes) FILTER (WHERE ma.scope='official'),0) AS official_bytes,
+                COUNT(*) FILTER (WHERE ma.content_type LIKE 'video/%%') AS video_count
+                FROM users u JOIN media_assets ma ON ma.owner_id=u.id AND ma.status='active'
+                GROUP BY u.id ORDER BY total_bytes DESC,u.id LIMIT %s OFFSET %s""",(page_size,start))
+                return {"users":[{"id":r["id"],"email":r["email"],"displayName":r["display_name"],"totalBytes":int(r["total_bytes"]),"privateBytes":int(r["private_bytes"]),"officialBytes":int(r["official_bytes"]),"videoCount":int(r["video_count"])} for r in self.accounts._many(cursor)],"total":total}
+
     def delete(self,actor_id:str,asset_id:str,is_admin:bool=False)->dict[str,Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
@@ -256,6 +284,27 @@ class MediaService:
                     VALUES(%s,%s,%s,'storage_bytes',%s,'storage_settlement',%s,%s::jsonb) ON CONFLICT DO NOTHING""",(new_id(),asset["owner_id"],context["period"]["id"],-total,f"asset:{asset_id}:release",json.dumps({"assetId":asset_id,"bytes":total})))
                 cursor.execute("INSERT INTO security_events(id,user_id,event_type,metadata_json) VALUES(%s,%s,'media_deleted',%s::jsonb)",(new_id(),asset["owner_id"],json.dumps({"assetId":asset_id,"actorId":actor_id})))
                 return {"id":asset_id,"status":"deleted","idempotent":False,"purgePending":True}
+
+    def remove_deleted_files(self,asset_ids:list[str])->dict[str,Any]:
+        """Remove only files belonging to the explicitly deleted books."""
+        removed=0;pending=[]
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT id,storage_path FROM media_assets WHERE id=ANY(%s) AND status='deleted' FOR UPDATE",(asset_ids,))
+                assets=self.accounts._many(cursor)
+                paths={row["storage_path"] for row in assets}
+                cursor.execute("SELECT storage_path FROM asset_variants WHERE asset_id=ANY(%s)",([row["id"] for row in assets],))
+                paths.update(row["storage_path"] for row in self.accounts._many(cursor))
+                for relative in paths:
+                    cursor.execute("""SELECT 1 FROM media_assets WHERE storage_path=%s AND status='active'
+                    UNION ALL SELECT 1 FROM asset_variants av JOIN media_assets ma ON ma.id=av.asset_id
+                    WHERE av.storage_path=%s AND av.deleted_at IS NULL AND ma.status='active' LIMIT 1""",(relative,relative))
+                    if cursor.fetchone():continue
+                    try:
+                        _,path=self._safe_path(relative)
+                        if path.is_file():path.unlink();removed+=1
+                    except (OSError,SaaSError):pending.append(relative)
+        return {"removedFiles":removed,"pendingFiles":len(pending)}
 
     def purge_deleted(self,trash_root:Path,dry_run:bool=True)->dict[str,Any]:
         trash_root=trash_root.resolve();trash_root.mkdir(parents=True,exist_ok=True);moved=[]

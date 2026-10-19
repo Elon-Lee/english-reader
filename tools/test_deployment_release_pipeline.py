@@ -56,6 +56,7 @@ class DeploymentReleasePipelineTests(unittest.TestCase):
         target={"remote_root":"/srv/shiyue","service_port":8765,"install_recording":True,"use_https":False}
         command=manager.saas_app_run_command(target,"/srv/shiyue/current")
         self.assertIn("SHIYUE_RUNTIME_MODE=saas",command)
+        self.assertIn("SHIYUE_DEPLOYMENT_MODE=remote",command)
         self.assertIn("/current/reader:/app/reader:ro",command)
         self.assertIn("saas.env",command)
         self.assertIn("shiyue-saas-runtime",command)

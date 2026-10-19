@@ -1,20 +1,24 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'node:path'
-
-const buildVersion = process.env.SHIYUE_BUILD_VERSION || Date.now().toString(36)
+import { createHash } from 'node:crypto'
 
 export default defineConfig({
   root: resolve(process.cwd(), 'frontend'),
-  plugins: [
-    react(),
-    {
-      name: 'shiyue-entry-cache-version',
-      transformIndexHtml(html) {
-        return html.replace(/(\/assets\/(?:index\.js|index\.css))(?=["'])/g, `$1?v=${buildVersion}`)
-      },
+  plugins: [react(), {
+    name: 'shiyue-entry-cache-version',
+    enforce: 'post',
+    generateBundle(_, bundle) {
+      const entry = bundle['index.html']
+      if (!entry) return
+      entry.source = String(entry.source).replace(/(\/assets\/(?:index\.js|index\.css))(?=["'])/g, (url) => {
+        const asset = bundle[url.slice(1)]
+        if (!asset) return url
+        const version = createHash('sha256').update(asset.code ?? asset.source).digest('hex').slice(0, 12)
+        return `${url}?v=${version}`
+      })
     },
-  ],
+  }],
   base: '/',
   server: {
     host: '127.0.0.1',

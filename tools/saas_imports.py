@@ -32,8 +32,9 @@ UPLOAD_LIMITS={"text":20*1024*1024,"document":100*1024*1024,"mp3":2*1024*1024*10
 
 
 class WorkspaceImportService:
-    def __init__(self, accounts:SaaSService,memberships:MembershipService,media:MediaService,pdf_ocr:Path|None=None,whisper_cli:Path|None=None,whisper_model:Path|None=None,audio_duration=None,ffmpeg:Path|None=None,yt_dlp:Path|None=None,node:Path|None=None):
+    def __init__(self, accounts:SaaSService,memberships:MembershipService,media:MediaService,pdf_ocr:Path|None=None,whisper_cli:Path|None=None,whisper_model:Path|None=None,audio_duration=None,ffmpeg:Path|None=None,yt_dlp:Path|None=None,node:Path|None=None,official:bool=False):
         self.accounts,self.memberships,self.media=accounts,memberships,media
+        self.official=official
         self.pdf_ocr=(pdf_ocr or Path(os.environ.get("SHIYUE_PDF_OCR",str(ROOT/".local/bin/pdf_ocr")))).expanduser()
         self.whisper_cli=(whisper_cli or Path(os.environ.get("SHIYUE_WHISPER_CLI",str(ROOT/"tools/vendor/whisper.cpp/build/bin/whisper-cli")))).expanduser()
         self.whisper_model=(whisper_model or Path(os.environ.get("SHIYUE_WHISPER_MODEL",str(ROOT/"tools/vendor/whisper.cpp/models/ggml-base.en.bin")))).expanduser()
@@ -45,12 +46,15 @@ class WorkspaceImportService:
     def _user(self,cursor:Any,user_id:str)->dict[str,Any]:
         cursor.execute("SELECT id,status FROM users WHERE id=%s FOR UPDATE",(user_id,));user=self.accounts._one(cursor)
         if not user or user["status"]!="active":raise SaaSError("account_unavailable","账号不可用。",403)
+        if self.official:
+            cursor.execute("SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=%s AND r.name='admin'",(user_id,))
+            if not cursor.fetchone():raise SaaSError("admin_required","官方内容导入仅允许管理员执行。",403)
         return user
 
     def _task(self,cursor:Any,user_id:str,task_id:str,lock:bool=True)->dict[str,Any]:
         if lock:self._user(cursor,user_id)
         cursor.execute(f"SELECT * FROM workspace_import_tasks WHERE id=%s AND user_id=%s {'FOR UPDATE' if lock else ''}",(task_id,user_id));task=self.accounts._one(cursor)
-        if not task:raise SaaSError("import_task_not_found","导入任务不存在或你无权访问。",404)
+        if not task or bool(as_json(task["metadata_json"]).get("officialImport"))!=self.official:raise SaaSError("import_task_not_found","导入任务不存在或你无权访问。",404)
         return task
 
     @staticmethod
@@ -58,6 +62,7 @@ class WorkspaceImportService:
         return {"id":task["id"],"kind":task["kind"],"status":task["status"],"title":task["title"],"originalFilename":task["original_filename"],"sourceUrl":task["source_url"],"sourceAssetId":task["source_asset_id"],"outputBookId":task["output_book_id"],"planVersion":task["plan_version_id"],"progress":int(task["progress"]),"step":task["step"],"error":task["error"],"createdAt":timestamp(task["created_at"]),"updatedAt":timestamp(task["updated_at"]),"completedAt":timestamp(task["completed_at"])}
 
     def create(self,user_id:str,kind:str,title:str,filename:str,idempotency_key:str,source_url:str="",metadata:dict[str,Any]|None=None)->dict[str,Any]:
+        metadata={**(metadata or {}),"officialImport":self.official}
         kind=str(kind or "").strip().casefold();key=str(idempotency_key or "").strip();filename=Path(str(filename or "")).name
         if kind not in {"text","document","mp3","video","youtube"}:raise SaaSError("invalid_import_kind","不支持的导入类型。",400)
         if not key or len(key)>255:raise SaaSError("invalid_idempotency_key","操作标识无效。",400)
@@ -70,7 +75,9 @@ class WorkspaceImportService:
             with self.accounts.transaction() as connection:
                 with connection.cursor() as cursor:
                     self._user(cursor,user_id);cursor.execute("SELECT * FROM workspace_import_tasks WHERE user_id=%s AND idempotency_key=%s FOR UPDATE",(user_id,key));existing=self.accounts._one(cursor)
-                    if existing:return {"task":self._public(existing),"idempotent":True}
+                    if existing:
+                        if bool(as_json(existing["metadata_json"]).get("officialImport"))!=self.official:raise SaaSError("import_source_conflict","操作标识已用于其他导入。",409)
+                        return {"task":self._public(existing),"idempotent":True}
                     context=self.memberships._context(cursor,user_id)
                     task_id=new_id();status="queued" if kind=="youtube" else "uploading";step="等待上传源文件" if status=="uploading" else "等待 PostgreSQL 原生处理器"
                     cursor.execute("""INSERT INTO workspace_import_tasks(id,user_id,workspace_id,kind,status,title,original_filename,source_url,quota_reservation_id,plan_version_id,step,metadata_json,idempotency_key)
@@ -111,11 +118,11 @@ class WorkspaceImportService:
                 # re-checks private storage in its own transaction.
                 safe_name=re.sub(r"[^A-Za-z0-9._-]+","-",Path(filename or task["original_filename"] or "source").name).strip("-") or "source"
                 relative=f"private-uploads/{user_id}/{task_id}/{new_id()}/{safe_name}"
-        self.media.ensure_private_capacity(user_id,len(data))
+        if not self.official:self.media.ensure_private_capacity(user_id,len(data))
         _,target=self.media._safe_path(relative);target.parent.mkdir(parents=True,exist_ok=True)
         target.write_bytes(data)
         try:
-            asset=self.media.register(user_id,user_id,"private",relative,"import-source",content_type)
+            asset=self.media.register(user_id,user_id,"official" if self.official else "private",relative,"import-source",content_type,allow_staging=self.official)
         except Exception:
             try:target.unlink(missing_ok=True)
             except OSError:pass
@@ -137,7 +144,7 @@ class WorkspaceImportService:
     def _source_path(self,cursor:Any,user_id:str,task:dict[str,Any])->Path:
         asset_id=task.get("source_asset_id")
         if not asset_id:raise SaaSError("import_source_missing","导入任务尚未上传源文件。",409)
-        cursor.execute("SELECT * FROM media_assets WHERE id=%s AND owner_id=%s AND scope='private' AND status='active' FOR UPDATE",(asset_id,user_id));asset=self.accounts._one(cursor)
+        cursor.execute("SELECT * FROM media_assets WHERE id=%s AND owner_id=%s AND scope=%s AND status='active' FOR UPDATE",(asset_id,user_id,"official" if self.official else "private"));asset=self.accounts._one(cursor)
         if not asset:raise SaaSError("import_source_missing","导入源文件不存在。",404)
         _,path=self.media._safe_path(asset["storage_path"])
         if not path.is_file():raise SaaSError("import_source_missing","导入源文件在存储中不存在。",404)
@@ -206,7 +213,7 @@ class WorkspaceImportService:
                     [ffmpeg,"-y","-v","error","-i",str(source),"-vn","-c:a","aac","-b:a","128k",str(audio_path)],
                     [ffmpeg,"-y","-v","error","-i",str(source),"-vn","-ar","16000","-ac","1","-c:a","pcm_s16le",str(whisper_audio)],
                     [ffmpeg,"-y","-v","error","-ss","0","-i",str(source),"-frames:v","1","-vf","scale=960:-2",str(cover_path)],
-                    [ffmpeg,"-y","-v","error","-i",str(source),"-map","0:v:0","-map","0:a:0?","-vf","scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2","-c:v","libx264","-preset","veryfast","-crf","27","-maxrate","380k","-bufsize","760k","-g","50","-keyint_min","50","-pix_fmt","yuv420p","-threads","2","-c:a","aac","-b:a","96k","-ac","2","-movflags","+faststart",str(low_video_path)],
+                    [ffmpeg,"-y","-v","error","-i",str(source),"-map","0:v:0","-map","0:a:0?","-vf","scale=w='min(426,iw)':h='min(240,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2","-c:v","libx264","-preset","veryfast","-crf","27","-maxrate","380k","-bufsize","760k","-g","50","-keyint_min","50","-pix_fmt","yuv420p","-threads","2","-c:a","aac","-b:a","96k","-ac","2","-movflags","+faststart",str(low_video_path)],
                 ]
                 steps=("提取音频", "准备语音转写", "生成视频封面", "生成流畅视频")
                 for index,command in enumerate(commands):
@@ -307,7 +314,7 @@ class WorkspaceImportService:
         with tempfile.TemporaryDirectory(prefix="shiyue-pg-import-youtube-") as temporary:
             stage=Path(temporary);english_track=select_native_english_track(info);chinese_track=select_chinese_track(info)
             english=self._youtube_caption(url,english_track,"english",stage);chinese=self._youtube_caption(url,chinese_track,"chinese",stage)
-            self._run_ytdlp([self.yt_dlp,"--js-runtimes",f"node:{self.node}","--no-playlist","--newline","--retries","5","--fragment-retries","5","-f","bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/bv*[height<=720]+ba/b[height<=720]/best[height<=720]","--merge-output-format","mp4","-o",stage/"source.%(ext)s",url],3600)
+            self._run_ytdlp([self.yt_dlp,"--js-runtimes",f"node:{self.node}","--no-playlist","--newline","--retries","5","--fragment-retries","5","-f","bv*[height<=480][ext=mp4]+ba[ext=m4a]/b[height<=480][ext=mp4]/bv*[height<=480]+ba/b[height<=480]/best[height<=480]","--merge-output-format","mp4","-o",stage/"source.%(ext)s",url],3600)
             source=next(iter(sorted(stage.glob("source.mp4"))+sorted(stage.glob("source.mkv"))+sorted(stage.glob("source.webm"))+sorted(stage.glob("source.mov"))),None)
             if not source:raise SaaSError("youtube_download_failed","下载完成但没有找到视频文件。",422)
             if source.suffix.casefold()!=".mp4":
@@ -317,12 +324,13 @@ class WorkspaceImportService:
                 source=converted
             if source.stat().st_size>UPLOAD_LIMITS["video"]:raise SaaSError("upload_too_large","YouTube 视频超过本地视频大小限制。",413,{"limit":UPLOAD_LIMITS["video"]})
             relative_dir=f"private-uploads/{user_id}/{task_id}";relative=f"{relative_dir}/source.mp4";_,target=self.media._safe_path(relative)
-            self.media.ensure_private_capacity(user_id,source.stat().st_size);target.parent.mkdir(parents=True,exist_ok=True);shutil.move(source,target)
+            if not self.official:self.media.ensure_private_capacity(user_id,source.stat().st_size)
+            target.parent.mkdir(parents=True,exist_ok=True);shutil.move(source,target)
             staged_captions=[]
             for caption,name,content_type in ((english,"subtitles-en","application/x-subrip"),(chinese,"subtitles-zh-CN","application/x-subrip")):
                 if not caption:continue
                 caption_target=target.parent/caption.name;shutil.move(caption,caption_target);staged_captions.append({"name":name,"storagePath":f"{relative_dir}/{caption_target.name}","contentType":content_type})
-        try:asset=self.media.register(user_id,user_id,"private",relative,"youtube","video/mp4")
+        try:asset=self.media.register(user_id,user_id,"official" if self.official else "private",relative,"youtube","video/mp4",allow_staging=self.official)
         except Exception:
             try:target.unlink(missing_ok=True)
             except OSError:pass
@@ -331,6 +339,7 @@ class WorkspaceImportService:
                 except (OSError,SaaSError):pass
             raise
         metadata={
+            "officialImport":self.official,
             "sourceUrl":url,"youtubeId":str(info.get("id","")or""),"channel":str(info.get("channel") or info.get("uploader") or ""),
             "title":str(info.get("title") or ""),"duration":float(info.get("duration",0)or 0),
             "youtubeSubtitleSource":english_track.get("source","") if english_track else "none","youtubeSubtitleTrack":english_track.get("code","") if english_track else "",
@@ -448,10 +457,17 @@ class WorkspaceImportService:
                     if not self.accounts._one(cursor):raise SaaSError("account_unavailable","账号不可用。",403)
                     context=self.memberships._context(cursor,user_id,lock_user=False)
                     media_kind="video" if source_type in {"video","youtube"} else "audio" if source_type=="audio" else ""
-                    self.memberships.assert_media_capacity(cursor,user_id,context,media_kind)
+                    if not self.official:self.memberships.assert_media_capacity(cursor,user_id,context,media_kind)
                     cursor.execute("""INSERT INTO content_books(id,owner_id,title,english_title,series,level,source_type,source_path,status,visibility,cover_url,page_base_url,audio_url,pdf_url,video_url,duration,alignment,data_json,quality_json,created_at,updated_at)
-                    VALUES(%s,%s,%s,%s,'私人导入','',%s,%s,'ready','private',%s,'',%s,'',%s,%s,%s,%s::jsonb,'{}'::jsonb,NOW(),NOW())""",(book_id,user_id,title,title,source_type,f"workspace/{user_id}/{task_id}",str(data.get("cover","")or""),str(data.get("audio","")or""),str(data.get("video","")or""),float(data.get("duration",0)or 0),str(data.get("alignment","")or""),json.dumps(data,ensure_ascii=False)))
+                    VALUES(%s,%s,%s,%s,%s,'',%s,%s,'ready','private',%s,'',%s,'',%s,%s,%s,%s::jsonb,'{}'::jsonb,NOW(),NOW())""",(book_id,user_id,title,title,str((data.get("youtube") or {}).get("channel") or "私人导入"),source_type,f"workspace/{user_id}/{task_id}",str(data.get("cover","")or""),str(data.get("audio","")or""),str(data.get("video","")or""),float(data.get("duration",0)or 0),str(data.get("alignment","")or""),json.dumps(data,ensure_ascii=False)))
                     cursor.execute("UPDATE media_assets SET content_book_id=%s,kind=%s WHERE id=%s",(book_id,source_type,work["source_asset_id"]))
+                    if self.official:
+                        catalog_id=new_id()
+                        cursor.execute("UPDATE content_books SET visibility='draft',series=CASE WHEN series='私人导入' THEN '官方导入' ELSE series END WHERE id=%s",(book_id,))
+                        cursor.execute("""INSERT INTO catalog_books(id,source_content_book_id,title,english_title,resource_type,rights_status,publication_status,created_by)
+                        VALUES(%s,%s,%s,%s,%s,'private','draft',%s)""",(catalog_id,book_id,title,title,source_type if source_type in {'audio','video','youtube'} else 'book',user_id))
+                        cursor.execute("UPDATE media_assets SET catalog_book_id=%s WHERE id=%s",(catalog_id,work["source_asset_id"]))
+                        self.memberships._audit(cursor,user_id,user_id,"catalog_import",{"sourceBookId":book_id,"catalogBookId":catalog_id})
                     cursor.execute("UPDATE workspace_import_tasks SET status='complete',output_book_id=%s,progress=100,step='导入完成',completed_at=NOW(),updated_at=NOW() WHERE id=%s",(book_id,task_id))
                     cursor.execute("SELECT * FROM workspace_import_tasks WHERE id=%s",(task_id,));completed=self.accounts._one(cursor)or{}
             reservation_id=completed.get("quota_reservation_id")
@@ -507,8 +523,22 @@ class WorkspaceImportService:
             except SaaSError:pass
         return {"task":self._public(cancelled),"idempotent":False}
 
-    def list(self,user_id:str,limit:Any=100)->dict[str,Any]:
+    def delete_invalid(self,user_id:str)->dict[str,Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                self._user(cursor,user_id);cursor.execute("SELECT * FROM workspace_import_tasks WHERE user_id=%s ORDER BY created_at DESC LIMIT %s",(user_id,max(1,min(200,int(limit)))))
-                return {"tasks":[self._public(row) for row in self.accounts._many(cursor)]}
+                self._user(cursor,user_id)
+                # Match retry/complete's user lock and recheck status under that lock.
+                cursor.execute("DELETE FROM workspace_import_tasks WHERE user_id=%s AND COALESCE(metadata_json->>'officialImport','false')=%s AND status IN ('failed','cancelled') RETURNING id",(user_id,str(self.official).lower()))
+                deleted=len(cursor.fetchall())
+                return {"deletedCount":deleted}
+
+    def list(self,user_id:str,limit:Any=100,page:Any=1)->dict[str,Any]:
+        try:limit=max(1,min(200,int(limit)));page=max(1,int(page))
+        except (TypeError,ValueError):raise SaaSError("invalid_pagination","分页参数无效。",400)
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                self._user(cursor,user_id)
+                cursor.execute("SELECT COUNT(*) AS total,COUNT(*) FILTER (WHERE status='failed') AS failed,COUNT(*) FILTER (WHERE status IN ('failed','cancelled')) AS invalid FROM workspace_import_tasks WHERE user_id=%s AND COALESCE(metadata_json->>'officialImport','false')=%s",(user_id,str(self.official).lower()))
+                counts=self.accounts._one(cursor)
+                cursor.execute("SELECT * FROM workspace_import_tasks WHERE user_id=%s AND COALESCE(metadata_json->>'officialImport','false')=%s ORDER BY created_at DESC,id DESC LIMIT %s OFFSET %s",(user_id,str(self.official).lower(),limit,(page-1)*limit))
+                return {"tasks":[self._public(row) for row in self.accounts._many(cursor)],"total":int(counts["total"]),"failedCount":int(counts["failed"]),"invalidCount":int(counts["invalid"]),"page":page,"pageSize":limit}

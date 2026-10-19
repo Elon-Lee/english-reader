@@ -4,7 +4,7 @@ from pathlib import Path
 
 import library_db
 from deployment import manager
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 class DeploymentNodeTests(unittest.TestCase):
     def setUp(self):
@@ -26,6 +26,114 @@ class DeploymentNodeTests(unittest.TestCase):
         job=manager.Job("connection_test",target["id"])
         self.assertEqual(manager.job_info(job.id)["target_id"],target["id"])
         self.assertEqual(manager.recent_jobs(target["id"],10)[0]["id"],job.id)
+
+    def test_delete_invalid_jobs_preserves_active_completed_and_logs(self):
+        jobs=[]
+        for status in ['failed','cancelled','queued','running','complete']:
+            job=manager.Job('connection_test',len(jobs)+1)
+            job.update(50,status,status)
+            jobs.append(job)
+        hidden=manager.Job('release_list',1);hidden.fail('hidden query failure')
+        for _ in range(21):manager.Job('connection_test',1).complete()
+        self.assertEqual(manager.invalid_job_count(),2)
+        self.assertTrue(all(row['status']=='complete' for row in manager.recent_jobs()))
+        audit=[]
+        result=manager.delete_invalid_jobs(audit=audit.append)
+        self.assertEqual(result['deletedCount'],2)
+        self.assertEqual(set(result['deletedIds']),{jobs[0].id,jobs[1].id})
+        self.assertEqual(audit,[result])
+        self.assertEqual(manager.invalid_job_count(),0)
+        for job in jobs[:2]:
+            self.assertIsNone(manager.job_info(job.id));self.assertTrue(job.log.exists())
+        for job in jobs[2:]+[hidden]:self.assertIsNotNone(manager.job_info(job.id))
+        self.assertEqual(manager.delete_invalid_jobs()['deletedCount'],0)
+
+    def test_delete_invalid_jobs_rolls_back_when_audit_fails(self):
+        job=manager.Job('connection_test',1);job.fail('test failure')
+        def failing_audit(result):raise RuntimeError('audit unavailable')
+        with self.assertRaises(RuntimeError):manager.delete_invalid_jobs(audit=failing_audit)
+        self.assertEqual(manager.invalid_job_count(),1)
+        self.assertEqual(manager.job_info(job.id)['status'],'failed')
+
+    def test_delete_invalid_jobs_route_requires_admin_session_and_csrf(self):
+        import reader_server as server
+        failed=manager.Job('connection_test',1);failed.fail('test failure')
+        handler=object.__new__(server.Handler)
+        handler.path='/api/deployment/jobs/delete-invalid'
+        handler.client_address=('127.0.0.1',12345)
+        handler.headers={}
+        handler.rate_limit=Mock(return_value=True)
+        handler.cookie_value=Mock(return_value='test-session')
+        handler.json_body=Mock(return_value={})
+        handler.reply=Mock()
+        with patch.object(server,'SAAS',spec=True) as accounts,patch.object(server,'ADMIN') as admin,patch.object(server,'RUNTIME_MODE','saas'),patch.object(server,'DEPLOYMENT_MODE','local'):
+            accounts.enabled=True
+            cases=[(None,False,401),({'id':'member','is_admin':False},False,403),({'id':'admin','is_admin':True},True,403)]
+            for session,bad_csrf,status in cases:
+                accounts.authenticate.return_value=session
+                accounts.assert_csrf.side_effect=server.SaaSError('csrf_failed','CSRF invalid',403) if bad_csrf else None
+                handler.do_POST()
+                self.assertEqual(handler.reply.call_args.args[1],status)
+                self.assertEqual(manager.invalid_job_count(),1)
+                admin.record_action.assert_not_called()
+            accounts.assert_csrf.side_effect=None
+            handler.do_POST()
+            self.assertEqual(handler.reply.call_args.args[0]['deletedCount'],1)
+            self.assertEqual(manager.invalid_job_count(),0)
+            admin.record_action.assert_called_once_with('admin','deployment_jobs_delete_invalid',payload={'deletedCount':1,'deletedIds':[failed.id]})
+
+    def test_platform_access_requires_local_mode_and_logged_in_admin(self):
+        import reader_server as server
+        from urllib.parse import urlsplit
+        handler=object.__new__(server.Handler)
+        handler.reply=Mock()
+        handler.client_address=('127.0.0.1',12345)
+        handler._saas_session={'id':'admin','is_admin':True}
+        with patch.object(server,'SAAS',spec=True) as accounts,patch.object(server,'ADMIN') as admin,patch.object(server,'RUNTIME_MODE','saas'):
+            accounts.enabled=True
+            with patch.object(server,'DEPLOYMENT_MODE','remote'):
+                self.assertFalse(handler.can_manage_platform())
+                self.assertFalse(handler.deployment_allowed())
+                handler.admin_get(urlsplit('/api/admin/platform-config'))
+                handler.admin_post('/api/admin/platform-config')
+                admin.platform_config.assert_not_called();admin.update_platform_config.assert_not_called()
+                self.assertEqual(handler.reply.call_args.args[1],403)
+            with patch.object(server,'DEPLOYMENT_MODE','local'):
+                self.assertTrue(handler.can_manage_platform());self.assertTrue(handler.deployment_allowed())
+                handler._saas_session={'id':'member','is_admin':False}
+                self.assertFalse(handler.can_manage_platform());self.assertFalse(handler.deployment_allowed())
+                handler._saas_session={'id':'admin','is_admin':True};handler.client_address=('192.0.2.1',12345)
+                self.assertFalse(handler.can_manage_platform());self.assertFalse(handler.deployment_allowed())
+                handler.client_address=('127.0.0.1',12345);accounts.enabled=False
+                self.assertFalse(handler.can_manage_platform());self.assertFalse(handler.deployment_allowed())
+
+    def test_retired_content_routes_return_404_without_creating_jobs(self):
+        import reader_server as server
+        handler=server.Handler.__new__(server.Handler)
+        handler.rate_limit=Mock(return_value=True)
+        handler.require_saas_user=Mock(return_value=True)
+        handler.require_csrf=Mock(return_value=True)
+        handler.deployment_allowed=Mock(return_value=True)
+        handler.json_body=Mock(return_value={'targetId':1,'releaseId':'content-20261012-120000-abcd'})
+        handler.reply=Mock();handler.send_error=Mock()
+        with patch.object(server,'SAAS',spec=True) as accounts,patch.object(manager,'run_task') as run_task:
+            accounts.enabled=True
+            handler.path='/api/deployment/content-releases?targetId=1'
+            handler.do_GET()
+            handler.send_error.assert_called_once_with(404)
+            handler.send_error.reset_mock()
+            handler.path='/api/deployment/content-rollback'
+            handler.do_POST()
+            handler.send_error.assert_called_once_with(404)
+            handler.reply.assert_not_called();run_task.assert_not_called()
+            handler.send_error.reset_mock()
+            handler.json_body.return_value={'targetId':1,'releaseId':'code-20261012-120000-abcd'}
+            handler.path='/api/deployment/rollback'
+            with patch.object(manager,'start_rollback',return_value=123) as rollback:
+                handler.do_POST()
+                rollback.assert_called_once_with(1,'code-20261012-120000-abcd')
+                handler.reply.assert_called_once_with({'jobId':123},202)
+                handler.send_error.assert_not_called()
 
     def test_uninstall_requires_exact_node_name_and_preserves_docker(self):
         target=manager.save_target({"name":"测试节点","host":"10.0.0.4","remoteRoot":"/srv/shiyue-d"})

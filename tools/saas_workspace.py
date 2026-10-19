@@ -21,12 +21,12 @@ class WorkspaceService:
         return user
 
     def _book(self,cursor:Any,user_id:str,book_id:str,lock:bool=False)->dict[str,Any]:
-        cursor.execute(f"SELECT * FROM content_books WHERE id=%s AND owner_id=%s AND visibility IN ('private','draft') {'FOR UPDATE' if lock else ''}",(book_id,user_id));book=self.accounts._one(cursor)
+        cursor.execute(f"SELECT * FROM content_books WHERE id=%s AND owner_id=%s AND visibility IN ('private','draft') AND NOT EXISTS (SELECT 1 FROM catalog_books official WHERE official.source_content_book_id=content_books.id) {'FOR UPDATE' if lock else ''}",(book_id,user_id));book=self.accounts._one(cursor)
         if not book:raise SaaSError("workspace_book_not_found","私人读物不存在或你无权访问。",404)
         return book
 
     def _learning_book(self,cursor:Any,user_id:str,book_id:str,lock:bool=False)->tuple[str,str]:
-        cursor.execute(f"SELECT id FROM content_books WHERE id=%s AND owner_id=%s AND visibility IN ('private','draft') {'FOR UPDATE' if lock else ''}",(book_id,user_id));private=self.accounts._one(cursor)
+        cursor.execute(f"SELECT id FROM content_books WHERE id=%s AND owner_id=%s AND visibility IN ('private','draft') AND NOT EXISTS (SELECT 1 FROM catalog_books official WHERE official.source_content_book_id=content_books.id) {'FOR UPDATE' if lock else ''}",(book_id,user_id));private=self.accounts._one(cursor)
         if private:return str(private["id"]),str(private["id"])
         cursor.execute("""SELECT cb.id AS catalog_id,cb.source_content_book_id FROM catalog_books cb
         JOIN user_library ou ON ou.catalog_book_id=cb.id AND ou.user_id=%s
@@ -49,11 +49,11 @@ class WorkspaceService:
                 self._user(cursor,user_id)
                 cursor.execute("""SELECT cb.*,wp.last_sentence_id,wp.reading_seconds,wp.completed_at FROM content_books cb
                 LEFT JOIN workspace_progress wp ON wp.content_book_id=cb.id AND wp.user_id=%s
-                WHERE cb.owner_id=%s AND cb.visibility IN ('private','draft') ORDER BY cb.updated_at DESC""",(user_id,user_id))
+                WHERE cb.owner_id=%s AND cb.visibility IN ('private','draft') AND NOT EXISTS (SELECT 1 FROM catalog_books official WHERE official.source_content_book_id=cb.id) ORDER BY cb.updated_at DESC""",(user_id,user_id))
                 books=[]
                 for row in self.accounts._many(cursor):
                     data=as_json(row["data_json"]);sentences=data.get("sentences",[]) if isinstance(data.get("sentences",[]),list) else []
-                    books.append({"id":row["id"],"title":row["title"],"englishTitle":row["english_title"],"series":row["series"],"level":row["level"],"resourceType":row["source_type"],"sentenceCount":len(sentences),"duration":float(row["duration"]),"updatedAt":timestamp(row["updated_at"]),"progress":{"lastSentenceId":row["last_sentence_id"] or "","readingSeconds":int(row["reading_seconds"] or 0),"completedAt":timestamp(row["completed_at"])},"mediaCount":len(self._asset_summaries(cursor,row["id"]) )})
+                    books.append({"id":row["id"],"title":row["title"],"englishTitle":row["english_title"],"series":row["series"],"coverUrl":row["cover_url"] or data.get("cover", ""),"level":row["level"],"resourceType":row["source_type"],"sentenceCount":len(sentences),"duration":float(row["duration"]),"updatedAt":timestamp(row["updated_at"]),"progress":{"lastSentenceId":row["last_sentence_id"] or "","readingSeconds":int(row["reading_seconds"] or 0),"completedAt":timestamp(row["completed_at"])},"mediaCount":len(self._asset_summaries(cursor,row["id"]) )})
                 return {"books":books}
 
     def delete_book(self,user_id:str,book_id:str,confirm_title:str="")->dict[str,Any]:
@@ -66,9 +66,15 @@ class WorkspaceService:
                 cursor.execute("SELECT id FROM catalog_books WHERE source_content_book_id=%s",(book_id,))
                 if cursor.fetchone():
                     raise SaaSError("book_is_catalog_source","该读物已作为官方书城内容发布，不能从私人工作区删除。",409)
+                cursor.execute("SELECT id FROM media_assets WHERE owner_id=%s AND content_book_id=%s FOR UPDATE",(user_id,book_id));asset_ids=[row["id"] for row in self.accounts._many(cursor)]
                 cursor.execute("UPDATE media_assets SET status='deleted',deleted_at=NOW() WHERE owner_id=%s AND content_book_id=%s AND status='active'",(user_id,book_id))
+                cursor.execute("UPDATE asset_variants SET deleted_at=NOW() WHERE asset_id=ANY(%s) AND deleted_at IS NULL",(asset_ids,))
                 cursor.execute("DELETE FROM content_books WHERE id=%s AND owner_id=%s",(book_id,user_id))
-                return {"status":"deleted","bookId":book_id,"title":title}
+                cursor.execute("INSERT INTO security_events(id,user_id,event_type,metadata_json) VALUES(%s,%s,'workspace_permanent_delete',%s::jsonb)",(new_id(),user_id,json.dumps({"bookId":book_id,"title":title})))
+        from saas_media import MediaService
+        from saas_membership import MembershipService
+        cleanup=MediaService(self.accounts,MembershipService(self.accounts)).remove_deleted_files(asset_ids)
+        return {"status":"deleted","bookId":book_id,"title":title,**cleanup}
 
     def reader(self,user_id:str,book_id:str)->dict[str,Any]:
         with self.accounts.transaction() as connection:
@@ -85,7 +91,7 @@ class WorkspaceService:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 self._user(cursor,user_id);values=[user_id,user_id,user_id,user_id];where="""WHERE cv.owner_id=%s AND
-                ((cb.owner_id=%s AND cb.visibility IN ('private','draft')) OR
+                ((cb.owner_id=%s AND cb.visibility IN ('private','draft') AND NOT EXISTS (SELECT 1 FROM catalog_books official WHERE official.source_content_book_id=cb.id)) OR
                 (ou.user_id=%s AND catalog.publication_status='published' AND catalog.rights_status IN ('public_domain','licensed')))"""
                 public_book_id="COALESCE(catalog.id,cv.book_id)"
                 if book_id:
@@ -98,7 +104,7 @@ class WorkspaceService:
     def annotations(self,user_id:str,book_id:str="")->dict[str,Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                self._user(cursor,user_id);values=[user_id,user_id];where="WHERE wa.owner_id=%s AND cb.owner_id=%s AND cb.visibility IN ('private','draft')"
+                self._user(cursor,user_id);values=[user_id,user_id];where="WHERE wa.owner_id=%s AND cb.owner_id=%s AND cb.visibility IN ('private','draft') AND NOT EXISTS (SELECT 1 FROM catalog_books official WHERE official.source_content_book_id=cb.id)"
                 if book_id:
                     self._book(cursor,user_id,book_id);where+=" AND wa.book_id=%s";values.append(book_id)
                 cursor.execute(f"SELECT wa.book_id,wa.sentence_id,wa.word_index,wa.payload FROM content_word_annotations wa JOIN content_books cb ON cb.id=wa.book_id {where} ORDER BY wa.book_id,wa.sentence_id,wa.word_index",values)

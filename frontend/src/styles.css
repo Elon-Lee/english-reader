@@ -109,3 +109,22 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
 .public-section.public-pricing{max-width:1440px;padding-inline:40px}.public-pricing .ant-col{display:flex}.public-price-card{display:flex;width:100%;flex-direction:column}.public-price-card>.ant-card-body{display:flex;flex:1}.public-price-card .ant-space-vertical{height:100%;align-items:stretch}.public-price-card .ant-space-item:last-child{margin-top:auto!important}
 .public-purchase-steps{display:grid;gap:10px;margin:18px 0;padding:16px;border:1px solid #e5ebe4;border-radius:14px;background:#f7faf6}.public-purchase-steps>div{display:flex;align-items:flex-start;gap:10px;color:#52645a;font-size:13px;line-height:1.55}.public-purchase-steps b{display:grid;width:22px;height:22px;flex:0 0 auto;place-items:center;border-radius:50%;color:#fff;background:#347657;font-size:12px}.public-redemption-panel{display:grid;gap:10px;margin-top:20px;padding-top:20px;border-top:1px solid #e5e9e4}.public-redemption-panel>.ant-typography{color:#173d2c}.public-redemption-panel .ant-alert{margin-top:2px}.public-redemption-panel .ant-input{height:42px;border-radius:10px}.public-redemption-panel>.ant-btn{margin-top:0}
 .public-purchase-modal .ant-modal-content{padding:28px;border:1px solid #e1e7e0;border-radius:16px;box-shadow:0 24px 70px #17392b24}.public-purchase-modal-content{display:grid;gap:14px}.public-purchase-modal-content>.ant-typography{margin:0}.public-purchase-modal-content>.public-plan-family{margin:0;color:#597365;font-size:11px}.public-purchase-modal-content h3{margin:0;color:#173d2c;font-size:24px;line-height:1.3}.public-purchase-modal-content .public-price{gap:9px}.public-purchase-modal-content .public-price b{font-size:36px}.public-purchase-modal-steps{display:grid;gap:7px;padding:12px 14px;border-radius:10px;background:#f3f7f2;color:#52645a;font-size:13px;line-height:1.5}.public-purchase-modal-content>.ant-btn{margin-top:2px}.public-purchase-modal-redeem{display:grid;gap:9px;padding-top:16px;border-top:1px solid #e5e9e4}.public-purchase-modal-redeem .ant-input{height:42px;border-radius:9px}.public-purchase-modal-redeem .ant-alert{margin-top:3px}
+/* Shared covers keep video stills landscape and text titles legible. */
+.book-cover,.catalog-cover-placeholder{position:relative;overflow:hidden}
+.book-cover.has-image,.catalog-cover-placeholder.has-image{padding:0}
+.book-cover img,.catalog-cover-placeholder img{display:block;width:100%;height:100%;object-fit:cover}
+.catalog-cover-placeholder{height:184px;background:linear-gradient(135deg,var(--cover,#dce9d8),#f6e8d0)}
+.catalog-cover-placeholder.text-cover{display:flex;align-items:flex-start;justify-content:center;flex-direction:column;gap:10px;padding:22px 28px 44px;border-left:7px solid #17392b26}
+.catalog-cover-placeholder .cover-monogram{font:700 30px/1.1 Georgia,serif;opacity:.5}
+.catalog-cover-placeholder .cover-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font:600 17px/1.4 Georgia,serif;letter-spacing:0;overflow-wrap:anywhere}
+.catalog-cover-placeholder.large.is-video{width:260px;height:146px}
+.catalog-cover-placeholder.large.text-cover{padding:18px;height:196px}
+.book-cover .cover-title{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
+.hero-card .book-cover-large{margin:0;transform:none}
+.hero-card .book-cover-large.is-video{width:42%;max-width:300px;height:auto;aspect-ratio:16/9;border-radius:12px}
+.hero-card .book-cover-large.is-video img{position:absolute;inset:0}
+.hero-card .book-cover-large.text-cover{gap:16px}
+.catalog-book-card .ant-card-body{display:flex;flex-direction:column;height:100%}
+.catalog-book-card .ant-card-body>.ant-btn{margin-top:auto!important;min-height:38px}
+.catalog-book-card .ant-card-body>.ant-space:last-of-type{margin-bottom:14px}
+.import-history-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}

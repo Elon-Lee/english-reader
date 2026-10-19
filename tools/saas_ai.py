@@ -35,7 +35,7 @@ class WorkspaceAIService:
         self.upstream="https://api-cdn-plus.dioco.io"
 
     def _sentence(self,cursor:Any,user_id:str,book_id:str,sentence_id:str)->tuple[dict[str,Any],dict[str,Any],list[dict[str,Any]],int]:
-        cursor.execute("SELECT * FROM content_books WHERE id=%s AND owner_id=%s AND visibility IN ('private','draft')",(book_id,user_id));book=self.accounts._one(cursor)
+        cursor.execute("SELECT * FROM content_books WHERE id=%s AND owner_id=%s AND visibility IN ('private','draft') AND NOT EXISTS (SELECT 1 FROM catalog_books official WHERE official.source_content_book_id=content_books.id)",(book_id,user_id));book=self.accounts._one(cursor)
         if not book:
             cursor.execute("""SELECT src.* FROM catalog_books cb
             JOIN content_books src ON src.id=cb.source_content_book_id

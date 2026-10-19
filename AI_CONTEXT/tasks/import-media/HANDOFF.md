@@ -1,6 +1,18 @@
 # 导入与媒体交接
 
+## 2026-10-19 内容管理调整
+
+- 验证：隔离临时 PostgreSQL 的 phase3/6（排除旧页面断言）/7/8、权益并发与视频画质共 45 项通过；含真实 FFmpeg、管理员导入 HTTP 登录/CSRF/角色隔离及文件清理。构建、modern/UI/JS、Python 编译、diff 检查通过。旧 phase6 的 `/terms` 页面断言和完整 HTTP smoke 的后台 `/` 首页断言均仍因 API-only 架构返回 404，不属于本轮接口失败；未执行真实 YouTube 网络下载或浏览器人工验收。临时测试库均已删除。
+- 本地已备份 `.local/backups/pre-content-management-20261019-083247.dump`，应用 `0037_private_import_ownership.sql`：3 本历史个人导入恢复私人，删除官方登记及收藏关联，保留所有者正文/媒体/学习数据；迁移可重复执行，官方导入不受影响。本地 8790 已重启、5173 API 代理健康；未发布生产。
+- 2026-10-19 私人与官方导入分流：我的数据/书架使用 `/api/workspace/imports`，服务端固定 `officialImport=false`；运营内容管理使用管理员专属 `/api/admin/content-imports`，固定 true。两组任务互不可读写，客户端 metadata 不能改变归属。官方导入完成登记官方媒体及未审核 catalog，不进入私人书架、不占私人空间及收藏名额，审核发布后才进入书城；私人导入不在内容管理展示且审核 API 拒绝发布。
+- 新 SaaS YouTube 下载格式上限由 720p 改为 480p，流畅变体由 360p 改为最高 240p（不放大小于该尺寸的源视频）；旧视频保持原文件，不批量重新编码。本地文件高清仍使用用户上传原文件。共用导入弹窗已移至 `frontend/src/components/ImportModal.jsx`。
+
+
 ## 已完成
+
+- 2026-10-19 导入历史操作改为“删除无效任务”，范围为当前账号 `failed` + `cancelled` 记录；前端按 `invalidCount` 启用按钮，确认与成功提示同步更新。POST 改为 `/api/workspace/imports/delete-invalid`，保留登录/CSRF/用户隔离与重复删除安全；有效任务和源媒体不删除。构建、modern/UI/JS、Python 编译、diff 检查与 phase8 的 11 项隔离库集成测试通过（含仅取消记录、混合状态、重复删除及 HTTP 鉴权）。本地后台已重启加载，未发布生产。
+
+- 2026-10-18 YouTube 新导入系列默认取 `data.youtube.channel`，无频道信息时才回退“私人导入”；`0036_youtube_channel_series.sql` 回填旧默认系列并同步书城默认分组，保留手工系列。迁移已在隔离库验证，尚未应用本地正式库和生产。任务历史 GET 支持 `page/limit` 并返回 `total/failedCount/invalidCount/page/pageSize`；新增 POST `/api/workspace/imports/delete-invalid`，沿用登录、用户隔离、CSRF 与用户锁，仅删除当前用户失败和已取消任务记录，不清理源媒体。phase3/7/8 共 23 项隔离库回归及追加 phase8 11 项回归通过；本轮尚未发布生产。
 
 - 2026-10-18 导入创建、XHR 上传和 complete 返回的套餐额度/空间/收藏容量错误统一接入会员升级弹窗，保留错误 code；前台导入受限关闭表单，升级后返回原表单。已上传后的异步 complete 受限返回重新导入入口，不自动重传文件；未改变现有导入任务与鉴权接口。仅本地，尚未发布生产。
 - 支持 TXT、Markdown、PDF、MP3、本地视频和 YouTube。
@@ -25,7 +37,7 @@
 
 ## 关键文件
 
-- `frontend/src/main.jsx` 中 `ImportModal`
+- `frontend/src/components/ImportModal.jsx`
 - `frontend/src/pages/LibraryPage.jsx`
 - `tools/saas_imports.py`
 - `tools/import_*_worker.py`

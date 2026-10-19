@@ -1,16 +1,30 @@
 # SaaS 后端交接
 
+## 2026-10-19 内容管理调整
+
+- 验证：隔离临时 PostgreSQL 的 phase3/6（排除旧页面断言）/7/8、权益并发与视频画质共 45 项通过；含真实 FFmpeg、管理员导入 HTTP 登录/CSRF/角色隔离及文件清理。构建、modern/UI/JS、Python 编译、diff 检查通过。旧 phase6 的 `/terms` 页面断言和完整 HTTP smoke 的后台 `/` 首页断言均仍因 API-only 架构返回 404，不属于本轮接口失败；未执行真实 YouTube 网络下载或浏览器人工验收。临时测试库均已删除。
+- 本地已备份 `.local/backups/pre-content-management-20261019-083247.dump`，应用 `0037_private_import_ownership.sql`：3 本历史个人导入恢复私人，删除官方登记及收藏关联，保留所有者正文/媒体/学习数据；迁移可重复执行，官方导入不受影响。本地 8790 已重启、5173 API 代理健康；未发布生产。
+- 2026-10-19 新增管理员官方导入 `/api/admin/content-imports`（沿用 create/upload/complete/retry/cancel/list/delete-invalid 任务协议），所有写请求保留 CSRF，服务端校验 admin 与任务归属。官方媒体允许管理员导入暂存，完成后绑定 draft catalog；官方导入不计私人字节及音视频收藏名额。私人书架、学习访问与 AI 私人查询排除已登记官方源，避免管理员绕过发布状态。
+- 管理员 GET `/api/admin/media-assets` 返回 `{users,total}`；带 `ownerId` 返回 `{videos,total}`，支持 limit/offset，大小包含原文件和衍生文件。POST `/api/admin/catalog/delete` 要求 sourceBookId+准确 confirmTitle，事务删除官方正文/收藏并标记媒体，提交后清理文件；私人书架永久删除同样清理媒体。返回 removedFiles/pendingFiles，文件失败会保留待清理标记。直接 DELETE `/api/media/{id}` 返回 409，要求使用读物永久删除入口。
+
+
 ## 当前架构
 
 - 主服务：`tools/reader_server.py`。
 - PostgreSQL 服务模块：`tools/saas_auth.py`、`saas_membership.py`、`saas_catalog.py`、`saas_workspace.py`、`saas_imports.py`、`saas_ai.py`、`saas_admin.py` 等。
-- 最新 migration：`0035_entitlement_operation_idempotency.sql`，为人工订阅、订阅变更、邀请码权益及领取保存事务内幂等回执；本地正式库和隔离测试库已应用，生产仍为 `0034`。本轮书架/权益修复尚未发布生产。
+- 当前新增 migration：`0037_private_import_ownership.sql`（个人导入归属纠正，已应用本地）；此前 `0036_youtube_channel_series.sql`，回填 YouTube 历史默认系列为频道并同步书城默认分组，保留手工系列；2026-10-19 已应用本地正式库，启动 SaaS 后台及 Vite 代理健康检查通过。迁移前备份：`.local/backups/pre-local-start-20261019-065355.dump`。生产仍为 `0034`，尚未发布生产。
 - 认证使用数据库会话 Cookie 和 CSRF；所有写接口必须校验 CSRF。
 - 2026-10-18 修复已有会话缺失/失配 `shiyue_csrf` 时写 API 持续 403：认证读取会轮换当前 session 并补发配对 CSRF Cookie，使缺失 Cookie 同时撤销旧 session；前端收到一次 `csrf_failed` 后自动刷新认证并重试一次，写接口仍强制校验 CSRF。新增回归覆盖旧 session 失效、Cookie 恢复和后续安全登出；隔离 PostgreSQL 测试库当前未配置，尚未执行数据库集成测试。
 - 测试库名称必须以 `_test` 结尾。
 - 京东云生产运行 PostgreSQL 16 Bookworm、Redis 7 Bookworm 和 `shiyue-saas-runtime:20261012-1`；数据库和 Redis 端口仅绑定 `127.0.0.1`，应用通过 host network 访问。
 
 ## 已完成
+
+- 2026-10-19 新增管理员部署历史删除 `/api/deployment/jobs/delete-invalid`，删除失败/取消状态并记录审计，审计失败回滚删除。部署及平台配置 API 限本地模式（`SHIYUE_DEPLOYMENT_MODE=local`）登录管理员、本机连接；后台默认 remote，远程部署容器明确 remote，本地启动脚本设 local。`/api/auth/me` 返回 `user.canManagePlatform` 供菜单和直接页面鉴权；写入仍校验 CSRF。32 项部署回归覆盖角色、模式、CSRF、审计失败及重复删除，本地已加载，未发布生产。无需数据库迁移。
+
+- 2026-10-19 导入历史操作改为“删除无效任务”，范围为当前账号 `failed` + `cancelled` 记录；前端按 `invalidCount` 启用按钮，确认与成功提示同步更新。POST 改为 `/api/workspace/imports/delete-invalid`，保留登录/CSRF/用户隔离与重复删除安全；有效任务和源媒体不删除。构建、modern/UI/JS、Python 编译、diff 检查与 phase8 的 11 项隔离库集成测试通过（含仅取消记录、混合状态、重复删除及 HTTP 鉴权）。本地后台已重启加载，未发布生产。
+
+- 2026-10-18 书城视频封面优先使用源书的首帧，私人书目补返 `coverUrl`。已发布书城封面通过既有 `trialBook` 图片鉴权路由供未收藏用户读取，不扩大正文或原视频权限。新增当前用户失败导入记录批量删除 POST `/api/workspace/imports/delete-invalid`，GET 导入历史支持服务端分页；鉴权、CSRF、跨用户隔离、重复删除及图片试读访问已由隔离库真实 HTTP 回归覆盖。实现及验证详情见 import-media 和 pc-workspace。
 
 - 2026-10-18 视频画质鉴权：以当前有效且已开始的非免费订阅判定高清资格，过期立即失效；私人/官方原视频、其他视频变体和官方试读原件均在媒体服务端返回 403，免费账号仅可获取 low 视频变体，音频/图片/文档仍按原权限访问。阅读接口和会员接口返回 canWatchHdVideo，公开商品按等级展示画质权益；不改写历史套餐版本或新增迁移。phase6 媒体直链 HTTP、phase7 试读、phase8 私人视频和 commerce 商品共 4 项隔离库回归通过；本地后台已重启，生产未发布。
 - 2026-10-18 上传内容必须目标站审核：打包及接收端将新/变更书目设为 draft，移除本地审核人和发布时间；未变更重传保留线上审核。审核来源 API 返回书目实际标题、作者、简介、系列、等级、标签与排序，避免再次审核覆盖已编辑信息。沿用管理员/CSRF/审计校验，未新增接口与迁移。临时 PostgreSQL 的 phase3 + 内容上传共 13 项通过；后台已重启，尚未发布线上。详情见 platform-operations。

@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons'
 import { csrfHeaders, deleteJson, fetchWithCsrf, getJson, postJson } from './api/client'
 import { handleMembershipLimit } from './api/membershipLimit'
+import ImportModal from './components/ImportModal'
 import MembershipLimitModal from './components/MembershipLimitModal'
 import { DEFAULT_PREFERENCES } from './config/preferences'
 import CatalogPage from './pages/CatalogPage'
@@ -44,7 +45,8 @@ function normalizeBook(book, index = 0, source = '私人读物') {
   const durationMinutes = Number(book.estimatedMinutes || (book.duration ? Number(book.duration) / 60 : 0))
   const readingSeconds = Number(progress.readingSeconds || 0)
   const title = book.title || book.englishTitle || '未命名读物'
-  return { ...book, id: book.id || '', title, subtitle: book.subtitle || book.description || book.series?.title || '', author: book.author || '', level: book.level || '', source, accent: book.accent || bookAccents[index % bookAccents.length], cover: String(title).slice(0, 2).toUpperCase(), progress: Number(book.progressPercent ?? (durationMinutes ? Math.min(100, Math.round(readingSeconds / 60 / durationMinutes * 100)) : 0)), minutes: Math.round(readingSeconds / 60) || Number(book.estimatedMinutes || 0), coverUrl: book.coverUrl || '' }
+  const seriesTitle = typeof book.series === 'string' ? book.series : book.series?.title
+  return { ...book, id: book.id || '', title, subtitle: book.subtitle || book.description || seriesTitle || '', author: book.author || '', level: book.level || '', source, accent: book.accent || bookAccents[index % bookAccents.length], cover: String(title).slice(0, 2).toUpperCase(), progress: Number(book.progressPercent ?? (durationMinutes ? Math.min(100, Math.round(readingSeconds / 60 / durationMinutes * 100)) : 0)), minutes: Math.round(readingSeconds / 60) || Number(book.estimatedMinutes || 0), coverUrl: book.coverUrl || '' }
 }
 
 function Cover({ book, large = false }) { return <div className={`book-cover ${large ? 'book-cover-large' : ''}`} style={{ '--cover': book.accent }}><span>{book.cover}</span><small>{book.title}</small></div> }
@@ -229,7 +231,7 @@ function App() {
   const redeemReward = async code => { try { await postJson('/api/rewards/redeem', { code, idempotencyKey: `redeem-${code}-${crypto.randomUUID?.() || Date.now()}` }); await reloadWorkspace({ silent: true }); messageApi.success('奖励兑换成功') } catch (error) { messageApi.error(error.message || '奖励兑换失败') } }
   const filteredBooks = useMemo(() => books.filter(book => `${book.title} ${book.subtitle} ${book.author}`.toLowerCase().includes(query.toLowerCase()) && (filter === '全部' || book.source === filter)), [books, query, filter])
 
-  const nav = [{ key: 'workspace', icon: <DashboardOutlined />, label: '学习空间' }, { key: 'catalog', icon: <ShopOutlined />, label: '首页 · 书城' }, { key: 'library', icon: <BookOutlined />, label: '我的书架' }, { key: 'stats', icon: <BarChartOutlined />, label: '学习记录' }, { key: 'vocab', icon: <StarOutlined />, label: '生词复习' }, { key: 'rewards', icon: <GiftOutlined />, label: '成长奖励' }, { key: 'membership', icon: <ThunderboltFilled />, label: '会员中心' }, { key: 'admin', icon: <AppstoreOutlined />, label: '运营后台' }, { key: 'platform', icon: <SettingOutlined />, label: '平台与部署' }].filter(item => !['admin', 'platform'].includes(item.key) || currentUser?.isAdmin)
+  const nav = [{ key: 'workspace', icon: <DashboardOutlined />, label: '学习空间' }, { key: 'catalog', icon: <ShopOutlined />, label: '首页 · 书城' }, { key: 'library', icon: <BookOutlined />, label: '我的书架' }, { key: 'stats', icon: <BarChartOutlined />, label: '学习记录' }, { key: 'vocab', icon: <StarOutlined />, label: '生词复习' }, { key: 'rewards', icon: <GiftOutlined />, label: '成长奖励' }, { key: 'membership', icon: <ThunderboltFilled />, label: '会员中心' }, { key: 'admin', icon: <AppstoreOutlined />, label: '运营后台' }, { key: 'platform', icon: <SettingOutlined />, label: '平台与部署' }].filter(item => item.key === 'platform' ? currentUser?.isAdmin && currentUser?.canManagePlatform : item.key !== 'admin' || currentUser?.isAdmin)
   const settings = [{ key: 'settings', icon: <SettingOutlined />, label: '系统设置' }]
   const selectScreen = (key, tab) => { setMobileOpen(false); if (key === screen) { if (pageLoading) reloadWorkspace({ targetScreen: key }).catch(error => messageApi.error(error.message || '页面刷新失败')); return } setPageLoading(true); history.pushState({}, '', `${modernEntryPath()}?screen=${key}${key === 'admin' && tab === 'catalog' ? '&adminTab=catalog' : ''}`); setScreen(key) }
   const openReader = book => { const kind = book.source === '官方读物' || book.trial ? 'official' : 'workspace'; location.href = `${modernEntryPath()}?screen=reader&reader=${kind}&id=${encodeURIComponent(book.id)}${book.trial ? '&trial=1' : ''}` }
@@ -308,6 +310,7 @@ function SidebarMenu({ nav, settings, screen, selectScreen }) { return <div clas
 
 function Page({ screen, loading, ...props }) {
   if (loading) return <PageSkeleton reader={screen === 'reader'} />
+  if (screen === 'platform' && !(props.currentUser?.isAdmin && props.currentUser?.canManagePlatform)) return <Empty description="平台与部署仅允许本地模式的管理员访问" />
   const pages = { workspace: <WorkspacePage {...props} />, catalog: <CatalogPage {...props} />, library: <LibraryPage {...props} />, stats: <StatsPageNew {...props} />, vocab: <VocabularyPage {...props} />, rewards: <RewardsPageNew {...props} />, membership: <MembershipPage {...props} />, admin: <AdminPage {...props} />, platform: <PlatformOperationsPage {...props} />, settings: <SettingsPage {...props} />, reader: <ReaderPage {...props} /> }
   return pages[screen] || pages.workspace
 }
@@ -318,48 +321,4 @@ function SectionHeader({ title, action }) { return <div className="section-heade
 function ActionCard({ icon, title, copy, action, onClick }) { return <Col xs={24} md={8}><Card className="action-card"><div className="action-icon">{icon}</div><Title level={4}>{title}</Title><Paragraph>{copy}</Paragraph><Button type="link" onClick={onClick}>{action} →</Button></Card></Col> }
 function Metric({ title, value, suffix, note }) { return <Col xs={12} lg={6}><Card className="metric-card"><Statistic title={title} value={value} suffix={suffix} /><Text type="secondary">{note}</Text></Card></Col> }
 function Quota({ title, items }) { return <Col xs={24} md={8}><Card title={title} className="quota-card"><List size="small" dataSource={items} renderItem={item => <List.Item><CheckCircleFilled className="check-icon" />{item}</List.Item>} /></Card></Col> }
-function ImportModal({ open, onClose, onResume, onCreated, messageApi }) {
-  const [form] = Form.useForm()
-  const [submitting, setSubmitting] = useState(false)
-  const [file, setFile] = useState(null)
-  const [uploadProgress, setUploadProgress] = useState(0)
-  const source = Form.useWatch('source', form) || 'file'
-  const submit = async values => {
-    setSubmitting(true)
-    try {
-      const input = values.input?.trim()
-      const kind = source === 'youtube' ? 'youtube' : /\.pdf$/i.test(file?.name) ? 'document' : /\.mp3$/i.test(file?.name) ? 'mp3' : /\.(mp4|mov|m4v|mkv|webm)$/i.test(file?.name) ? 'video' : 'text'
-      if (source === 'file' && !file) throw new Error('请选择要上传的文件')
-      const filename = source === 'youtube' ? '' : file.name
-      const key = `${kind}-import-${crypto.randomUUID?.() || Date.now()}`
-      const title = values.title?.trim() || (source === 'youtube' ? '' : file.name.replace(/\.[^.]+$/, ''))
-      const created = await postJson('/api/workspace/imports', { kind, title, filename, sourceUrl: source === 'youtube' ? input : '', idempotencyKey: key })
-      if (source === 'file') {
-        await new Promise((resolve, reject) => {
-          const request = new XMLHttpRequest()
-          request.open('POST', `/api/workspace/imports/${encodeURIComponent(created.task.id)}/upload`)
-          request.withCredentials = true
-          const headers = csrfHeaders({ 'Content-Type': file.type || 'application/octet-stream', 'X-Upload-Filename': file.name })
-          Object.entries(headers).forEach(([key, value]) => request.setRequestHeader(key, value))
-          request.upload.onprogress = event => { if (event.lengthComputable) setUploadProgress(Math.round(event.loaded / event.total * 100)) }
-          request.onerror = () => reject(new Error('网络中断，文件上传失败'))
-          request.onload = () => {
-            let data = {}; try { data = JSON.parse(request.responseText || '{}') } catch {}
-            if (request.status < 200 || request.status >= 300) reject(Object.assign(new Error(data.error || '上传失败'), { code: data.code, payload: data }))
-            else resolve(data)
-          }
-          request.send(file)
-        })
-      }
-      const taskId = created.task.id
-      onClose(); form.resetFields(); setFile(null); setUploadProgress(0); await onCreated?.(); messageApi.success('导入任务已提交，后台处理进度会自动更新')
-      void postJson(`/api/workspace/imports/${encodeURIComponent(taskId)}/complete`, {}).then(async result => {
-        await onCreated?.()
-        if (result.task?.status === 'complete') messageApi.success('内容已导入学习空间')
-      }).catch(async error => { await onCreated?.(); if (!handleMembershipLimit(error, { onContinue: onResume })) messageApi.error(error.message || '导入处理失败') })
-    } catch (error) { if (!handleMembershipLimit(error, { onClose, onContinue: onResume })) messageApi.error(error.message || '导入失败') } finally { setSubmitting(false) }
-  }
-  return <Modal title="导入新的学习内容" open={open} onCancel={submitting ? undefined : onClose} onOk={() => form.submit()} confirmLoading={submitting} okText={uploadProgress > 0 && uploadProgress < 100 ? `上传 ${uploadProgress}%` : '创建导入任务'} cancelText="稍后再说"><Form form={form} layout="vertical" onFinish={submit}><Form.Item label="内容来源" name="source" initialValue="file"><Segmented block options={[{ label: '上传文件', value: 'file' }, { label: 'YouTube', value: 'youtube' }]} /></Form.Item><Form.Item label="读物标题" name="title"><Input placeholder="可选，默认使用文件名" /></Form.Item><Form.Item label={source === 'youtube' ? 'YouTube 链接' : '学习文件'} name="input" rules={[{ required: true, message: source === 'youtube' ? '请输入 YouTube 链接' : '请选择要上传的文件' }]}><Input size="large" type={source === 'youtube' ? 'url' : 'file'} prefix={source === 'youtube' ? <CloudUploadOutlined /> : null} onChange={event => source === 'file' && setFile(event.target.files?.[0] || null)} placeholder={source === 'youtube' ? '粘贴 YouTube 链接' : undefined} /></Form.Item>{submitting && source === 'file' && <Progress percent={uploadProgress} status={uploadProgress >= 100 ? 'success' : 'active'} />}<Text type="secondary">支持 TXT、Markdown、PDF、MP3、MP4、MOV、M4V、MKV、WebM。文件直接流式发送，不再在浏览器中复制成完整 ArrayBuffer；大型音视频会进入后台处理队列。</Text></Form></Modal>
-}
-
 createRoot(document.getElementById('root')).render(<App />)

@@ -456,7 +456,7 @@ def saas_app_run_command(target,release_path,name="shiyue-saas",port=None,restar
     root=shlex.quote(target["remote_root"]);release=shlex.quote(release_path);port=int(port or SAAS_BACKEND_PORT);recording=bool(target["install_recording"])
     options=[f"docker run -d --name {shlex.quote(name)}"]
     if restart:options.append("--restart unless-stopped")
-    options += ["--network host",f"--env-file {root}/shared/config/saas.env","-e READER_HOST=127.0.0.1",f"-e READER_PORT={port}","-e SHIYUE_RUNTIME_MODE=saas","-e SHIYUE_SAAS_ENABLED=1","-e MEDIA_ROOT=/app/books","-e SAAS_BACKUP_ROOT=/state/backups/saas","-e SHIYUE_PDF_OCR=/opt/shiyue/pdf_ocr","-e SHIYUE_YTDLP=/usr/local/bin/yt-dlp","-e SHIYUE_NODE=/usr/bin/node",
+    options += ["--network host",f"--env-file {root}/shared/config/saas.env","-e READER_HOST=127.0.0.1",f"-e READER_PORT={port}","-e SHIYUE_RUNTIME_MODE=saas","-e SHIYUE_DEPLOYMENT_MODE=remote","-e SHIYUE_SAAS_ENABLED=1","-e MEDIA_ROOT=/app/books","-e SAAS_BACKUP_ROOT=/state/backups/saas","-e SHIYUE_PDF_OCR=/opt/shiyue/pdf_ocr","-e SHIYUE_YTDLP=/usr/local/bin/yt-dlp","-e SHIYUE_NODE=/usr/bin/node",
       f"-v {release}/reader:/app/reader:ro,z",f"-v {release}/tools:/app/tools:ro,z",f"-v {root}/shared/books:/app/books:z",f"-v {root}/shared/.local:/app/.local:z",f"-v {root}/shared/cache:/app/.cache:z",f"-v {root}/backups:/state/backups:z"]
     if recording:options += [f"-v {root}/shared/whisper/ggml-base.en.bin:/opt/shiyue/models/ggml-base.en.bin:ro,z","-e SHIYUE_WHISPER_CLI=/opt/shiyue/whisper/whisper-cli","-e SHIYUE_WHISPER_MODEL=/opt/shiyue/models/ggml-base.en.bin"]
     options.append(shlex.quote(SAAS_IMAGE));return " \\\n  ".join(options)
@@ -1000,39 +1000,6 @@ def start_sync(target_id):
         result=sync_content(job,remote,target);job.update(96,"验证远程词典与语境接口");dioco_ready=remote_dioco_check(job,remote,target)
         job.complete({**result,"diocoConfigured":dioco["configured"],"diocoReady":dioco_ready},"点读资源同步完成")
     return run_task("resource_sync",worker,target_id)
-def content_rollback_run_command(target,release,operation,restore=False):
-    root=target["remote_root"];arguments=["python3","/app/tools/deployment/content_rollback.py","--operation",operation,"--books","/app/books","--manifests","/state/manifests","--backups","/state/backups","--database","/app/.local/library.sqlite3"]
-    if restore:arguments.append("--restore")
-    else:arguments += ["--target",release]
-    options=["docker run --rm --network none",f"-v {shlex.quote(root)}/current/tools:/app/tools:ro",f"-v {shlex.quote(root)}/shared/books:/app/books",f"-v {shlex.quote(root)}/shared/.local:/app/.local",f"-v {shlex.quote(root)}/manifests:/state/manifests",f"-v {shlex.quote(root)}/backups:/state/backups",shlex.quote(RUNTIME_IMAGE),*(shlex.quote(value) for value in arguments)]
-    return (" \\"+"\n  ").join(options)
-    return " \\\n+  ".join(options)
-
-def start_content_rollback(target_id,release):
-    def worker(job,remote,target):
-        if not re.fullmatch(r"content-\d{8}-\d{6}-[A-Za-z0-9]+",release or ""):raise ValueError("无效的内容版本")
-        root=target["remote_root"];operation=new_release_id("content-rollback");job.update(12,f"检查内容快照 {release}",release_id=release)
-        remote.ssh(f"set -e; test -f {shlex.quote(root)}/manifests/history/{shlex.quote(release)}.json; test -f {shlex.quote(root)}/manifests/history/{shlex.quote(release)}.json.gz; docker image inspect {shlex.quote(RUNTIME_IMAGE)} >/dev/null")
-        run=content_rollback_run_command(target,release,operation);restore=content_rollback_run_command(target,release,operation,True);health=health_check_command(target)
-        job.update(35,"创建恢复点并回滚内容")
-        script=f"""set -e
-docker stop shiyue-reader >/dev/null
-if ! {run}; then docker start shiyue-reader >/dev/null || true; exit 1; fi
-docker start shiyue-reader >/dev/null
-sleep 3
-if ! {health}; then
-  echo '内容回滚后健康检查失败，正在恢复操作前内容' >&2
-  docker stop shiyue-reader >/dev/null || true
-  {restore}
-  docker start shiyue-reader >/dev/null
-  sleep 3
-  {health} || true
-  exit 1
-fi
-"""
-        output=remote.ssh(script);job.complete({"contentRevision":release,"operation":operation,"health":output},"内容回滚完成")
-    return run_task("content_rollback",worker,target_id)
-
 def start_cleanup(target_id,retention_days=30):
     days=max(1,min(3650,int(retention_days or 30)));cutoff=datetime.now()-timedelta(days=days);stamp=cutoff.strftime("%Y%m%d-%H%M%S")
     def worker(job,remote,target):
@@ -1059,8 +1026,6 @@ for manifest in "$root"/manifests/history/content-*.json; do
     content_removed=$((content_removed+1))
   fi
 done
-mkdir -p "$root/backups/content-rollbacks"
-find "$root/backups/content-rollbacks" -mindepth 1 -maxdepth 1 -type d -mtime +{days} -exec rm -rf -- {{}} + 2>/dev/null || true
 docker images shiyue-reader --format '{{{{.Tag}}}}' 2>/dev/null | while read tag; do
   case "$tag" in code-*) if [[ "$tag" < "$code_cutoff" && "$tag" != "$current_code" ]]; then docker image rm "shiyue-reader:$tag" >/dev/null 2>&1 || true; fi;; esac
 done
@@ -1125,6 +1090,21 @@ def job_info(job_id,offset=0):
     try:result["result"]=json.loads(result.pop("result_json"))
     except Exception:result["result"]={}
     return result
+def invalid_job_count():
+    db=connect()
+    try:return db.execute("SELECT COUNT(*) FROM deployment_jobs WHERE status IN ('failed','cancelled') AND kind NOT IN ('release_list','content_release_list')").fetchone()[0]
+    finally:db.close()
+
+def delete_invalid_jobs(audit=None):
+    db=connect()
+    try:
+        with db:
+            rows=db.execute("DELETE FROM deployment_jobs WHERE status IN ('failed','cancelled') AND kind NOT IN ('release_list','content_release_list') RETURNING id").fetchall()
+            result={"deletedCount":len(rows),"deletedIds":[row[0] for row in rows]}
+            if audit:audit(result)
+        return result
+    finally:db.close()
+
 def recent_jobs(target_id=None,limit=20):
     db=connect()
     if target_id is None:rows=db.execute("SELECT id,target_id,kind,status,progress,step,error,release_id,created_at,updated_at FROM deployment_jobs WHERE kind NOT IN ('release_list','content_release_list') ORDER BY id DESC LIMIT ?",(limit,)).fetchall()
@@ -1134,7 +1114,7 @@ def dashboard_status(target_id=None):
     db=connect();books=db.execute("SELECT COUNT(*) FROM books WHERE status='ready'").fetchone()[0]
     clause=" AND target_id=?" if target_id is not None else "";params=(int(target_id),) if target_id is not None else ()
     code=db.execute(f"SELECT result_json FROM deployment_jobs WHERE kind IN ('code_deploy','program_upgrade','saas_upgrade','saas_deploy') AND status='complete'{clause} ORDER BY id DESC LIMIT 1",params).fetchone()
-    content=db.execute(f"SELECT result_json FROM deployment_jobs WHERE kind IN ('resource_sync','code_deploy','content_rollback') AND status='complete'{clause} ORDER BY id DESC LIMIT 1",params).fetchone();db.close()
+    content=db.execute(f"SELECT result_json FROM deployment_jobs WHERE kind IN ('resource_sync','code_deploy') AND status='complete'{clause} ORDER BY id DESC LIMIT 1",params).fetchone();db.close()
     def value(row,key):
         if not row:return ""
         try:return json.loads(row[0]).get(key,"")
@@ -1147,12 +1127,4 @@ def remote_releases(target_id):
     try:
         root=shlex.quote(target["remote_root"]);remote=Remote(target,job);output=remote.ssh(f"current=$(basename \"$(readlink -f {root}/current 2>/dev/null || true)\"); find {root}/releases -mindepth 1 -maxdepth 1 -type d -name 'code-*' -printf '%f\\n' 2>/dev/null | sort -r | while read b; do [ \"$b\" = \"$current\" ] && echo \"$b|current\" || echo \"$b|available\"; done");job.complete()
         return [{"releaseId":line.split("|",1)[0],"status":line.split("|",1)[1]} for line in output.splitlines() if line.startswith("code-") and "|" in line]
-    except Exception as exc:job.fail(exc);return []
-def remote_content_releases(target_id):
-    target=get_target(target_id)
-    if not target:return []
-    job=Job("content_release_list",target["id"])
-    try:
-        root=shlex.quote(target["remote_root"]);remote=Remote(target,job);output=remote.ssh(f"current=$(sed -n 's/.*\"revision\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' {root}/manifests/current-content.json 2>/dev/null | head -1); for bundle in {root}/manifests/history/content-*.json.gz; do [ -f \"$bundle\" ] || continue; b=$(basename \"$bundle\" .json.gz); if [ \"$b\" = \"$current\" ]; then echo \"$b|current\"; elif [[ \"$b\" < \"$current\" ]]; then echo \"$b|available\"; fi; done | sort -r");job.complete()
-        return [{"releaseId":line.split("|",1)[0],"status":line.split("|",1)[1]} for line in output.splitlines() if line.startswith("content-") and "|" in line]
     except Exception as exc:job.fail(exc);return []

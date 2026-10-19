@@ -74,6 +74,7 @@ UPSTREAM_HEADERS={
 }
 IMPORT_LOCK=threading.Lock()
 RUNTIME_MODE=os.environ.get("SHIYUE_RUNTIME_MODE","full")
+DEPLOYMENT_MODE=os.environ.get("SHIYUE_DEPLOYMENT_MODE","remote")
 ACTIVE_IMPORT_PROCESSES={}
 ACTIVE_PROCESS_LOCK=threading.Lock()
 SAAS=SaaSService.from_env()
@@ -85,6 +86,7 @@ MEDIA=MediaService(SAAS,MEMBERSHIPS)
 ACCOUNTS=AccountLifecycleService(SAAS)
 WORKSPACE=WorkspaceService(SAAS)
 WORKSPACE_IMPORTS=WorkspaceImportService(SAAS,MEMBERSHIPS,MEDIA)
+OFFICIAL_IMPORTS=WorkspaceImportService(SAAS,MEMBERSHIPS,MEDIA,official=True)
 WORKSPACE_AI=WorkspaceAIService(SAAS,MEMBERSHIPS)
 BILLING=PaddleBillingService(SAAS,MEMBERSHIPS)
 COMMERCE=CommerceService(SAAS)
@@ -302,9 +304,8 @@ class Handler(SimpleHTTPRequestHandler):
             query=parse_qs(route.query)
             try:target_id=int((query.get("targetId") or [0])[0])
             except (TypeError,ValueError):target_id=0
-            if route.path == "/api/deployment/config": self.reply({"targets":deployment_manager.list_targets(),"jobs":deployment_manager.recent_jobs(limit=20),"status":deployment_manager.dashboard_status(target_id or None)});return
+            if route.path == "/api/deployment/config": self.reply({"targets":deployment_manager.list_targets(),"jobs":deployment_manager.recent_jobs(limit=20),"invalidCount":deployment_manager.invalid_job_count(),"status":deployment_manager.dashboard_status(target_id or None)});return
             if route.path == "/api/deployment/releases": self.reply({"releases":deployment_manager.remote_releases(target_id) if target_id else []});return
-            if route.path == "/api/deployment/content-releases": self.reply({"releases":deployment_manager.remote_content_releases(target_id) if target_id else []});return
             if route.path.startswith("/api/deployment/jobs/"):
                 try:job_id=int(route.path.rsplit("/",1)[1]);offset=int((parse_qs(route.query).get("offset") or [0])[0])
                 except ValueError:self.reply({"error":"invalid job"},400);return
@@ -526,6 +527,10 @@ class Handler(SimpleHTTPRequestHandler):
             try:
                 target_id=int(item.get("targetId") or item.get("id") or 0)
                 if self.path == "/api/deployment/config":self.reply({"target":deployment_manager.save_target(item,str(item.get("password","")).strip())});return
+                if route.path == "/api/deployment/jobs/delete-invalid":
+                    audit=(lambda result: ADMIN.record_action(str(self._saas_session["id"]),"deployment_jobs_delete_invalid",payload=result)) if SAAS.enabled else None
+                    result=deployment_manager.delete_invalid_jobs(audit=audit)
+                    self.reply(result);return
                 if not target_id:self.reply({"error":"请选择远程节点"},400);return
                 if self.path == "/api/deployment/test":self.reply({"jobId":deployment_manager.start_test(target_id)},202);return
                 if self.path == "/api/deployment/deploy":self.reply({"jobId":deployment_manager.start_saas_deploy(target_id)},202);return
@@ -533,10 +538,6 @@ class Handler(SimpleHTTPRequestHandler):
                 if self.path == "/api/deployment/sync":self.reply({"jobId":deployment_manager.start_saas_public_sync(target_id)},202);return
                 if self.path == "/api/deployment/uninstall":self.reply({"jobId":deployment_manager.start_uninstall(target_id,str(item.get("confirmName","")).strip())},202);return
                 if self.path == "/api/deployment/delete-config":self.reply({"result":deployment_manager.delete_target_config(target_id)});return
-                if self.path == "/api/deployment/content-rollback":
-                    release=str(item.get("releaseId","")).strip()
-                    if not release.startswith("content-"):self.reply({"error":"invalid content release"},400);return
-                    self.reply({"jobId":deployment_manager.start_content_rollback(target_id,release)},202);return
                 if self.path == "/api/deployment/cleanup":self.reply({"jobId":deployment_manager.start_cleanup(target_id,item.get("retentionDays",30))},202);return
                 if self.path == "/api/deployment/rollback":
                     release=str(item.get("releaseId","")).strip()
@@ -611,9 +612,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if SAAS.enabled and route.path.startswith("/api/media/"):
             if not self.require_saas_user() or not self.require_csrf():return
-            try:self.reply(MEDIA.delete(str(self._saas_session["id"]),unquote(route.path.rsplit("/",1)[1]),bool(self._saas_session.get("is_admin"))))
-            except SaaSError as exc:self.reply(exc.payload(),exc.status)
-            except SaaSConfigurationError as exc:self.reply({"code":"saas_unavailable","error":str(exc)},503)
+            self.reply({"code":"book_deletion_required","error":"请在我的书架或运营后台内容管理中永久删除读物。"},409)
             return
         if SAAS.enabled and route.path.startswith("/api/library/items/"):
             if not self.require_saas_user(verified=True) or not self.require_csrf():return
@@ -693,7 +692,7 @@ class Handler(SimpleHTTPRequestHandler):
                     headers=tuple(self.session_cookie_headers(rotated_session,csrf))
                 except SaaSError as exc:
                     self.reply(exc.payload(),exc.status);return
-            self.reply({"user":SAAS.public_user(self._saas_session)},extra_headers=headers)
+            self.reply({"user":{**SAAS.public_user(self._saas_session),"canManagePlatform":self.can_manage_platform()}},extra_headers=headers)
             return
         if path=="/api/auth/devices":
             if not self.require_saas_user():return
@@ -809,6 +808,9 @@ class Handler(SimpleHTTPRequestHandler):
         self.reply({"code":"admin_required","error":"该操作仅允许管理员执行。"},403);return False
     def admin_get(self,route):
         if not self.admin_required():return
+        if route.path=="/api/admin/content-imports" or route.path.startswith("/api/admin/content-imports/"):
+            self.workspace_import_get(route,OFFICIAL_IMPORTS,"/api/admin/content-imports");return
+        if route.path=="/api/admin/platform-config" and not self.deployment_allowed():return
         try:
             path,query=route.path,parse_qs(route.query)
             if path=="/api/admin/dashboard":self.reply(ADMIN.dashboard());return
@@ -825,17 +827,22 @@ class Handler(SimpleHTTPRequestHandler):
             if path=="/api/admin/audit":self.reply(ADMIN.audit((query.get("limit")or[100])[0],(query.get("q")or[""])[0],(query.get("action")or[""])[0]));return
             if path=="/api/admin/platform-config":self.reply(ADMIN.platform_config());return
             if path=="/api/admin/exports/summary":self.reply(ADMIN.export_summary());return
-            if path=="/api/admin/media-assets":self.reply(MEDIA.list_assets((query.get("scope")or[""])[0],(query.get("ownerId")or[""])[0],(query.get("limit")or[20])[0],(query.get("offset")or[0])[0]));return
+            if path=="/api/admin/media-assets":self.reply(MEDIA.user_storage((query.get("ownerId")or[""])[0],(query.get("limit")or[20])[0],(query.get("offset")or[0])[0]));return
             self.reply({"error":"not found"},404)
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
         except (SaaSConfigurationError,ValueError) as exc:self.reply({"code":"admin_unavailable","error":str(exc)},503)
     def admin_post(self,path):
         if not self.admin_required():return
+        if path=="/api/admin/content-imports" or path.startswith("/api/admin/content-imports/"):
+            self.workspace_import_post(urlsplit(path),OFFICIAL_IMPORTS,"/api/admin/content-imports");return
+        if path=="/api/admin/platform-config" and not self.deployment_allowed():return
         try:item=self.json_body()
         except Exception:self.reply({"code":"invalid_payload","error":"请求数据无效。"},400);return
         if not isinstance(item,dict):self.reply({"code":"invalid_payload","error":"请求数据无效。"},400);return
         try:
             actor_id=str(self._saas_session["id"])
+            if path=="/api/admin/catalog/delete":
+                self.reply(CATALOG.delete_book(actor_id,str(item.get("sourceBookId","")).strip(),str(item.get("confirmTitle","")).strip()));return
             if path=="/api/admin/catalog/books":
                 self.reply(CATALOG.review(actor_id,str(item.get("sourceBookId","")).strip(),str(item.get("rightsStatus","")).strip(),str(item.get("publicationStatus","")).strip(),item));return
             if path=="/api/admin/invitations":
@@ -951,35 +958,41 @@ class Handler(SimpleHTTPRequestHandler):
             self.reply({"error":"not found"},404)
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
         except SaaSConfigurationError as exc:self.reply({"code":"workspace_ai_unavailable","error":str(exc)},503)
-    def workspace_import_get(self,route):
+    def workspace_import_get(self,route,service=None,base="/api/workspace/imports"):
+        service=service or WORKSPACE_IMPORTS
         try:
             user_id=str(self._saas_session["id"]);path=route.path
-            if path=="/api/workspace/imports":self.reply(WORKSPACE_IMPORTS.list(user_id));return
-            task_id=unquote(path.rsplit("/",1)[1]);tasks=WORKSPACE_IMPORTS.list(user_id,200)["tasks"];task=next((item for item in tasks if item["id"]==task_id),None)
+            if path==base:
+                query=parse_qs(route.query)
+                self.reply(service.list(user_id,(query.get("limit")or[100])[0],(query.get("page")or[1])[0]));return
+            task_id=unquote(path.rsplit("/",1)[1]);tasks=service.list(user_id,200)["tasks"];task=next((item for item in tasks if item["id"]==task_id),None)
             self.reply({"task":task} if task else {"code":"import_task_not_found","error":"导入任务不存在或你无权访问。"},200 if task else 404);return
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
         except (SaaSConfigurationError,ValueError) as exc:self.reply({"code":"workspace_unavailable","error":str(exc)},503)
-    def workspace_import_post(self,route):
+    def workspace_import_post(self,route,service=None,base="/api/workspace/imports"):
+        service=service or WORKSPACE_IMPORTS
         path,user_id=route.path,str(self._saas_session["id"])
         try:
             if path.endswith("/upload"):
-                task_id=unquote(path[len("/api/workspace/imports/"):-len("/upload")].rstrip("/"));length=int(self.headers.get("Content-Length","0"))
+                task_id=unquote(path[len(base+"/"):-len("/upload")].rstrip("/"));length=int(self.headers.get("Content-Length","0"))
                 if length<=0 or length>20*1024*1024*1024:raise SaaSError("upload_too_large","上传文件大小无效。",413)
                 filename=self.headers.get("X-Upload-Filename","") or "source"
                 data=self.rfile.read(length)
-                self.reply({"task":WORKSPACE_IMPORTS.upload(user_id,task_id,filename,data,self.headers.get("Content-Type","") or "application/octet-stream")});return
+                self.reply({"task":service.upload(user_id,task_id,filename,data,self.headers.get("Content-Type","") or "application/octet-stream")});return
             try:item=self.json_body()
             except Exception:raise SaaSError("invalid_payload","请求数据无效。",400)
             if not isinstance(item,dict):raise SaaSError("invalid_payload","请求数据无效。",400)
-            if path=="/api/workspace/imports":
-                result=WORKSPACE_IMPORTS.create(user_id,str(item.get("kind","")).strip(),str(item.get("title","")or""),str(item.get("filename","")or""),str(item.get("idempotencyKey","")).strip(),str(item.get("sourceUrl","")or""),item.get("metadata") if isinstance(item.get("metadata"),dict) else {})
+            if path==base+"/delete-invalid":
+                self.reply(service.delete_invalid(user_id));return
+            if path==base:
+                result=service.create(user_id,str(item.get("kind","")).strip(),str(item.get("title","")or""),str(item.get("filename","")or""),str(item.get("idempotencyKey","")).strip(),str(item.get("sourceUrl","")or""),item.get("metadata") if isinstance(item.get("metadata"),dict) else {})
                 self.reply(result,201);return
             if path.endswith("/complete"):
-                task_id=unquote(path[len("/api/workspace/imports/"):-len("/complete")].rstrip("/"));self.reply(WORKSPACE_IMPORTS.complete(user_id,task_id));return
+                task_id=unquote(path[len(base+"/"):-len("/complete")].rstrip("/"));self.reply(service.complete(user_id,task_id));return
             if path.endswith("/retry"):
-                task_id=unquote(path[len("/api/workspace/imports/"):-len("/retry")].rstrip("/"));self.reply(WORKSPACE_IMPORTS.retry(user_id,task_id));return
+                task_id=unquote(path[len(base+"/"):-len("/retry")].rstrip("/"));self.reply(service.retry(user_id,task_id));return
             if path.endswith("/cancel"):
-                task_id=unquote(path[len("/api/workspace/imports/"):-len("/cancel")].rstrip("/"));self.reply(WORKSPACE_IMPORTS.cancel(user_id,task_id));return
+                task_id=unquote(path[len(base+"/"):-len("/cancel")].rstrip("/"));self.reply(service.cancel(user_id,task_id));return
             self.reply({"error":"not found"},404)
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
         except (SaaSConfigurationError,ValueError) as exc:self.reply({"code":"workspace_import_unavailable","error":str(exc)},503)
@@ -1460,12 +1473,16 @@ class Handler(SimpleHTTPRequestHandler):
         if encoded:self.send_header("Content-Encoding","gzip");self.send_header("Vary","Accept-Encoding")
         for key,value in extra_headers:self.send_header(key,value)
         self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
+    def can_manage_platform(self):
+        return DEPLOYMENT_MODE=="local" and RUNTIME_MODE!="reader" and SAAS.enabled and self.client_address[0] in {"127.0.0.1","::1"} and bool(getattr(self,"_saas_session",{}).get("is_admin"))
+
     def deployment_allowed(self):
+        if DEPLOYMENT_MODE!="local" or RUNTIME_MODE=="reader":
+            self.reply({"code":"local_mode_required","error":"平台与部署仅在本地模式开放。"},403);return False
         address=self.client_address[0]
         if address not in {"127.0.0.1","::1"}:self.reply({"error":"部署操作仅允许从服务器本机访问"},403);return False
-        if SAAS.enabled and not getattr(self,"_saas_session",{}).get("is_admin"):
+        if not SAAS.enabled or not getattr(self,"_saas_session",{}).get("is_admin"):
             self.reply({"code":"admin_required","error":"部署管理仅允许管理员访问。"},403);return False
-        if RUNTIME_MODE=="reader":self.reply({"error":"远程阅读节点已禁用部署管理"},403);return False
         return True
 
 class ReaderHTTPServer(ThreadingHTTPServer):

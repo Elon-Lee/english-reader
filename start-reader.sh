@@ -52,6 +52,7 @@ elif [ "$#" -gt 0 ]; then
 fi
 export READER_HOST="${READER_HOST:-0.0.0.0}"
 export READER_PORT="${READER_PORT:-8765}"
+export SHIYUE_DEPLOYMENT_MODE="${SHIYUE_DEPLOYMENT_MODE:-local}"
 reader_python="${READER_PYTHON:-python3}"
 if [ -z "${READER_PYTHON:-}" ] && [ -x .local/saas-venv/bin/python ]; then
   reader_python=".local/saas-venv/bin/python"

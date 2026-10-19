@@ -374,6 +374,7 @@ class MembershipService:
               (SELECT COUNT(*) FROM user_library ul JOIN catalog_books cb ON cb.id=ul.catalog_book_id
                WHERE ul.user_id=%s AND cb.resource_type=ANY(%s)) +
               (SELECT COUNT(*) FROM content_books WHERE owner_id=%s AND visibility IN ('private','draft')
+               AND NOT EXISTS (SELECT 1 FROM catalog_books official WHERE official.source_content_book_id=content_books.id)
                AND status='ready' AND source_type=ANY(%s)) AS total""",
             (user_id, resource_types, user_id, resource_types),
         )

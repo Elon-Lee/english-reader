@@ -49,7 +49,7 @@ def main()->int:
     port=int(os.environ.get("READER_PORT","8790"));smtp_port=int(os.environ.get("SHIYUE_DEBUG_SMTP_PORT","1025"));outbox=ROOT/".local/smtp-outbox";outbox.mkdir(parents=True,exist_ok=True)
     smtp=SMTPServer(("127.0.0.1",smtp_port),SMTPHandler,outbox);threading.Thread(target=smtp.serve_forever,daemon=True).start()
     walkthrough=os.environ.get("SHIYUE_RUN_WALKTHROUGH","").strip().lower() in {"1","true","yes","on"};secret=secrets.token_urlsafe(32) if walkthrough else ""
-    environment={**os.environ,"SHIYUE_SAAS_ENABLED":"1","READER_HOST":"0.0.0.0","READER_PORT":str(port),"APP_BASE_URL":f"http://localhost:{port}","SMTP_HOST":"127.0.0.1","SMTP_PORT":str(smtp_port),"SMTP_USER":"","SMTP_PASSWORD":"","SMTP_FROM":"debug@shiyue.local"}
+    environment={**os.environ,"SHIYUE_DEPLOYMENT_MODE":"local","SHIYUE_SAAS_ENABLED":"1","READER_HOST":"0.0.0.0","READER_PORT":str(port),"APP_BASE_URL":f"http://localhost:{port}","SMTP_HOST":"127.0.0.1","SMTP_PORT":str(smtp_port),"SMTP_USER":"","SMTP_PASSWORD":"","SMTP_FROM":"debug@shiyue.local"}
     if walkthrough:environment.update({"SHIYUE_BROWSER_AUDIT_SECRET":secret,"SHIYUE_BROWSER_AUDIT_EMAIL":str(os.environ.get("BOOTSTRAP_ADMIN_EMAIL","")).strip(),"SHIYUE_BROWSER_AUDIT_PASSWORD":str(os.environ.get("SHIYUE_BROWSER_PASSWORD",""))})
     before=set(outbox.glob("*.eml"));sent=SaaSService(environment=environment)._send_mail("debug-recipient@local.test","拾页本地 SMTP 自检","本邮件只保存到本机调试目录。")
     after=set(outbox.glob("*.eml"));
