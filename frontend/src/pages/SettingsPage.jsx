@@ -14,10 +14,8 @@ import {
   Space,
   Switch,
   Tag,
-  Tooltip,
   Typography,
 } from 'antd'
-import { QuestionCircleOutlined } from '@ant-design/icons'
 
 import { DEFAULT_PREFERENCES, KEY_OPTIONS } from '../config/preferences'
 
@@ -47,12 +45,12 @@ export default function SettingsPage({ currentUser, devices, preferences, deleti
         <Card title="阅读器偏好">
           <Form form={form} layout="vertical" onFinish={submit} initialValues={DEFAULT_PREFERENCES}>
             <Row gutter={16}>
-              <Col span={12}><Form.Item label={<Space size={6}>默认阅读模式<Tooltip title="精读：逐句查词与句法分析；泛读：连续阅读、减少打断；影子跟读：播放原音后录制并回放自己的发音。"><QuestionCircleOutlined /></Tooltip></Space>} name="readerMode"><Segmented block options={[{ label: <Tooltip title="逐句阅读，重点使用查词、标注和句法分析">精读</Tooltip>, value: 'intensive' }, { label: <Tooltip title="连续阅读，减少面板和自动暂停造成的打断">泛读</Tooltip>, value: 'extensive' }, { label: <Tooltip title="跟随原始音视频逐句模仿，并录音回放对比">影子跟读</Tooltip>, value: 'shadow' }]} /></Form.Item></Col>
+              <Col span={12}><Form.Item label="默认学习空间" name="focusMode" getValueProps={value => ({ value: value ? 'focus' : 'normal' })} normalize={value => value === 'focus'}><Segmented block options={[{ label: '普通模式', value: 'normal' }, { label: '专注模式', value: 'focus' }]} /></Form.Item></Col>
               <Col span={12}><Form.Item label="正文布局" name="readerLayout"><Segmented block options={[{ label: '左右布局', value: 'side' }, { label: '上下布局', value: 'stack' }]} /></Form.Item></Col>
               <Col span={12}><Form.Item label="界面密度" name="density"><Segmented block options={[{ label: '舒适', value: 'comfortable' }, { label: '紧凑', value: 'compact' }]} /></Form.Item></Col>
               <Col span={12}><Form.Item label="默认播放速度" name="playbackRate"><Select options={[.5, .75, 1, 1.25, 1.5, 2].map(value => ({ value, label: `${value}×` }))} /></Form.Item></Col>
               <Col span={8}><Form.Item label="护眼模式" name="eyeComfort" valuePropName="checked"><Switch /></Form.Item></Col>
-              <Col span={8}><Form.Item label="专注模式" name="focusMode" valuePropName="checked"><Switch /></Form.Item></Col>
+              <Col span={8}><Text type="secondary">两种模式均可查词、分析句法与跟读。</Text></Col>
               <Col span={8}><Form.Item label="句末自动暂停" name="sentenceAutoPause" valuePropName="checked"><Switch /></Form.Item></Col>
             </Row>
 

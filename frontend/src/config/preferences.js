@@ -1,5 +1,4 @@
 export const DEFAULT_PREFERENCES = {
-  readerMode: 'intensive',
   density: 'comfortable',
   reminder: 'weekdays',
   readerLayout: 'side',
@@ -17,6 +16,12 @@ export const DEFAULT_PREFERENCES = {
   highlightLeadMs: 0,
   heatmapRange: 'year',
   playbackRate: 1,
+  readerFontSize: 20,
+  readerLineHeight: 1.8,
+  readerContentWidth: 760,
+  readerToolsPinned: false,
+  wordAutoPronounce: false,
+  wordHoverPause: false,
 }
 
 export const KEY_OPTIONS = [

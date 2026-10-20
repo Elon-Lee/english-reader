@@ -529,7 +529,7 @@ class SaaSService:
             "shortcutNext": {"a", "s", "d", "space", "arrowleft", "arrowright", "enter"},
             "shortcutPlay": {"a", "s", "d", "space", "arrowleft", "arrowright", "enter"},
         }
-        boolean_fields = {"eyeComfort", "focusMode", "sentenceAutoPause"}
+        boolean_fields = {"eyeComfort", "focusMode", "sentenceAutoPause", "readerToolsPinned", "wordAutoPronounce", "wordHoverPause"}
         number_fields = {
             "wordTipSeconds": (0.5, 10.0),
             "reviewPageSize": (5, 50),
@@ -537,6 +537,9 @@ class SaaSService:
             "manualPauseSeconds": (0.5, 10.0),
             "highlightLeadMs": (-300, 600),
             "playbackRate": (0.5, 2.0),
+            "readerFontSize": (16, 28),
+            "readerLineHeight": (1.4, 2.4),
+            "readerContentWidth": (560, 1040),
         }
         current = self.preferences(user_id)
         changed = False
@@ -559,7 +562,7 @@ class SaaSService:
                     value = float(incoming[key])
                 except (TypeError, ValueError) as exc:
                     raise SaaSError("invalid_preferences", f"阅读偏好 {key} 无效。", 400) from exc
-                if value < minimum or value > maximum:
+                if not minimum <= value <= maximum or isinstance(incoming[key], bool):
                     raise SaaSError("invalid_preferences", f"阅读偏好 {key} 超出允许范围。", 400)
                 if key in {"reviewPageSize", "manualRepeatCount", "highlightLeadMs"}:
                     value = int(value)

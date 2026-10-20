@@ -63,6 +63,24 @@ class PrivateWorkspaceTests(unittest.TestCase):
             with connection.cursor() as cursor:cursor.execute("INSERT INTO email_verifications(id,user_id,token_hash,expires_at) VALUES(%s,%s,%s,%s)",(new_id(),user_id,token_hash(raw),utcnow()+timedelta(days=1)))
         self.accounts.verify_email(raw)
 
+    def test_reader_appearance_preferences_persist_for_owner(self):
+        values={"readerFontSize":24,"readerLineHeight":2.1,"readerContentWidth":920,"readerToolsPinned":True,"wordAutoPronounce":False,"wordHoverPause":True,"readerMode":"extensive"}
+        result=self.accounts.update_preferences(str(self.owner["id"]),values)
+        self.assertEqual(result,values)
+        self.assertEqual(self.accounts.preferences(str(self.owner["id"])),values)
+        self.assertEqual(self.accounts.preferences(str(self.other["id"])),{})
+        self.accounts.update_preferences(str(self.owner["id"]),{"readerFontSize":20})
+        self.assertEqual(self.accounts.preferences(str(self.owner["id"]))["readerContentWidth"],920)
+
+    def test_reader_appearance_preferences_reject_invalid_values_atomically(self):
+        user_id=str(self.owner["id"])
+        self.accounts.update_preferences(user_id,{"readerFontSize":20})
+        for key,value in (("readerFontSize",29),("readerFontSize",True),("readerLineHeight",float("nan")),("readerContentWidth",float("inf")),("readerToolsPinned","false"),("wordHoverPause",1)):
+            with self.subTest(key=key,value=value):
+                with self.assertRaises(SaaSError):
+                    self.accounts.update_preferences(user_id,{"readerMode":"extensive",key:value})
+                self.assertEqual(self.accounts.preferences(user_id),{"readerFontSize":20})
+
     def create_private_book(self,owner_id:str)->str:
         book_id="private-workspace-book";data={"id":book_id,"title":"私人读物","englishTitle":"Private Reader","sentences":[{"id":"s1","text":"My private first sentence.","translation":"我的私人第一句。","words":[{"text":"My"}]},{"id":"s2","text":"My private second sentence.","words":[{"text":"My"}]}]}
         with self.accounts.transaction() as connection:
