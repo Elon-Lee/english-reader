@@ -122,6 +122,7 @@ export default function CatalogPage({ catalogBooks, openReader, selectScreen, on
 
   if (optionsLoading) return <PageSkeleton />
   return <div className="page-stack">
+    {new URLSearchParams(location.search).get('onboarding') === '1' && <Alert type="info" showIcon message="先挑一篇能理解大意的短内容" description="可按级别与资源类型筛选。先试读前 10%，适合自己再加入书架；完整阅读时可保存生词。" closable />}
     <div className="page-intro"><div><Text className="eyebrow">CURATED LIBRARY</Text><Title level={1}>发现下一篇想读懂的内容</Title><Paragraph>按兴趣挑选官方读物，先试读，再加入自己的书架。</Paragraph></div><Button icon={<BookOutlined />} onClick={() => selectScreen('library')}>我的书架</Button></div>
     {optionsError && <Alert showIcon type="warning" message="部分筛选暂时不可用" description={optionsError} action={<Button onClick={() => setRevision(value => value + 1)}>重试</Button>} />}
     <Card className="filter-card catalog-filter-card">

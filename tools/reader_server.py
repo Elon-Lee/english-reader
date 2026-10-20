@@ -39,6 +39,7 @@ from saas_media import MediaService
 from saas_membership import MembershipService
 from saas_rewards import RewardService
 from saas_workspace import WorkspaceService
+from saas_journey import JourneyService
 from saas_imports import WorkspaceImportService
 from saas_ai import WorkspaceAIService
 from saas_billing import PaddleBillingService
@@ -85,6 +86,7 @@ ADMIN=AdminService(SAAS,MEMBERSHIPS)
 MEDIA=MediaService(SAAS,MEMBERSHIPS)
 ACCOUNTS=AccountLifecycleService(SAAS)
 WORKSPACE=WorkspaceService(SAAS)
+JOURNEY=JourneyService(SAAS)
 WORKSPACE_IMPORTS=WorkspaceImportService(SAAS,MEMBERSHIPS,MEDIA)
 OFFICIAL_IMPORTS=WorkspaceImportService(SAAS,MEMBERSHIPS,MEDIA,official=True)
 WORKSPACE_AI=WorkspaceAIService(SAAS,MEMBERSHIPS)
@@ -247,7 +249,7 @@ class Handler(SimpleHTTPRequestHandler):
         if SAAS.enabled and (route.path=="/api/workspace/imports" or route.path.startswith("/api/workspace/imports/")):
             if not self.require_saas_user(verified=True):return
             self.workspace_import_get(route);return
-        if SAAS.enabled and (route.path=="/api/workspace/books" or route.path.startswith("/api/workspace/books/") or route.path in {"/api/workspace/vocabulary","/api/workspace/annotations","/api/workspace/learning-days"}):
+        if SAAS.enabled and (route.path=="/api/workspace/books" or route.path.startswith("/api/workspace/books/") or route.path in {"/api/workspace/vocabulary","/api/workspace/annotations","/api/workspace/learning-days","/api/workspace/journey"}):
             if not self.require_saas_user(verified=True):return
             self.workspace_get(route);return
         if SAAS.enabled and route.path.startswith("/api/media/"):
@@ -452,7 +454,7 @@ class Handler(SimpleHTTPRequestHandler):
         if SAAS.enabled and (route.path=="/api/workspace/imports" or route.path.startswith("/api/workspace/imports/")):
             if not self.require_saas_user(verified=True) or not self.require_csrf():return
             self.workspace_import_post(route);return
-        if SAAS.enabled and route.path in {"/api/workspace/vocabulary","/api/workspace/annotations","/api/workspace/activity","/api/workspace/progress"}:
+        if SAAS.enabled and route.path in {"/api/workspace/vocabulary","/api/workspace/annotations","/api/workspace/activity","/api/workspace/progress","/api/workspace/journey"}:
             if not self.require_saas_user(verified=True) or not self.require_csrf():return
             self.workspace_post(route.path);return
         if SAAS.enabled and route.path in {"/api/word-context","/api/sentence-grammar"}:
@@ -814,6 +816,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             path,query=route.path,parse_qs(route.query)
             if path=="/api/admin/dashboard":self.reply(ADMIN.dashboard());return
+            if path=="/api/admin/journey-report":self.reply(JOURNEY.report((query.get("days")or[30])[0]));return
             if path=="/api/admin/users":self.reply(ADMIN.users((query.get("q")or[""])[0],(query.get("limit")or[100])[0]));return
             if path.startswith("/api/admin/users/"):
                 self.reply(ADMIN.user_detail(unquote(path.rsplit("/",1)[1])));return
@@ -927,6 +930,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path=="/api/workspace/vocabulary":self.reply(WORKSPACE.vocabulary(user_id,(query.get("bookId")or[""])[0]));return
             if path=="/api/workspace/annotations":self.reply(WORKSPACE.annotations(user_id,(query.get("bookId")or[""])[0]));return
             if path=="/api/workspace/learning-days":self.reply(WORKSPACE.learning_days(user_id,(query.get("limit")or[365])[0]));return
+            if path=="/api/workspace/journey":self.reply(JOURNEY.state(user_id));return
             self.reply({"error":"not found"},404)
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
         except (SaaSConfigurationError,ValueError) as exc:self.reply({"code":"workspace_unavailable","error":str(exc)},503)
@@ -936,6 +940,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not isinstance(item,dict):self.reply({"code":"invalid_payload","error":"请求数据无效。"},400);return
         try:
             user_id=str(self._saas_session["id"])
+            if path=="/api/workspace/journey":self.reply(JOURNEY.update(user_id,item));return
             if path=="/api/workspace/vocabulary":self.reply(WORKSPACE.save_vocabulary(user_id,str(item.get("bookId","")).strip(),str(item.get("sentenceId","")).strip(),item.get("wordIndex"),item.get("payload")),201);return
             if path=="/api/workspace/annotations":self.reply(WORKSPACE.annotate(user_id,str(item.get("bookId","")).strip(),str(item.get("sentenceId","")).strip(),item.get("wordIndex"),item.get("payload")));return
             if path=="/api/workspace/progress":self.reply(WORKSPACE.save_progress(user_id,str(item.get("bookId","")).strip(),str(item.get("lastSentenceId","")).strip()));return

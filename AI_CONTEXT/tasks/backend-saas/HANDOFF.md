@@ -1,5 +1,13 @@
 # SaaS 后端交接
 
+## 2026-10-20 学习旅程与真实转化
+
+- 新增 `0038_product_journey.sql`、`saas_journey.py`。GET/POST `/api/workspace/journey` 要求登录并验证邮箱，写入保留 CSRF；状态由当前会话确定账号，行锁及账号级幂等键隔离写入。学习里程碑服务端写入，购买键独立命名空间，不能冒充学习完成。
+- 指引读取真实书架、正时长学习、生词；账号设置存储跳过及 7 天购买提醒。只接受有效已发布付费商品，前往云猫要求有链接；匹配成功兑换后隐藏，再选同款可建立新续费提醒。迁移不回填历史行为。
+- 管理员 GET `/api/admin/journey-report?days=7|30|90`：新注册→验证→保存听读→听读与生词；完成日取两个里程碑较晚日期，北京时间次日完整结束才纳入留存。购买按账号去重，选择→离站→之后云猫兑换，只能表示关联人数，不能作支付或精确商品订单归因。
+- `workspace/activity` 同时支持所有者私人书和已收藏官方书，保存至源内容 ID；正时长记录与首读里程碑同事务，奖励失败不撤销已保存学习。词汇保存同步写首词里程碑，旧奖励活动复用相同稳定键。
+- 本地库 `shiyue_saas_local` 先备份后应用 0038，8790 已重启且健康。备份 `.local/saas-backups/commercial-round2-20261020/20261019T232256Z/database.dump`。36 项隔离库回归、35 项 HTTP smoke、编译及前端检查通过；未发布生产。接口鉴权/CSRF/幂等及报表口径覆盖于 phase7 的 8 项测试。
+
 ## 2026-10-19 商业化页面只读契约
 
 - 私人/官方书架返回统一 `readingProgress`：保存句子位置、百分比、更新时间；未完成不因时长或舍入显示完成。官方查询按书架所有者关联进度，保留租户隔离。
@@ -18,7 +26,7 @@
 
 - 主服务：`tools/reader_server.py`。
 - PostgreSQL 服务模块：`tools/saas_auth.py`、`saas_membership.py`、`saas_catalog.py`、`saas_workspace.py`、`saas_imports.py`、`saas_ai.py`、`saas_admin.py` 等。
-- 当前新增 migration：`0037_private_import_ownership.sql`（个人导入归属纠正，已应用本地）；此前 `0036_youtube_channel_series.sql`，回填 YouTube 历史默认系列为频道并同步书城默认分组，保留手工系列；2026-10-19 已应用本地正式库，启动 SaaS 后台及 Vite 代理健康检查通过。迁移前备份：`.local/backups/pre-local-start-20261019-065355.dump`。生产仍为 `0034`，尚未发布生产。
+- 当前本地迁移至 `0038_product_journey.sql`（学习旅程事件）；此前 `0037` 纠正个人导入归属、`0036` 回填 YouTube 频道系列。生产仍为 `0034`，尚未发布生产；0038 备份及验收见上。
 - 认证使用数据库会话 Cookie 和 CSRF；所有写接口必须校验 CSRF。
 - 2026-10-18 修复已有会话缺失/失配 `shiyue_csrf` 时写 API 持续 403：认证读取会轮换当前 session 并补发配对 CSRF Cookie，使缺失 Cookie 同时撤销旧 session；前端收到一次 `csrf_failed` 后自动刷新认证并重试一次，写接口仍强制校验 CSRF。新增回归覆盖旧 session 失效、Cookie 恢复和后续安全登出；隔离 PostgreSQL 测试库当前未配置，尚未执行数据库集成测试。
 - 测试库名称必须以 `_test` 结尾。

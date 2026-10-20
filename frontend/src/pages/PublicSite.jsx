@@ -4,7 +4,9 @@ import { Alert, Button, Card, Col, Collapse, Empty, Input, Modal, Row, Skeleton,
 
 import { getJson, postJson } from '../api/client'
 import usePurchasePreviews from '../hooks/usePurchasePreviews'
-import { displayBenefits, displayDate, featuredProductId, purchaseAction } from '../utils/presentation.mjs'
+import { displayBenefits, displayDate, featuredProductId, planHighlights, purchaseAction, sharedBenefits } from '../utils/presentation.mjs'
+import { refreshJourney, updateJourney } from '../api/journey'
+import { PurchaseRecovery } from '../components/LearningJourney'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -39,7 +41,7 @@ export function ProductCard({ product, authenticated, onPurchase, featured = fal
       <div><Title level={3}>{product.shortName}</Title><Paragraph>{product.tagline}</Paragraph></div>
       <div className="public-price"><PriceDisplay product={product} /><span>{product.family === 'free' ? '永久免费' : ` / ${product.durationDays} 天`}</span></div>
       <Text type="secondary">{product.family === 'free' ? '使用邀请码注册，验证邮箱后开始' : '单次购买，不自动续费'}</Text>
-      <ul>{displayBenefits(product).map(item => <li key={item}><CheckCircleFilled aria-hidden />{item}</li>)}</ul>
+      <PlanHighlights product={product} />
       {product.family === 'free'
         ? <Button block size="large" href={freeHref}>{action.label}</Button>
         : <div className="public-plan-action"><Button block type={featured ? 'primary' : 'default'} size="large" loading={action.loading} disabled={action.disabled} onClick={() => action.retry ? onRetry() : onPurchase(product)}>{action.label}</Button>{state?.error && action.retry && <Text type="danger">权益暂时未能读取，请重试。</Text>}{!product.purchaseUrl && <Text type="secondary">暂未开放购买，可使用已有兑换码</Text>}</div>}
@@ -47,10 +49,24 @@ export function ProductCard({ product, authenticated, onPurchase, featured = fal
   </Card>
 }
 
+export function PlanHighlights({ product }) {
+  return <dl className="plan-highlights">{planHighlights(product).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+}
+
 export function PricingSection({ authenticated, products, loading = false, error = '', onRetry, title = '找到适合你的学习方案', onPurchase, headingLevel = 2 }) {
   const { states, retry } = usePurchasePreviews(products, authenticated)
   const featured = featuredProductId(products)
-  return <section className="public-section public-pricing" id="pricing"><div className="public-section-heading"><Text>MEMBERSHIP</Text><Title level={headingLevel}>{title}</Title><Paragraph>先从免费版开始。需要更多空间和 AI 分析时，再升级；付费方案不自动续费。</Paragraph></div>{loading ? <Row gutter={[20, 20]}>{[1, 2, 3].map(item => <Col xs={24} md={12} xl={8} key={item}><Card><Skeleton active /></Card></Col>)}</Row> : error ? <Alert type="error" showIcon message="套餐暂时无法加载" description={error} action={<Button onClick={onRetry}>重试</Button>} /> : products.length ? <Row gutter={[20, 20]}>{products.map(product => <Col xs={24} md={12} xl={8} key={product.id}><ProductCard product={product} authenticated={authenticated} onPurchase={onPurchase} featured={product.id === featured} state={states[product.planVersion]} onRetry={retry} /></Col>)}</Row> : <Empty description="暂无在售套餐，请稍后再来" />}<Paragraph className="public-capacity-note">音视频收藏数量按官方书架与私人内容合计；移出官方书架或删除私人读物可释放名额。注册需要有效邀请码，可在支持页咨询。</Paragraph></section>
+  const common = sharedBenefits(products)
+  return <section className="public-section public-pricing" id="pricing">
+    <div className="public-section-heading"><Text>MEMBERSHIP</Text><Title level={headingLevel}>{title}</Title><Paragraph>免费开始，按空间和收藏数量选择。付费方案均含不限次 AI 分析，不自动续费。</Paragraph></div>
+    {loading ? <Row gutter={[20, 20]}>{[1, 2, 3].map(item => <Col xs={24} md={12} xl={8} key={item}><Card><Skeleton active /></Card></Col>)}</Row>
+      : error ? <Alert type="error" showIcon message="套餐暂时无法加载" description={error} action={<Button onClick={onRetry}>重试</Button>} />
+        : products.length ? <><Row gutter={[20, 20]}>{products.map(product => <Col xs={24} md={12} xl={8} key={product.id}><ProductCard product={product} authenticated={authenticated} onPurchase={onPurchase} featured={product.id === featured} state={states[product.planVersion]} onRetry={retry} /></Col>)}</Row>
+          {common.length > 0 && <div className="plan-common-benefits"><Text strong>所有方案都包含</Text><ul>{common.map(item => <li key={item}><CheckCircleFilled aria-hidden />{item}</li>)}</ul></div>}
+          <Collapse className="plan-full-benefits" ghost items={[{ key: 'full', label: '展开完整权益与方案说明', children: <Row gutter={[24, 16]}>{products.map(product => <Col span={8} key={product.id}><Title level={4}>{product.shortName || product.name}</Title><ul>{displayBenefits(product).map(item => <li key={item}>{item}</li>)}</ul>{product.configuredBenefits?.map((benefit, index) => <Paragraph key={benefit.id || index}>{benefit.text || benefit.name}</Paragraph>)}</Col>)}</Row> }]} />
+        </> : <Empty description="暂无在售套餐，请稍后再来" />}
+    <Paragraph className="public-capacity-note">音视频收藏按官方书架与私人内容合计；移出官方书架或删除私人读物可释放名额。注册需要有效邀请码，<a href="/support#invitation">没有邀请码？</a></Paragraph>
+  </section>
 }
 
 function PricingFAQ() {
@@ -72,20 +88,40 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
   const [previewError, setPreviewError] = useState('')
   const [previewCode, setPreviewCode] = useState('')
   const [previewRevision, setPreviewRevision] = useState(0)
+  const [departed, setDeparted] = useState(false)
+  const [recoveryError, setRecoveryError] = useState('')
+  const redeemInput = useRef(null)
+  const purchaseTracking = useRef(Promise.resolve())
+  const trackingSequence = useRef(0)
   const inFlight = useRef(false)
   const redeemAttempt = useRef({ code: '', key: '' })
 
   useEffect(() => {
     let active = true
-    setRedeemCode('')
-    setRedeemResult(null)
-    setRedeemError('')
     setPreview(null)
     setPreviewError('')
     setPreviewCode('')
     if (open && authenticated && product?.planVersion) getJson(`/api/membership/change-preview?targetPlan=${encodeURIComponent(product.planVersion)}`).then(value => { if (active) setPreview(value) }).catch(error => { if (active) { setPreviewCode(error.code || ''); setPreviewError(error.code === 'membership_downgrade_not_allowed' ? '你的有效会员等级高于此方案，请选择当前等级续费或更高等级升级。' : error.message || '权益预览暂时不可用，请重试。') } })
     return () => { active = false }
   }, [product?.id, open, authenticated, previewRevision])
+
+  useEffect(() => {
+    const sequence = ++trackingSequence.current
+    setRedeemCode(''); setRedeemResult(null); setRedeemError(''); setDeparted(false); setRecoveryError('')
+    if (!open || !authenticated || !product?.id) return
+    purchaseTracking.current = updateJourney({ action: 'plan_selected', productVersionId: product.id, idempotencyKey: `plan-${crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`}` })
+      .then(state => { if (sequence === trackingSequence.current) setDeparted(state.pendingPurchase?.phase === 'departed') })
+      .catch(() => { if (sequence === trackingSequence.current) setRecoveryError('暂时无法保存所选方案，请保留此页面，付款后回到这里兑换。') })
+    return () => { trackingSequence.current += 1 }
+  }, [product?.id, open, authenticated])
+
+  const depart = () => {
+    const sequence = trackingSequence.current
+    setDeparted(true)
+    purchaseTracking.current = purchaseTracking.current.then(() => updateJourney({ action: 'purchase_departure', productVersionId: product.id, idempotencyKey: `depart-${crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`}` }))
+      .then(() => { if (sequence === trackingSequence.current) setRecoveryError('') })
+      .catch(() => { if (sequence === trackingSequence.current) setRecoveryError('暂时无法保存购买入口，请保留此页面，付款后回到这里兑换。') })
+  }
 
   const submitRedeem = async () => {
     if (inFlight.current || redeemResult) return
@@ -108,6 +144,7 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
       const result = await postJson('/api/membership/redeem', { code, idempotencyKey: redeemAttempt.current.key })
       setRedeemResult(result)
       setRedeemCode('')
+      void refreshJourney().catch(() => {})
       try { await onRedeemed?.(result) } catch { /* Redemption already succeeded; keep its confirmation visible. */ }
     } catch (error) {
       setRedeemError(error.message || '兑换失败，请核对兑换码后重试。')
@@ -126,14 +163,16 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
       {preview && <Alert showIcon type="info" message={preview.changeType === 'upgrade' ? `立即升级到${preview.targetPlan.name}` : preview.changeType === 'renewal' ? `立即续费并延长 ${preview.durationDays} 天` : `立即开通${preview.targetPlan.name} ${preview.durationDays}天`} description={preview.changeType === 'upgrade' ? `按套餐价值折算：当前剩余权益约折算 ${preview.carryDays} 天${preview.targetPlan.name}，有效期预计至 ${displayDate(preview.endsAt)}` : preview.changeType === 'renewal' ? `续费后会员有效期延长至 ${displayDate(preview.endsAt)}` : `立即生效，预计有效至 ${displayDate(preview.endsAt)}`} />}
       {authenticated && !preview && !previewError && <Skeleton active title={false} paragraph={{ rows: 2 }} />}
       {previewError && <Alert showIcon type={previewCode === 'membership_downgrade_not_allowed' ? 'info' : 'error'} message={previewCode === 'membership_downgrade_not_allowed' ? '当前会员高于此方案' : '暂时无法核对权益'} description={previewError} action={previewCode !== 'membership_downgrade_not_allowed' && <Button onClick={() => setPreviewRevision(value => value + 1)}>重试</Button>} />}
-      {authenticated ? <Button block type="primary" size="large" href={product.purchaseUrl || undefined} target="_blank" rel="noreferrer" disabled={!product.purchaseUrl || Boolean(previewError) || !preview || Boolean(redeemResult)}>打开云猫购买</Button> : <Button block type="primary" size="large" href={loginHref}>登录后核对方案</Button>}
+      {authenticated && departed && !redeemResult && <Alert showIcon type="info" message="已前往云猫，付款后请回来兑换" description="此处无法自动核实外部付款。已付款请复制云猫发放的兑换码，无需再次购买。" />}
+      {recoveryError && <Alert showIcon type="warning" message={recoveryError} />}
+      {authenticated ? <Space direction="vertical" style={{ width: '100%' }}><Button block type={departed ? 'default' : 'primary'} size="large" href={product.purchaseUrl || undefined} target="_blank" rel="noreferrer" onClick={depart} disabled={!product.purchaseUrl || Boolean(previewError) || !preview || Boolean(redeemResult)}>{departed ? '再次前往云猫商品页' : '打开云猫购买'}</Button>{!redeemResult && <Button block type="link" disabled={!preview || Boolean(previewError)} onClick={() => redeemInput.current?.focus()}>已购买，直接输入兑换码 ↓</Button>}</Space> : <Button block type="primary" size="large" href={loginHref}>登录后核对方案</Button>}
       <Paragraph className="purchase-reassurance">由云猫完成收款并发放兑换码，兑换后在拾页生效；不自动续费。付款前请查看<a href="/refunds" target="_blank" rel="noreferrer">退款规则</a>。{!product.purchaseUrl && '此方案暂未开放新购，已有兑换码仍可开通。'}</Paragraph>
       <div className="public-purchase-modal-redeem">
         <Text strong>已有兑换码？</Text>
         {authenticated
-          ? <><Input aria-label="云猫兑换码" value={redeemCode} status={redeemError ? 'error' : undefined} onChange={event => { setRedeemCode(event.target.value.toUpperCase()); setRedeemError('') }} onPressEnter={submitRedeem} placeholder="SY- 后接 32 位兑换码" maxLength={35} autoComplete="off" disabled={redeeming || Boolean(redeemResult) || !preview || Boolean(previewError)} /><Button block onClick={submitRedeem} loading={redeeming} disabled={Boolean(redeemResult) || !preview || Boolean(previewError)}>{redeemResult ? '兑换成功' : '立即兑换'}</Button></>
+          ? <><Input ref={redeemInput} aria-label="云猫兑换码" value={redeemCode} status={redeemError ? 'error' : undefined} onChange={event => { setRedeemCode(event.target.value.toUpperCase()); setRedeemError('') }} onPressEnter={submitRedeem} placeholder="SY- 后接 32 位兑换码" maxLength={35} autoComplete="off" disabled={redeeming || Boolean(redeemResult) || !preview || Boolean(previewError)} /><Button block type={departed ? 'primary' : 'default'} onClick={submitRedeem} loading={redeeming} disabled={Boolean(redeemResult) || !preview || Boolean(previewError)}>{redeemResult ? '兑换成功' : '立即兑换'}</Button></>
           : <><Text type="secondary">登录后即可将权益开通到当前账号。</Text><Button block href={`/login?next=${encodeURIComponent(`${returnTo}${returnTo.includes('?') ? '&' : '?'}purchase=${product.slug}`)}`}>登录后继续</Button></>}
-        {redeemError && <Alert showIcon type="error" message={redeemError} />}
+        {redeemError && <Alert showIcon type="error" message={redeemError} description={<span>核对兑换码和登录账号后重试。仍无法开通时，请保留云猫订单号、购买时间和注册邮箱，<a href="/support#payment" target="_blank" rel="noreferrer">联系支持</a>。</span>} />}
         {redeemResult && <Alert showIcon type="success" message={`${redeemResult.planName}已处理`} description={`${redeemResult.changeOrder?.changeType === 'renewal' ? '已完成同级续费' : redeemResult.changeOrder?.changeType === 'upgrade' ? `已立即升级，折算约 ${redeemResult.changeOrder?.carryDays || 0} 天` : '已开通'}；预计有效至 ${displayDate(redeemResult.endsAt)}`} action={<Button type="link" href="/app?screen=membership">查看会员</Button>} />}
       </div>
     </div>}
@@ -176,11 +215,12 @@ export default function PublicSite({ authenticated, page = 'home' }) {
   const purchaseDialog = <CloudCatPurchaseModal product={purchaseProduct} open={Boolean(purchaseProduct)} authenticated={authenticated} returnTo={location.pathname} onClose={closePurchase} onRedeemed={() => setCatalogRevision(value => value + 1)} />
   const pricingProps = { authenticated, loading, error: catalogError, onRetry: () => setCatalogRevision(value => value + 1), onPurchase: openPurchase }
 
-  if (page === 'pricing') return <main className="public-site"><PublicHeader authenticated={authenticated} compact /><PricingSection key={catalogRevision} {...pricingProps} products={catalog.products} headingLevel={1} title="按你的学习节奏，选择合适的空间" /><PricingFAQ />{purchaseDialog}<TrustFooter support={catalog.support} /></main>
-  if (page === 'support') return <main className="public-site"><PublicHeader authenticated={authenticated} compact /><section className="public-support"><Text>SUPPORT</Text><Title>购买前后，都有人回应</Title><Paragraph>套餐、支付、退款或账号问题，请联系 QQ <b>{catalog.support?.value || '289614546'}</b>。我们会在 1 个工作日内响应，并尽量在 3 个工作日内给出处理结论。</Paragraph><Row gutter={[20, 20]}><Col xs={24} md={8}><Card><CustomerServiceOutlined /><Title level={4}>购买咨询</Title><Text>确认套餐期限、权益和账号绑定方式。</Text></Card></Col><Col xs={24} md={8}><Card><LockOutlined /><Title level={4}>支付与退款</Title><Text>提供订单号、注册邮箱和购买时间，我们会核实处理。</Text></Card></Col><Col xs={24} md={8}><Card><CheckCircleFilled /><Title level={4}>内容与版权</Title><Text>私人材料仅用于个人学习，官方内容仅使用公版或授权资源。</Text></Card></Col></Row></section><TrustFooter support={catalog.support} /></main>
+  if (page === 'pricing') return <main className="public-site"><PublicHeader authenticated={authenticated} compact /><PurchaseRecovery authenticated={authenticated} /><PricingSection key={catalogRevision} {...pricingProps} products={catalog.products} headingLevel={1} title="按你的学习节奏，选择合适的空间" /><PricingFAQ />{purchaseDialog}<TrustFooter support={catalog.support} /></main>
+  if (page === 'support') return <main className="public-site"><PublicHeader authenticated={authenticated} compact /><section className="public-support"><Text>SUPPORT</Text><Title>购买前后，都有人回应</Title><Paragraph>套餐、支付、退款或账号问题，请联系 QQ <b>{catalog.support?.value || '289614546'}</b>。我们会在 1 个工作日内响应，并尽量在 3 个工作日内给出处理结论。</Paragraph><Row gutter={[20, 20]}><Col xs={24} md={8}><Card id="invitation"><CustomerServiceOutlined /><Title level={4}>邀请码与注册</Title><Paragraph>还没有邀请码？联系上方 QQ，说明你的学习需求，咨询当前开放情况。已有邀请码但注册失败，请附上错误提示。</Paragraph><Text type="secondary">获得有效邀请码并完成邮箱验证后，即可免费开始。</Text><Button href="/register">已有邀请码，去注册</Button></Card></Col><Col xs={24} md={8}><Card id="payment"><LockOutlined /><Title level={4}>付款后未开通？</Title><Paragraph>先查看云猫订单是否已发放兑换码，再回到拾页兑换；如果兑换失败，请提供订单号、注册邮箱、购买时间和错误提示。</Paragraph><Text type="secondary">请勿发送账号密码或完整兑换码。退款处理见退款规则。</Text><Button href="/app?screen=membership">已有兑换码，去开通</Button></Card></Col><Col xs={24} md={8}><Card><CheckCircleFilled /><Title level={4}>内容与版权</Title><Text>私人材料仅用于个人学习，官方内容仅使用公版或授权资源。</Text></Card></Col></Row></section><TrustFooter support={catalog.support} /></main>
 
   return <main className="public-site">
     <PublicHeader authenticated={authenticated} />
+    <PurchaseRecovery authenticated={authenticated} />
     <section className="public-hero">
       <div className="public-hero-copy"><Text>原声听读 · 语境理解 · 生词复习</Text><Title><span>不是看过。</span><span>是终于读懂。</span></Title><Paragraph>用原声视频、音频和文章逐句学英语。查懂一个词，听清一句话，把每次理解留在自己的学习空间。</Paragraph><Space size={14}><Button type="primary" size="large" href={authenticated ? '/app' : '/register'}>{authenticated ? '继续学习' : '免费开始学习'}<ArrowRightOutlined /></Button><Button size="large" href="#product">了解学习方式</Button></Space>{!authenticated && <Text className="signup-note">注册需要邀请码 · 验证邮箱后开始 · 无需支付</Text>}<div className="public-hero-notes"><span><CheckCircleFilled /> 使用原始音视频</span><span><CheckCircleFilled /> 私人学习空间</span><span><CheckCircleFilled /> 自动保存学习进度</span></div></div>
       <div className="public-hero-visual" aria-label="拾页逐句阅读器产品画面"><div className="public-device-frame"><img src="/product/reader-word-panel.jpg" alt="拾页视频逐句学习、单词释义和跟读界面" /></div><div className="public-floating-note"><PlayCircleFilled /><span><b>逐句同步</b><small>原声、字幕与解释保持在同一个学习现场</small></span></div></div>

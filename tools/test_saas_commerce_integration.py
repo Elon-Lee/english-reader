@@ -163,7 +163,7 @@ class CommercePostgresTests(unittest.TestCase):
         self.memberships.create_manual_order(str(self.admin["id"]), str(user["id"]), "advanced-v1", start, start + timedelta(days=365), amount_cents=29900)
         membership = self.memberships.membership(str(user["id"]), include_usage=True)
         period_start = membership["period"]["startsAt"]
-        self.assertTrue(period_start.startswith((start + timedelta(days=30)).date().isoformat()))
+        self.assertLess(abs((datetime.fromisoformat(period_start) - (start + timedelta(days=30))).total_seconds()), 1)
         self.assertTrue(next(item for item in membership["usage"] if item["feature"] == "ai_context_generations")["unlimited"])
 
     def test_cloudcat_code_is_single_use_and_opens_membership(self):

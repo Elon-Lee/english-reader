@@ -238,8 +238,8 @@ function App() {
 
   const nav = [{ key: 'workspace', icon: <DashboardOutlined />, label: '学习空间' }, { key: 'catalog', icon: <ShopOutlined />, label: '书城' }, { key: 'library', icon: <BookOutlined />, label: '我的书架' }, { key: 'stats', icon: <BarChartOutlined />, label: '学习记录' }, { key: 'vocab', icon: <StarOutlined />, label: '生词复习' }, { key: 'rewards', icon: <GiftOutlined />, label: '成长奖励' }, { key: 'membership', icon: <ThunderboltFilled />, label: '会员中心' }, { key: 'admin', icon: <AppstoreOutlined />, label: '运营后台' }, { key: 'platform', icon: <SettingOutlined />, label: '平台与部署' }].filter(item => item.key === 'platform' ? currentUser?.isAdmin && currentUser?.canManagePlatform : item.key !== 'admin' || currentUser?.isAdmin)
   const settings = [{ key: 'settings', icon: <SettingOutlined />, label: '系统设置' }]
-  const selectScreen = (key, tab) => { setMobileOpen(false); if (key === screen) { if (pageLoading) reloadWorkspace({ targetScreen: key }).catch(error => messageApi.error(error.message || '页面刷新失败')); return } setPageLoading(true); history.pushState({}, '', `${modernEntryPath()}?screen=${key}${key === 'admin' && tab === 'catalog' ? '&adminTab=catalog' : ''}`); setScreen(key) }
-  const openReader = book => { const kind = book.source === '官方读物' || book.trial ? 'official' : 'workspace'; location.href = `${modernEntryPath()}?screen=reader&reader=${kind}&id=${encodeURIComponent(book.id)}${book.trial ? '&trial=1' : ''}` }
+  const selectScreen = (key, tab) => { setMobileOpen(false); if (key === screen) { if (pageLoading) reloadWorkspace({ targetScreen: key }).catch(error => messageApi.error(error.message || '页面刷新失败')); return } setPageLoading(true); history.pushState({}, '', `${modernEntryPath()}?screen=${key}${key === 'admin' && tab === 'catalog' ? '&adminTab=catalog' : key === 'catalog' && tab === 'onboarding' ? '&onboarding=1' : ''}`); setScreen(key) }
+  const openReader = (book, options = {}) => { const kind = book.source === '官方读物' || book.trial ? 'official' : 'workspace'; location.href = `${modernEntryPath()}?screen=reader&reader=${kind}&id=${encodeURIComponent(book.id)}${book.trial ? '&trial=1' : ''}${options.guided || new URLSearchParams(location.search).get('onboarding') === '1' ? '&onboarding=1' : ''}` }
 
   const theme = { token: { colorPrimary: '#2f6f50', colorInfo: '#2f6f50', borderRadius: 12, fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif' }, components: { Layout: { siderBg: '#17392b', headerBg: '#fbfaf7' }, Menu: { darkItemBg: '#17392b', darkItemSelectedBg: '#2b5943', darkItemHoverBg: '#234b38', itemBorderRadius: 10 } } }
   if (['/verify-email', '/reset-password'].includes(location.pathname)) return <ConfigProvider theme={theme}><AntApp>{contextHolder}<AuthActionPage path={location.pathname} /></AntApp></ConfigProvider>
@@ -272,12 +272,14 @@ function AuthPage({ loading, initialMode = 'login', next = '/app', onLogin, onRe
   const [form] = Form.useForm()
   const [mode, setMode] = useState(initialMode)
   const [submitting, setSubmitting] = useState(false)
+  const [registrationEmail, setRegistrationEmail] = useState('')
   const submit = async values => {
     setSubmitting(true)
     try {
       if (mode === 'login') { await onLogin(values); location.href = next }
       else if (mode === 'register') {
         await onRegister({ invitationCode: values.invitationCode, email: values.email, password: values.password })
+        setRegistrationEmail(values.email)
         setMode('login')
         form.setFieldsValue({ invitationCode: undefined, password: undefined })
       } else {
@@ -287,7 +289,7 @@ function AuthPage({ loading, initialMode = 'login', next = '/app', onLogin, onRe
       }
     } finally { setSubmitting(false) }
   }
-  return <main className="modern-auth"><Card className="modern-auth-card"><div className="modern-auth-brand"><div className="brand-mark-modern">拾</div><div><Text className="brand-name auth-brand-name">拾页</Text><Text className="brand-subtitle auth-brand-subtitle">ENGLISH WORKSPACE</Text></div></div><Text className="eyebrow">SHIYUE MEMBERS</Text><Title level={1}>{mode === 'login' ? '登录拾页' : mode === 'register' ? '创建账号' : '找回密码'}</Title><Paragraph>{mode === 'login' ? '登录后进入书城、学习空间和会员中心。未激活邮箱的账号需要先完成邮件验证。' : mode === 'register' ? '使用有效邀请码创建学习账号，完成邮箱激活后才能登录。' : '输入注册邮箱，我们会发送密码重置邮件。'}</Paragraph><Segmented block value={mode} onChange={setMode} options={[{ label: '登录', value: 'login' }, { label: '注册', value: 'register' }, { label: '找回密码', value: 'forgot' }]} /><Form form={form} layout="vertical" onFinish={submit} disabled={loading} className="modern-auth-form">{mode === 'register' && <Form.Item label="邀请码" name="invitationCode" rules={[{ required: true, message: '请输入邀请码' }]}><Input size="large" autoComplete="off" /></Form.Item>}<Form.Item label="邮箱" name="email" rules={[{ required: true, type: 'email', message: '请输入有效邮箱' }]}><Input size="large" autoComplete="email" /></Form.Item>{mode !== 'forgot' && <Form.Item label="密码" name="password" rules={[{ required: true, min: 10, message: '密码至少 10 位' }]}><Input.Password size="large" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></Form.Item>}<Button block type="primary" size="large" htmlType="submit" loading={submitting || loading}>{mode === 'login' ? '登录' : mode === 'register' ? '创建账号' : '发送重置邮件'}</Button></Form><Text type="secondary">继续即表示同意用户协议、隐私政策与内容声明。</Text></Card></main>
+  return <main className="modern-auth"><Card className="modern-auth-card"><div className="modern-auth-brand"><div className="brand-mark-modern">拾</div><div><Text className="brand-name auth-brand-name">拾页</Text><Text className="brand-subtitle auth-brand-subtitle">ENGLISH WORKSPACE</Text></div></div><Text className="eyebrow">SHIYUE MEMBERS</Text><Title level={1}>{mode === 'login' ? '登录拾页' : mode === 'register' ? '创建账号' : '找回密码'}</Title><Paragraph>{mode === 'login' ? '登录后进入书城、学习空间和会员中心。未激活邮箱的账号需要先完成邮件验证。' : mode === 'register' ? '使用有效邀请码创建学习账号，完成邮箱激活后才能登录。' : '输入注册邮箱，我们会发送密码重置邮件。'}</Paragraph><Segmented block value={mode} onChange={setMode} options={[{ label: '登录', value: 'login' }, { label: '注册', value: 'register' }, { label: '找回密码', value: 'forgot' }]} />{registrationEmail && <Alert className="auth-action-alert" type="success" showIcon message="账号已创建，请先验证邮箱" description={`验证邮件已发送到 ${registrationEmail}。打开邮件中的链接完成激活，再回来登录；未收到时请检查垃圾邮件。`} />}<Form form={form} layout="vertical" onFinish={submit} disabled={loading} className="modern-auth-form">{mode === 'register' && <Form.Item label="邀请码" name="invitationCode" extra={<a href="/support#invitation" target="_blank" rel="noreferrer">没有邀请码？联系支持咨询</a>} rules={[{ required: true, message: '请输入邀请码' }]}><Input size="large" autoComplete="off" /></Form.Item>}<Form.Item label="邮箱" name="email" rules={[{ required: true, type: 'email', message: '请输入有效邮箱' }]}><Input size="large" autoComplete="email" /></Form.Item>{mode !== 'forgot' && <Form.Item label="密码" name="password" rules={[{ required: true, min: 10, message: '密码至少 10 位' }]}><Input.Password size="large" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></Form.Item>}<Button block type="primary" size="large" htmlType="submit" loading={submitting || loading}>{mode === 'login' ? '登录' : mode === 'register' ? '创建账号' : '发送重置邮件'}</Button></Form><Text type="secondary">继续即表示同意用户协议、隐私政策与内容声明。</Text></Card></main>
 }
 
 function AuthActionPage({ path }) {
@@ -302,7 +304,7 @@ function AuthActionPage({ path }) {
       .then(() => setStatus('success'))
       .catch(reason => { setStatus('error'); setError(reason.message || '邮箱验证失败') })
   }, [path, token])
-  const backToLogin = () => { location.href = '/' }
+  const backToLogin = () => { location.href = '/login' }
   if (path === '/verify-email') return <main className="modern-auth"><Card className="modern-auth-card"><div className="modern-auth-brand"><div className="brand-mark-modern">拾</div><div><Text className="brand-name auth-brand-name">拾页</Text><Text className="brand-subtitle auth-brand-subtitle">EMAIL VERIFICATION</Text></div></div>{status === 'loading' ? <div className="auth-action-state"><Skeleton active title paragraph={{ rows: 4 }} /></div> : status === 'success' ? <div className="auth-action-state"><CheckCircleFilled className="auth-action-success" /><Title level={2}>邮箱已激活</Title><Paragraph>现在可以使用注册邮箱和密码登录拾页。</Paragraph><Button block type="primary" size="large" onClick={backToLogin}>返回登录</Button></div> : <div className="auth-action-state"><Alert type="error" showIcon message="邮箱验证失败" description={error} /><Button block size="large" onClick={backToLogin}>返回登录</Button></div>}</Card></main>
   const resetPassword = async values => {
     setSubmitting(true); setError('')

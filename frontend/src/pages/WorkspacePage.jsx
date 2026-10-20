@@ -3,6 +3,7 @@ import React, { useMemo } from 'react'
 import { Button, Card, Col, Progress, Row, Space, Statistic, Typography } from 'antd'
 import { BookOutlined, PlusOutlined, ReadOutlined } from '@ant-design/icons'
 import { displayDate, isReviewDue } from '../utils/presentation.mjs'
+import LearningJourney from '../components/LearningJourney'
 
 const { Paragraph, Text, Title } = Typography
 const localDate = date => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date)
@@ -33,6 +34,7 @@ export default function WorkspacePage({ allBooks, selectScreen, openReader, open
   const others = activeBooks.filter(book => book.id !== continueBook?.id).sort((a, b) => (new Date(b.readingProgress?.updatedAt).getTime() || 0) - (new Date(a.readingProgress?.updatedAt).getTime() || 0)).slice(0, 3)
   return <div className="page-stack learning-workspace">
     <div className="page-intro"><div><Text className="eyebrow">{displayDate(new Date())} · 你的学习空间</Text><Title level={1}>{recent.length ? '接着上次，读懂下一句' : '从一篇感兴趣的内容开始'}</Title><Paragraph>原声听读、语境理解和生词复习，都从这里继续。</Paragraph></div><Button icon={<PlusOutlined />} onClick={openImport}>导入材料</Button></div>
+    <LearningJourney continueBook={continueBook} selectScreen={selectScreen} openReader={openReader} />
     <Row gutter={[20, 20]}>
       <Col span={16}><Card className="hero-card"><div className="hero-card-content"><div className="hero-card-copy">
         <Text className="card-kicker">{continueBook ? position ? '继续上次学习' : continueBook.readingProgress?.completedAt ? '再次阅读' : '从这篇开始' : '开始你的第一次学习'}</Text>

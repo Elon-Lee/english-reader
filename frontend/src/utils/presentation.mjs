@@ -27,6 +27,28 @@ export function featuredProductId(products) {
   return products.find(product => product.family !== 'free' && product.featured)?.id
 }
 
+// Values come from the published product, including its public AI policy.
+export function planHighlights(product) {
+  const limits = product.featureLimits || {}
+  const count = (key, suffix) => Number.isFinite(Number(limits[key])) && limits[key] != null ? `${Number(limits[key])} ${suffix}` : '以完整权益为准'
+  const benefit = label => displayBenefits(product).find(item => item.includes(label))?.replace(label, '').trim() || '以完整权益为准'
+  return [
+    ['私人空间', count('storage_bytes', 'GB')],
+    ['视频收藏', count('video_library_capacity', '个')],
+    ['音频收藏', count('audio_library_capacity', '个')],
+    ['词汇语境', benefit('词汇语境分析')],
+    ['句法分析', benefit('句法分析')],
+    ['视频画质', product.videoQuality === 'high' ? '流畅 + 高清' : product.videoQuality === 'low' ? '流畅' : '以完整权益为准'],
+    ['同时登录', count('devices', '台设备')],
+  ]
+}
+
+export function sharedBenefits(products) {
+  if (!products.length) return []
+  const benefits = products.map(displayBenefits)
+  return benefits[0].filter(item => benefits.every(list => list.includes(item)))
+}
+
 export function purchaseAction(product, authenticated, state) {
   if (product.family === 'free') return { label: authenticated ? '进入学习空间' : '免费注册', disabled: false }
   if (!authenticated) return { label: '登录后购买 / 兑换', disabled: false }

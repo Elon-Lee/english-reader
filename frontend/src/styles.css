@@ -132,6 +132,41 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
 
 /* PC commercial experience: preserve the existing brand, clarify tasks and plans. */
 .public-plan-label { min-height: 50px; }
+.plan-highlights { margin: 2px 0; border-top: 1px solid var(--study-line); }
+.plan-highlights > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--study-line); line-height: 1.6; }
+.plan-highlights dt { color: var(--study-muted); font-size: 13px; }
+.plan-highlights dd { margin: 0; color: var(--study-ink); font-size: 14px; font-weight: 600; text-align: right; }
+.plan-common-benefits { margin-top: 28px; padding: 20px 24px; border-radius: 12px; background: #edf2eb; }
+.plan-common-benefits ul { display: flex; flex-wrap: wrap; gap: 12px 28px; margin: 14px 0 0; padding: 0; list-style: none; }
+.plan-common-benefits li { display: flex; align-items: baseline; gap: 8px; color: #42594b; line-height: 1.8; }
+.plan-common-benefits .anticon { color: #2f6f50; }
+.plan-full-benefits { margin-top: 12px; }
+.plan-full-benefits .ant-collapse-header { padding-inline: 0 !important; }
+.plan-full-benefits ul { margin: 0; padding-left: 18px; color: var(--study-muted); line-height: 1.9; }
+.plan-full-benefits h4.ant-typography { color: var(--study-ink); }
+.purchase-recovery .ant-alert { align-items: center; }
+.purchase-recovery .ant-alert-action { margin-left: 20px; }
+.public-site > .purchase-recovery { max-width: 1440px; margin: 24px auto 0; padding: 0 40px; }
+.learning-guide { border-color: #d4e0d2; background: #f6f8f2; }
+.learning-guide-heading, .learning-guide-actions { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.learning-guide-heading { margin-bottom: 24px; }
+.learning-guide-heading h3.ant-typography { margin: 8px 0 0; color: var(--study-ink); font-size: 23px; }
+.learning-guide .ant-steps { padding: 4px 0; }
+.learning-guide .ant-steps-item-description { color: #53675a; }
+.learning-guide-actions { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--study-line); }
+.learning-guide-restore { align-self: flex-start; padding-inline: 0; }
+.journey-report-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.journey-retention { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--study-line); }
+.journey-retention > div.ant-typography { margin: 8px 0; color: var(--study-ink); font-size: 24px; font-weight: 600; }
+.journey-retention .ant-typography-secondary, .journey-report-note { line-height: 1.8; }
+.journey-report-note.ant-typography { margin: 22px 0 0; }
+@media (min-width: 992px) {
+  .modern-reader:has(> .reader-first-learning) { display: flex; height: 100vh; box-sizing: border-box; flex-direction: column; }
+  .modern-reader:has(> .reader-first-learning) > .reader-head { flex-shrink: 0; }
+  .reader-first-learning { flex-shrink: 0; width: 100%; max-width: 1680px; margin: 12px auto 0; padding-block: 10px; }
+  .reader-first-learning .ant-alert-description { font-size: 13px; }
+  .modern-reader:has(> .reader-first-learning) > .reader-workspace { flex: 1; width: 100%; height: auto; min-height: 0; }
+}
 .public-plan-action { display: grid; gap: 8px; }
 .public-capacity-note.ant-typography { margin: 22px 0 0; color: var(--study-muted); font-size: 13px; line-height: 1.8; }
 .public-faq { max-width: 1000px; margin: 0 auto; padding: 0 40px 80px; }

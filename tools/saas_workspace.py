@@ -10,6 +10,7 @@ from saas_auth import SaaSError, SaaSService, new_id, utcnow
 from saas_membership import as_json, can_watch_hd_video, timestamp
 from saas_rewards import local_day
 from saas_progress import reading_progress
+from saas_journey import learning_milestone
 
 
 class WorkspaceService:
@@ -122,7 +123,9 @@ class WorkspaceService:
                 cursor.execute("""INSERT INTO content_vocabulary(owner_id,book_id,sentence_id,word_index,payload)
                 VALUES(%s,%s,%s,%s,%s::jsonb) ON CONFLICT (owner_id,book_id,sentence_id,word_index) DO UPDATE SET payload=EXCLUDED.payload
                 RETURNING legacy_id""",(user_id,storage_book_id,str(sentence_id),index,json.dumps(payload)))
-                row=self.accounts._one(cursor);return {"id":int(row["legacy_id"]),"bookId":public_book_id,"sentenceId":str(sentence_id),"wordIndex":index,"payload":payload}
+                row=self.accounts._one(cursor)
+                learning_milestone(cursor,user_id,"first_word_saved")
+                return {"id":int(row["legacy_id"]),"bookId":public_book_id,"sentenceId":str(sentence_id),"wordIndex":index,"payload":payload}
 
     def annotate(self,user_id:str,book_id:str,sentence_id:str,word_index:Any,payload:Any)->dict[str,Any]:
         if not isinstance(payload,dict):raise SaaSError("invalid_annotation","标注数据无效。",400)
@@ -162,14 +165,15 @@ class WorkspaceService:
         if not key:raise SaaSError("invalid_idempotency_key","操作标识无效。",400)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                user=self._user(cursor,user_id);self._book(cursor,user_id,book_id,True);day=local_day(user["timezone"])
-                cursor.execute("INSERT INTO workspace_activity_events(id,user_id,idempotency_key,content_book_id,activity_day,reading_seconds,sentences) VALUES(%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (user_id,idempotency_key) DO NOTHING RETURNING id",(new_id(),user_id,key,book_id,day,seconds,sentence_count))
+                user=self._user(cursor,user_id);storage_book_id,_=self._learning_book(cursor,user_id,book_id,True);day=local_day(user["timezone"])
+                cursor.execute("INSERT INTO workspace_activity_events(id,user_id,idempotency_key,content_book_id,activity_day,reading_seconds,sentences) VALUES(%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (user_id,idempotency_key) DO NOTHING RETURNING id",(new_id(),user_id,key,storage_book_id,day,seconds,sentence_count))
                 if not cursor.fetchone():return {"idempotent":True}
+                if seconds>0:learning_milestone(cursor,user_id,"first_reading")
                 cursor.execute("SELECT payload FROM content_learning_daily WHERE owner_id=%s AND day=%s FOR UPDATE",(user_id,day));existing=self.accounts._one(cursor);payload=as_json(existing["payload"]) if existing else {"day":day.isoformat()}
                 payload["reading_seconds"]=float(payload.get("reading_seconds",0)or 0)+seconds;payload["sentences"]=int(payload.get("sentences",0)or 0)+sentence_count
                 payload["lookups"]=int(payload.get("lookups",0)or 0)+lookup_count;payload["reviews"]=int(payload.get("reviews",0)or 0)+review_count
                 payload["shadow_attempts"]=int(payload.get("shadow_attempts",0)or 0)+shadow_count;payload["sessions"]=int(payload.get("sessions",0)or 0)+session_count;payload["updated_at"]=timestamp(utcnow())
                 cursor.execute("INSERT INTO content_learning_daily(owner_id,day,payload) VALUES(%s,%s,%s::jsonb) ON CONFLICT (owner_id,day) DO UPDATE SET payload=EXCLUDED.payload",(user_id,day,json.dumps(payload)))
                 cursor.execute("""INSERT INTO workspace_progress(user_id,content_book_id,last_sentence_id,reading_seconds,updated_at)
-                VALUES(%s,%s,%s,%s,NOW()) ON CONFLICT (user_id,content_book_id) DO UPDATE SET last_sentence_id=EXCLUDED.last_sentence_id,reading_seconds=workspace_progress.reading_seconds+EXCLUDED.reading_seconds,updated_at=NOW()""",(user_id,book_id,str(last_sentence_id or ""),seconds))
+                VALUES(%s,%s,%s,%s,NOW()) ON CONFLICT (user_id,content_book_id) DO UPDATE SET last_sentence_id=EXCLUDED.last_sentence_id,reading_seconds=workspace_progress.reading_seconds+EXCLUDED.reading_seconds,updated_at=NOW()""",(user_id,storage_book_id,str(last_sentence_id or ""),seconds))
                 return {"idempotent":False,"day":day.isoformat(),"readingSeconds":seconds,"sentences":sentence_count,"lookups":lookup_count,"reviews":review_count,"shadowAttempts":shadow_count,"sessions":session_count}

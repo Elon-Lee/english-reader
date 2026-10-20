@@ -13,6 +13,7 @@ import time
 import unittest
 from datetime import timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit
 
 from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
@@ -20,6 +21,9 @@ from saas_catalog import CatalogService
 from saas_media import MediaService
 from saas_membership import MembershipService
 from saas_workspace import WorkspaceService
+from saas_journey import JourneyService
+from saas_redemptions import RedemptionService
+from saas_commerce import CommerceService
 
 TEST_URL=os.environ.get("SHIYUE_SAAS_TEST_DATABASE_URL","")
 
@@ -106,11 +110,101 @@ class PrivateWorkspaceTests(unittest.TestCase):
         self.assertEqual(saved_book["progress"]["sentencePosition"],2)
         self.assertEqual(saved_book["progress"]["percent"],50)
         self.assertIsNotNone(saved_book["progress"]["updatedAt"])
+        result=self.workspace.activity(owner_id,catalog_id,125,2,'s2','official-learning')
+        self.assertFalse(result['idempotent'])
+        self.assertTrue(self.workspace.activity(owner_id,catalog_id,125,2,'s2','official-learning')['idempotent'])
+        self.assertEqual(self.workspace.learning_days(owner_id)['days'][0]['payload']['reading_seconds'],125)
+        self.assertTrue(JourneyService(self.accounts).state(owner_id)['guide']['hasRead'])
+        with self.assertRaises(SaaSError):self.workspace.activity(str(self.other['id']),catalog_id,60,1,'s1','not-in-library')
         self.catalog.add_or_unlock(str(self.other["id"]),catalog_id)
         self.assertEqual(self.catalog.library(str(self.other["id"]))["items"][0]["progress"]["sentencePosition"],0)
         self.catalog.remove(str(self.other["id"]),catalog_id)
         with self.assertRaises(SaaSError) as denied:self.workspace.save_vocabulary(str(self.other["id"]),catalog_id,"s1",0,{"word":"My","rating":"hard"})
         self.assertEqual(denied.exception.code,"learning_book_not_found")
+
+    def journey_product(self):
+        commerce=CommerceService(self.accounts);admin_id=str(self.admin['id'])
+        product=commerce.create_product(admin_id,'journey-'+new_id()[:8],'advanced',999)
+        version=commerce.create_version(admin_id,product['id'],{
+            'name':'学习旅程测试月卡','shortName':'测试月卡','tagline':'隔离测试','description':'仅用于集成测试',
+            'durationDays':30,'amountCents':1900,'purchaseUrl':'https://catfk.com/shop/TEST1234',
+            'featureLimits':{'video_library_capacity':20,'audio_library_capacity':50,'storage_bytes':5},'configuredBenefitIds':[],
+        })
+        commerce.publish_version(admin_id,version['id'])
+        return version['id']
+
+    def test_journey_guide_requires_saved_business_data_and_is_owner_scoped(self):
+        journey=JourneyService(self.accounts);owner_id,other_id=str(self.owner['id']),str(self.other['id'])
+        self.assertEqual(journey.state(owner_id)['guide'],{'dismissed':False,'hasBook':True,'hasRead':False,'hasWord':False})
+        self.workspace.reader(owner_id,self.book_id);self.workspace.save_progress(owner_id,self.book_id,'s2')
+        self.assertFalse(journey.state(owner_id)['guide']['hasRead'])
+        journey.update(owner_id,{'action':'dismiss_guide','userId':other_id})
+        self.assertTrue(journey.state(owner_id)['guide']['dismissed']);self.assertFalse(journey.state(other_id)['guide']['dismissed'])
+        journey.update(owner_id,{'action':'restore_guide'})
+        self.workspace.activity(owner_id,self.book_id,60,1,'s1','journey-first-reading')
+        self.workspace.activity(owner_id,self.book_id,60,1,'s1','journey-first-reading')
+        self.workspace.save_vocabulary(owner_id,self.book_id,'s1',0,{'word':'My','rating':'hard'})
+        self.workspace.save_vocabulary(owner_id,self.book_id,'s1',0,{'word':'My','rating':'easy'})
+        self.assertTrue(journey.state(owner_id)['guide']['hasWord']);self.assertFalse(journey.state(other_id)['guide']['hasWord'])
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT event_type,COUNT(*) AS total FROM product_journey_events WHERE user_id=%s GROUP BY event_type",(owner_id,))
+                self.assertEqual({row['event_type']:row['total'] for row in self.accounts._many(cursor)},{'first_reading':1,'first_word_saved':1})
+
+    def test_purchase_recovery_is_idempotent_expires_and_cannot_forge_learning(self):
+        journey=JourneyService(self.accounts);owner_id,other_id=str(self.owner['id']),str(self.other['id']);product=self.journey_product()
+        selected={'action':'plan_selected','productVersionId':product,'idempotencyKey':'milestone:first_reading'}
+        self.assertEqual(journey.update(owner_id,selected)['pendingPurchase']['phase'],'selected')
+        journey.update(owner_id,selected)
+        self.assertIsNone(journey.state(other_id)['pendingPurchase'])
+        with self.assertRaises(SaaSError) as conflict:journey.update(owner_id,{**selected,'action':'purchase_departure'})
+        self.assertEqual(conflict.exception.code,'idempotency_conflict')
+        journey.update(owner_id,{'action':'purchase_departure','productVersionId':product,'idempotencyKey':'depart'})
+        self.assertEqual(journey.update(owner_id,{**selected,'idempotencyKey':'reopen'})['pendingPurchase']['phase'],'departed')
+        self.workspace.activity(owner_id,self.book_id,60,1,'s1','real-milestone')
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) AS total FROM product_journey_events WHERE user_id=%s AND event_type='first_reading'",(owner_id,))
+                self.assertEqual(self.accounts._one(cursor)['total'],1)
+                cursor.execute("UPDATE workspace_settings SET value_json=jsonb_set(value_json,'{expiresAt}','0'::jsonb) WHERE user_id=%s AND key='pending_purchase'",(owner_id,))
+        self.assertIsNone(journey.state(owner_id)['pendingPurchase'])
+        journey.update(owner_id,{**selected,'idempotencyKey':'new-selection'})
+        self.assertIsNone(journey.update(owner_id,{'action':'clear_purchase'})['pendingPurchase'])
+        for payload in ({'action':'first_reading'}, {'action':'plan_selected','productVersionId':'free-plan-v1','idempotencyKey':'free'}, {'action':'plan_selected','productVersionId':'missing','idempotencyKey':'missing'}):
+            with self.assertRaises(SaaSError):journey.update(owner_id,payload)
+
+    def test_applied_matching_redemption_clears_purchase_recovery(self):
+        journey=JourneyService(self.accounts);owner_id=str(self.owner['id']);product=self.journey_product()
+        journey.update(owner_id,{'action':'plan_selected','productVersionId':product,'idempotencyKey':'select'})
+        journey.update(owner_id,{'action':'purchase_departure','productVersionId':product,'idempotencyKey':'depart'})
+        redemptions=RedemptionService(self.accounts,self.memberships)
+        batch=redemptions.generate(str(self.admin['id']),product,1,'isolated journey test')
+        self.assertIsNotNone(journey.state(owner_id)['pendingPurchase'])
+        redemptions.redeem(owner_id,batch['codes'][0],'journey-redeem')
+        self.assertIsNone(journey.state(owner_id)['pendingPurchase'])
+        self.assertEqual(journey.report()['purchase'],{'selected':1,'departed':1,'redeemed':1})
+        # A later renewal selection is a new intent, even before the old reminder expires.
+        renewed=journey.update(owner_id,{'action':'plan_selected','productVersionId':product,'idempotencyKey':'select-next-renewal'})
+        self.assertEqual(renewed['pendingPurchase']['phase'],'selected')
+
+    def test_report_observes_completed_next_day_and_both_learning_milestones(self):
+        journey=JourneyService(self.accounts);owner_id,other_id=str(self.owner['id']),str(self.other['id'])
+        today=utcnow().astimezone(ZoneInfo('Asia/Shanghai')).replace(hour=0,minute=0,second=0,microsecond=0)
+        # One completed cohort and one whose first word is only saved today.
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE schema_migrations SET applied_at=%s WHERE version='0038_product_journey.sql'",(today-timedelta(days=10),))
+                cursor.execute("UPDATE users SET created_at=%s WHERE id IN (%s,%s)",(today-timedelta(days=5),owner_id,other_id))
+                for user_id,word_time in ((owner_id,today-timedelta(days=3)),(other_id,today)):
+                    for event,when in (('first_reading',today-timedelta(days=3)),('first_word_saved',word_time)):
+                        cursor.execute("INSERT INTO product_journey_events(id,user_id,event_type,idempotency_key,created_at) VALUES(%s,%s,%s,%s,%s)",(new_id(),user_id,event,'milestone:'+event,when))
+                cursor.execute("INSERT INTO workspace_activity_events(id,user_id,idempotency_key,activity_day,reading_seconds,created_at) VALUES(%s,%s,'next-day',%s,120,%s)",(new_id(),owner_id,(today-timedelta(days=2)).date(),today-timedelta(days=2)))
+        report=journey.report(7)['learning']
+        self.assertEqual(report['reading'],2);self.assertEqual(report['saved_word'],2)
+        self.assertEqual(report['return_eligible'],1);self.assertEqual(report['returned'],1)
+        self.assertEqual(journey.report(7)['timezone'],'Asia/Shanghai')
+        for period in ('invalid',1,366):
+            with self.assertRaises(SaaSError):journey.report(period)
 
     def test_trial_media_is_clipped_and_full_source_remains_private(self):
         catalog_id='catalog-trial-video'
@@ -155,6 +249,30 @@ class PrivateWorkspaceTests(unittest.TestCase):
             else:self.fail("workspace server did not start")
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("POST","/api/auth/login",json.dumps({"email":"workspace-owner@local.test","password":"workspace owner password"}),{"Content-Type":"application/json","X-Device-Id":"phase7-owner-device-1"});response=connection.getresponse();self.assertEqual(response.status,200);headers=response.getheaders();response.read();connection.close();connection=None
             cookies="; ".join(value.split(";",1)[0] for name,value in headers if name.lower()=="set-cookie");csrf=next(value.split("=",1)[1] for value in cookies.split("; ") if value.startswith("shiyue_csrf="))
+            def journey_request(path,expected,method='GET',payload=None,request_cookies=cookies,request_csrf=csrf):
+                headers={'Content-Type':'application/json','Cookie':request_cookies}
+                if request_csrf:headers['X-CSRF-Token']=request_csrf
+                client=http.client.HTTPConnection('127.0.0.1',port,timeout=5)
+                try:
+                    client.request(method,path,json.dumps(payload) if payload is not None else None,headers)
+                    result=client.getresponse();data=json.loads(result.read());self.assertEqual(result.status,expected,data)
+                    return data
+                finally:client.close()
+            journey_request('/api/workspace/journey',401,request_cookies='',request_csrf='')
+            journey_request('/api/workspace/journey',403,'POST',{'action':'dismiss_guide'},request_csrf='')
+            self.assertFalse(journey_request('/api/workspace/journey',200)['guide']['dismissed'])
+            self.assertTrue(journey_request('/api/workspace/journey',200,'POST',{'action':'dismiss_guide'})['guide']['dismissed'])
+            journey_request('/api/admin/journey-report',403)
+            with self.accounts.transaction() as database:
+                with database.cursor() as cursor:cursor.execute('UPDATE users SET email_verified_at=NULL WHERE id=%s',(self.owner['id'],))
+            journey_request('/api/workspace/journey',403)
+            journey_request('/api/workspace/journey',403,'POST',{'action':'restore_guide'})
+            self.verify(str(self.owner['id']))
+            admin_login=self.accounts.login('admin@local.test','phase7 admin password','phase7-admin-device')
+            admin_cookies='shiyue_session='+admin_login['sessionToken']+'; shiyue_csrf='+admin_login['csrfToken']
+            report=journey_request('/api/admin/journey-report?days=7',200,request_cookies=admin_cookies,request_csrf=admin_login['csrfToken'])
+            self.assertEqual(report['days'],7)
+            journey_request('/api/admin/journey-report?days=invalid',400,request_cookies=admin_cookies,request_csrf=admin_login['csrfToken'])
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("GET","/api/workspace/books",headers={"Cookie":cookies});response=connection.getresponse();books=json.loads(response.read());self.assertEqual(response.status,200);self.assertEqual(books["books"][0]["id"],self.book_id);connection.close();connection=None
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("GET",f"/api/workspace/books/{self.book_id}/reader",headers={"Cookie":cookies});response=connection.getresponse();reader=json.loads(response.read());self.assertEqual(response.status,200);asset=reader["book"]["mediaAssets"][0];connection.close();connection=None
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("GET",asset["url"],headers={"Cookie":cookies,"Range":"bytes=0-6"});response=connection.getresponse();self.assertEqual(response.status,206);self.assertEqual(response.read(),b"private");connection.close();connection=None

@@ -10,6 +10,7 @@ from typing import Any
 
 from saas_auth import SaaSError, SaaSService, new_id, utcnow
 from saas_membership import FEATURES, MembershipService, as_json, timestamp
+from saas_journey import learning_milestone
 
 
 MONTHLY_GROWTH_CAP = 100
@@ -117,6 +118,8 @@ class RewardService:
                 user=self._user(cursor,user_id);day=local_day(user["timezone"])
                 cursor.execute("INSERT INTO reward_activity_events(id,user_id,idempotency_key,activity_day,reading_seconds,sentences,reviews) VALUES(%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (user_id,idempotency_key) DO NOTHING RETURNING id",(new_id(),user_id,key,day,seconds,sentence_count,review_count))
                 if not cursor.fetchone(): return {"idempotent":True,"statusInfo":self._status(cursor,user_id,user)}
+                if seconds>0:
+                    learning_milestone(cursor,user_id,"first_reading")
                 cursor.execute("""INSERT INTO reward_daily_activity(user_id,activity_day,timezone,reading_seconds,sentences,reviews)
                 VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT (user_id,activity_day) DO UPDATE SET reading_seconds=reward_daily_activity.reading_seconds+EXCLUDED.reading_seconds,sentences=reward_daily_activity.sentences+EXCLUDED.sentences,reviews=reward_daily_activity.reviews+EXCLUDED.reviews,updated_at=NOW() RETURNING *""",(user_id,day,user["timezone"],seconds,sentence_count,review_count))
                 activity=self.accounts._one(cursor) or {};points=0

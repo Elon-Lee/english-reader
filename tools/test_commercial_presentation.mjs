@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { formatBytes, displayBenefits, featuredProductId, purchaseAction, isReviewDue, bookDescription } from '../frontend/src/utils/presentation.mjs'
+import { formatBytes, displayBenefits, featuredProductId, planHighlights, sharedBenefits, purchaseAction, isReviewDue, bookDescription } from '../frontend/src/utils/presentation.mjs'
 
 test('storage uses matching units and preserves unknown values', () => {
   assert.equal(formatBytes(507565206), '484.05 MB')
@@ -41,4 +41,23 @@ test('review queue uses actual due dates and treats unscheduled words as ready',
 test('catalog removes duplicate title descriptions but preserves authored summaries', () => {
   assert.notEqual(bookDescription({ title: 'Hello', description: 'Hello', resourceType: 'video' }), 'Hello')
   assert.equal(bookDescription({ title: 'Hello', description: '有意义的介绍' }), '有意义的介绍')
+})
+test('comparison uses published GB and AI policy rather than internal monthly counters', () => {
+  const values = Object.fromEntries(planHighlights({
+    featureLimits: { storage_bytes: 20, video_library_capacity: 100, audio_library_capacity: 200, ai_context_generations: 300, devices: 2 },
+    videoQuality: 'high', benefits: ['免费包含：词汇语境分析不限次数', '免费包含：句法分析不限次数'],
+  }))
+  assert.equal(values['私人空间'], '20 GB')
+  assert.equal(values['视频收藏'], '100 个')
+  assert.equal(values['词汇语境'], '不限次数')
+  assert.equal(values['视频画质'], '流畅 + 高清')
+  assert.equal(values['同时登录'], '2 台设备')
+  assert.equal(Object.fromEntries(planHighlights({ benefits: ['词汇语境分析每天最多 50 次'], videoQuality: 'low' }))['词汇语境'], '每天最多 50 次')
+  assert.equal(Object.fromEntries(planHighlights({}))['私人空间'], '以完整权益为准')
+})
+test('shared benefits include only actual common benefits, retaining plan-specific copy', () => {
+  const products = [{ benefits: ['免费包含：阅读', 'A 专属'] }, { benefits: ['阅读', 'B 专属'] }]
+  assert.deepEqual(sharedBenefits(products), ['阅读'])
+  assert.deepEqual(sharedBenefits([]), [])
+  assert.deepEqual(products[0].benefits, ['免费包含：阅读', 'A 专属'])
 })

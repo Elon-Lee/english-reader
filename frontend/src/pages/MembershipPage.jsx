@@ -4,6 +4,8 @@ import { ThunderboltFilled } from '@ant-design/icons'
 import { getJson, postJson } from '../api/client'
 import { CloudCatPurchaseModal, PricingSection } from './PublicSite'
 import { displayDate, formatBytes, orderStatusNames } from '../utils/presentation.mjs'
+import { PurchaseRecovery } from '../components/LearningJourney'
+import { refreshJourney } from '../api/journey'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -21,7 +23,7 @@ function UsageCard({ title, used, limit, unlimited, storage = false, note }) {
 
 export default function MembershipPage({ membership, membershipOrders, onRefresh }) {
   const [catalog, setCatalog] = useState({ products: [] })
-  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [catalogLoading, setCatalogLoading] = useState(true)
   const [catalogError, setCatalogError] = useState('')
   const [revision, setRevision] = useState(0)
   const [manageOpen, setManageOpen] = useState(false)
@@ -63,6 +65,7 @@ export default function MembershipPage({ membership, membershipOrders, onRefresh
     try {
       const result = await postJson('/api/membership/redeem', { code, idempotencyKey: attempt.current.key })
       setRedeemResult(result); setRedeemCode('')
+      void refreshJourney().catch(() => {})
       try { await onRefresh?.() } catch { messageApi.warning('兑换已成功，用量暂未刷新，请稍后重试。') }
     } catch (error) { setRedeemError(error.message || '兑换未完成，请重试。') }
     finally { pending.current = false; setRedeeming(false) }
@@ -87,6 +90,7 @@ export default function MembershipPage({ membership, membershipOrders, onRefresh
 
   return <div className="page-stack">
     {contextHolder}
+    <PurchaseRecovery />
     <div className="page-intro"><div><Text className="eyebrow">MEMBERSHIP</Text><Title level={1}>会员中心</Title><Paragraph>你的当前权益、使用情况与开通记录。</Paragraph></div><Space><Button onClick={() => { setRedeemOpen(true); setRedeemResult(null); setRedeemError('') }}>兑换码</Button><Button type="primary" onClick={() => setManageOpen(true)}>{plan?.slug === 'free' ? '升级会员' : '续费 / 比较方案'}</Button></Space></div>
     {!plan ? <Alert type="error" showIcon message="会员信息暂时不可用" action={<Button onClick={onRefresh}>重新加载</Button>} /> : <Card className="membership-hero">
       <Space align="start"><div className="membership-icon"><ThunderboltFilled /></div><div className="membership-current-copy">
@@ -115,6 +119,7 @@ export default function MembershipPage({ membership, membershipOrders, onRefresh
       {manageOpen && <PricingSection authenticated products={catalog.products} loading={catalogLoading} error={catalogError} onRetry={() => setRevision(value => value + 1)} onPurchase={product => openPurchase(product)} title="按需要续费或升级" />}
     </Modal>
     {catalogError && purchaseSlug && !manageOpen && <Alert type="error" showIcon message={catalogError} action={<Button onClick={() => setRevision(value => value + 1)}>重试</Button>} />}
+    {purchaseSlug && !catalogLoading && !catalogError && !catalog.products.some(item => item.slug === purchaseSlug && item.family !== 'free') && <Alert type="info" showIcon message="上次选择的方案已停止新售" description="已有兑换码仍可通过会员中心核验开通，也可以重新比较当前方案。" action={<Button onClick={() => { closePurchase(); setRedeemOpen(true); setRedeemResult(null); setRedeemError('') }}>已有兑换码</Button>} />}
     <CloudCatPurchaseModal product={purchaseProduct} open={Boolean(purchaseProduct)} authenticated returnTo="/app?screen=membership" onClose={closePurchase} onRedeemed={() => onRefresh?.()} />
   </div>
 }
