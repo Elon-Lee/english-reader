@@ -1,5 +1,10 @@
 # SaaS 后端交接
 
+## 2026-10-20 生词复习会话
+
+- 新增 `0039_vocabulary_review.sql`、`saas_review.py`：GET `/api/workspace/review`，POST `/api/workspace/review/start`、`/api/workspace/review/answer`。验证邮箱与 CSRF、私人归属/官方当前收藏和发布授权校验、账号/会话锁、稳定幂等键；回执/排程/活动/每日计数同事务，奖励沿用稳定事件键。
+- 服务端断点恢复、有限薄弱词重练，跳过不计成果；原文权限失效或释义缺失只能跳过。24 项隔离库测试及新库 HTTP smoke 通过；本地正式库已备份应用 0039、8790 已重启，未发布生产。详见 `../vocabulary-review/HANDOFF.md`。
+
 ## 2026-10-20 学习旅程与真实转化
 
 - 新增 `0038_product_journey.sql`、`saas_journey.py`。GET/POST `/api/workspace/journey` 要求登录并验证邮箱，写入保留 CSRF；状态由当前会话确定账号，行锁及账号级幂等键隔离写入。学习里程碑服务端写入，购买键独立命名空间，不能冒充学习完成。
@@ -26,7 +31,7 @@
 
 - 主服务：`tools/reader_server.py`。
 - PostgreSQL 服务模块：`tools/saas_auth.py`、`saas_membership.py`、`saas_catalog.py`、`saas_workspace.py`、`saas_imports.py`、`saas_ai.py`、`saas_admin.py` 等。
-- 当前本地迁移至 `0038_product_journey.sql`（学习旅程事件）；此前 `0037` 纠正个人导入归属、`0036` 回填 YouTube 频道系列。生产仍为 `0034`，尚未发布生产；0038 备份及验收见上。
+- 当前本地迁移至 `0039_vocabulary_review.sql`（复习会话与作答）；此前 `0038` 学习旅程事件、`0037` 纠正个人导入归属、`0036` 回填 YouTube 频道系列。生产仍为 `0034`，尚未发布生产；备份及验收见各任务交接。
 - 认证使用数据库会话 Cookie 和 CSRF；所有写接口必须校验 CSRF。
 - 2026-10-18 修复已有会话缺失/失配 `shiyue_csrf` 时写 API 持续 403：认证读取会轮换当前 session 并补发配对 CSRF Cookie，使缺失 Cookie 同时撤销旧 session；前端收到一次 `csrf_failed` 后自动刷新认证并重试一次，写接口仍强制校验 CSRF。新增回归覆盖旧 session 失效、Cookie 恢复和后续安全登出；隔离 PostgreSQL 测试库当前未配置，尚未执行数据库集成测试。
 - 测试库名称必须以 `_test` 结尾。

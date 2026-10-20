@@ -25,11 +25,11 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8790',
+        target: process.env.SHIYUE_API_PROXY_TARGET || 'http://127.0.0.1:8790',
         changeOrigin: false,
       },
       '/books': {
-        target: 'http://127.0.0.1:8790',
+        target: process.env.SHIYUE_API_PROXY_TARGET || 'http://127.0.0.1:8790',
         changeOrigin: false,
       },
     },

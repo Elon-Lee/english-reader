@@ -115,12 +115,12 @@ function App() {
       setAuthState('authenticated')
       setCurrentUser(userData.user || null)
     if (!consoleRoute) return
-    const needBooks = ['workspace', 'library', 'stats', 'vocab'].includes(targetScreen)
+    const needBooks = ['workspace', 'library', 'stats'].includes(targetScreen)
     const [healthData, deviceData, workspaceData, vocabularyData, catalogData, libraryData, daysData, membershipData, membershipOrderData, rewardData, rewardsCatalogData, rewardsLedgerData, importsData, preferencesData, deletionData] = await Promise.all([
       getJson('/api/health', health),
       targetScreen === 'settings' ? getJson('/api/auth/devices', { devices: [] }) : Promise.resolve({ devices }),
       needBooks ? getJson('/api/workspace/books') : Promise.resolve({ books: [] }),
-      ['workspace', 'vocab'].includes(targetScreen) ? getJson('/api/workspace/vocabulary') : Promise.resolve({ items: vocabulary }),
+      targetScreen === 'workspace' ? getJson('/api/workspace/vocabulary') : Promise.resolve({ items: vocabulary }),
       targetScreen === 'catalog' ? getJson('/api/catalog?limit=60') : Promise.resolve({ books: [] }),
       needBooks ? getJson('/api/library') : Promise.resolve({ items: [] }),
       ['workspace', 'stats'].includes(targetScreen) ? getJson('/api/workspace/learning-days?limit=365') : Promise.resolve({ days: learningDays }),

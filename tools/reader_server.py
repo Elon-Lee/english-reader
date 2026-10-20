@@ -39,6 +39,7 @@ from saas_media import MediaService
 from saas_membership import MembershipService
 from saas_rewards import RewardService
 from saas_workspace import WorkspaceService
+from saas_review import ReviewService
 from saas_journey import JourneyService
 from saas_imports import WorkspaceImportService
 from saas_ai import WorkspaceAIService
@@ -86,6 +87,7 @@ ADMIN=AdminService(SAAS,MEMBERSHIPS)
 MEDIA=MediaService(SAAS,MEMBERSHIPS)
 ACCOUNTS=AccountLifecycleService(SAAS)
 WORKSPACE=WorkspaceService(SAAS)
+REVIEW=ReviewService(WORKSPACE)
 JOURNEY=JourneyService(SAAS)
 WORKSPACE_IMPORTS=WorkspaceImportService(SAAS,MEMBERSHIPS,MEDIA)
 OFFICIAL_IMPORTS=WorkspaceImportService(SAAS,MEMBERSHIPS,MEDIA,official=True)
@@ -249,7 +251,7 @@ class Handler(SimpleHTTPRequestHandler):
         if SAAS.enabled and (route.path=="/api/workspace/imports" or route.path.startswith("/api/workspace/imports/")):
             if not self.require_saas_user(verified=True):return
             self.workspace_import_get(route);return
-        if SAAS.enabled and (route.path=="/api/workspace/books" or route.path.startswith("/api/workspace/books/") or route.path in {"/api/workspace/vocabulary","/api/workspace/annotations","/api/workspace/learning-days","/api/workspace/journey"}):
+        if SAAS.enabled and (route.path=="/api/workspace/books" or route.path.startswith("/api/workspace/books/") or route.path in {"/api/workspace/vocabulary","/api/workspace/annotations","/api/workspace/learning-days","/api/workspace/journey","/api/workspace/review"}):
             if not self.require_saas_user(verified=True):return
             self.workspace_get(route);return
         if SAAS.enabled and route.path.startswith("/api/media/"):
@@ -454,7 +456,7 @@ class Handler(SimpleHTTPRequestHandler):
         if SAAS.enabled and (route.path=="/api/workspace/imports" or route.path.startswith("/api/workspace/imports/")):
             if not self.require_saas_user(verified=True) or not self.require_csrf():return
             self.workspace_import_post(route);return
-        if SAAS.enabled and route.path in {"/api/workspace/vocabulary","/api/workspace/annotations","/api/workspace/activity","/api/workspace/progress","/api/workspace/journey"}:
+        if SAAS.enabled and route.path in {"/api/workspace/vocabulary","/api/workspace/annotations","/api/workspace/activity","/api/workspace/progress","/api/workspace/journey","/api/workspace/review/start","/api/workspace/review/answer"}:
             if not self.require_saas_user(verified=True) or not self.require_csrf():return
             self.workspace_post(route.path);return
         if SAAS.enabled and route.path in {"/api/word-context","/api/sentence-grammar"}:
@@ -931,6 +933,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path=="/api/workspace/annotations":self.reply(WORKSPACE.annotations(user_id,(query.get("bookId")or[""])[0]));return
             if path=="/api/workspace/learning-days":self.reply(WORKSPACE.learning_days(user_id,(query.get("limit")or[365])[0]));return
             if path=="/api/workspace/journey":self.reply(JOURNEY.state(user_id));return
+            if path=="/api/workspace/review":self.reply(REVIEW.state(user_id));return
             self.reply({"error":"not found"},404)
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
         except (SaaSConfigurationError,ValueError) as exc:self.reply({"code":"workspace_unavailable","error":str(exc)},503)
@@ -941,6 +944,13 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             user_id=str(self._saas_session["id"])
             if path=="/api/workspace/journey":self.reply(JOURNEY.update(user_id,item));return
+            if path=="/api/workspace/review/start":self.reply(REVIEW.start(user_id,item));return
+            if path=="/api/workspace/review/answer":
+                result=REVIEW.answer(user_id,item)
+                if item.get('rating')!='skip':
+                    try:result['reward']=REWARDS.activity(user_id,0,0,1,f"review:{item.get('sessionId')}:{item.get('step')}")
+                    except SaaSError:result['rewardDeferred']=True
+                self.reply(result);return
             if path=="/api/workspace/vocabulary":self.reply(WORKSPACE.save_vocabulary(user_id,str(item.get("bookId","")).strip(),str(item.get("sentenceId","")).strip(),item.get("wordIndex"),item.get("payload")),201);return
             if path=="/api/workspace/annotations":self.reply(WORKSPACE.annotate(user_id,str(item.get("bookId","")).strip(),str(item.get("sentenceId","")).strip(),item.get("wordIndex"),item.get("payload")));return
             if path=="/api/workspace/progress":self.reply(WORKSPACE.save_progress(user_id,str(item.get("bookId","")).strip(),str(item.get("lastSentenceId","")).strip()));return
