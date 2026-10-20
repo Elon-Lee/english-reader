@@ -70,7 +70,7 @@ def normalize_word_timeline(words):
         word["start"]=start_ms/1000
         word["end"]=max(start_ms+1,round(end*1000))/1000
         maximum=min(1.35,max(.32,.24+len(re.sub(r"[^A-Za-z0-9]","",word.get("text","")))*.09))
-        if word.get("timingSource") not in {"whisper-dtw","whisper-token"} and word["end"]-word["start"]>maximum:
+        if word.get("timingSource") not in {"whisper-dtw","whisper-token","manual-caption-ctc"} and word["end"]-word["start"]>maximum:
             word["end"]=word["start"]+maximum;capped+=1
         word["start"]=round(word["start"],3);word["end"]=round(word["end"],3)
     for left,right in zip(words,words[1:]):

@@ -23,6 +23,7 @@ from saas_imports import WorkspaceImportService
 from saas_media import MediaService
 from saas_membership import MembershipService
 from saas_workspace import WorkspaceService
+from manual_caption_alignment import MODEL_FILE
 
 TEST_URL=os.environ.get("SHIYUE_SAAS_TEST_DATABASE_URL","")
 
@@ -57,6 +58,8 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
     def tearDownClass(cls):cls.temp.cleanup()
 
     def setUp(self):
+        ctc_environment=patch.dict(os.environ,{"SHIYUE_CTC_PYTHON":str(Path(self.temp.name)/"missing-ctc-python")})
+        ctc_environment.start();self.addCleanup(ctc_environment.stop)
         for path in self.root.rglob("*"):
             if path.is_file():path.unlink()
         with self.accounts.transaction() as connection:
@@ -235,8 +238,46 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
             with connection.cursor() as cursor:
                 cursor.execute("SELECT data_json FROM content_books WHERE id=%s",(completed["task"]["outputBookId"],));data=(self.accounts._one(cursor)or{})["data_json"]
         data=data if isinstance(data,dict) else json.loads(data);self.assertEqual(data["youtube"]["youtubeId"],"fake123");self.assertTrue(data["youtube"]["youtubeSubtitleDownloaded"]);self.assertTrue(data["youtube"]["youtubeChineseSubtitleDownloaded"])
+        self.assertEqual(data["subtitleAlignment"]["reason"],"aligner_unavailable")
         usage=self.memberships.usage(owner);youtube=next(row for row in usage["usage"] if row["feature"]=="youtube_imports");video=next(row for row in usage["usage"] if row["feature"]=="video_imports")
         self.assertEqual(youtube["used"],0);self.assertEqual(youtube["reserved"],0);self.assertEqual(video["used"],0)
+
+    @unittest.skipUnless(shutil.which("ffmpeg"),"FFmpeg required")
+    def test_verified_manual_caption_import_persists_measured_words_without_whisper(self):
+        owner,other=str(self.owner["id"]),str(self.other["id"])
+        runtime=Path(self.temp.name)/"ctc-python";runtime.touch()
+        model_home=Path(self.temp.name)/"ctc-models";checkpoint=model_home/"hub/checkpoints"/MODEL_FILE
+        checkpoint.parent.mkdir(parents=True,exist_ok=True);checkpoint.touch()
+        def align(command,*args):
+            words=[{"text":"Caption","start":.12,"end":.4},{"text":"text","start":.48,"end":.8,"punctuationAfter":".","breakAfter":True}]
+            words=[{**w,"timingSource":"manual-caption-ctc","estimated":False,"confidence":.95} for w in words]
+            Path(command[command.index("--output")+1]).write_text(json.dumps({"aligned":[{"index":0,"words":words}],"rejected":[]}))
+        task=self.youtube_imports.create(owner,"youtube","","","manual-youtube-task","https://youtu.be/fake123")["task"]
+        with patch.dict(os.environ,{"SHIYUE_CTC_PYTHON":str(runtime),"SHIYUE_CTC_MODEL_HOME":str(model_home)}),patch.object(self.youtube_imports,"_run_speech_process",side_effect=align),patch.object(self.youtube_imports,"_transcribe_video_audio") as whisper:
+            result=self.youtube_imports.complete(owner,task["id"])
+        whisper.assert_not_called();self.assertEqual(result["task"]["status"],"complete")
+        book_id=result["task"]["outputBookId"]
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT data_json FROM content_books WHERE id=%s",(book_id,));data=self.accounts._one(cursor)["data_json"]
+        if isinstance(data,str):data=json.loads(data)
+        self.assertEqual(data["alignment"],"manual-caption-ctc")
+        self.assertEqual(data["subtitleAlignment"]["status"],"aligned")
+        self.assertTrue(data["whisper"]["skipped"])
+        self.assertEqual(data["sentences"][0]["text"],"Caption text.")
+        self.assertEqual(data["sentences"][0]["words"][0]["start"],.12)
+        with self.assertRaises(SaaSError):self.workspace.reader(other,book_id)
+
+    @unittest.skipUnless(shutil.which("ffmpeg"),"FFmpeg required")
+    def test_automatic_captions_keep_existing_whisper_route(self):
+        owner=str(self.owner["id"]);download=self.youtube_imports._youtube_download
+        def automatic(*args):
+            source,asset,metadata,captions=download(*args)
+            return source,asset,{**metadata,"youtubeSubtitleSource":"auto"},captions
+        task=self.youtube_imports.create(owner,"youtube","","","auto-youtube-task","https://youtu.be/fake123")["task"]
+        with patch.object(self.youtube_imports,"_youtube_download",side_effect=automatic),patch.object(self.youtube_imports,"_manual_caption_book") as align:
+            result=self.youtube_imports.complete(owner,task["id"])
+        align.assert_not_called();self.assertEqual(result["task"]["status"],"complete")
 
     @unittest.skipUnless(shutil.which("ffmpeg"),"FFmpeg required")
     def test_official_import_review_storage_and_permanent_delete(self):

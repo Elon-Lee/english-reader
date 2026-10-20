@@ -22,6 +22,9 @@ from urllib.parse import urlsplit
 
 from saas_auth import ROOT, SaaSError, SaaSService, new_id, utcnow
 from build_video_book import duration as media_duration, whisper_book
+from align_whisper import whisper_words,whisper_timing_report
+from manual_caption_alignment import MODEL_FILE,caption_cues,fallback_windows
+from timed_segmentation import segment_timed_words
 from saas_media import MediaService
 from saas_membership import MembershipService, as_json, timestamp
 from youtube_subtitles import has_translated_english_track, select_chinese_track, select_native_english_track
@@ -210,12 +213,128 @@ class WorkspaceImportService:
         book={"id":f"private-{task_id}","title":title,"englishTitle":title,"sourceType":"audio","duration":duration,"alignment":f"whisper-{timing['timestampMethod']}-normalized","sentences":sentences,"whisper":{"engine":"whisper.cpp","model":self.whisper_model.name,**timing,"transcribedWords":sum(len(sentence.get("words",[])) for sentence in sentences)},"segmentation":segmentation}
         return book,{"extractor":"whisper.cpp","model":self.whisper_model.name,"sentences":len(sentences),"duration":duration}
 
-    def _video_book(self,source:Path,task_id:str,title:str,asset_id:str,progress=None)->tuple[dict[str,Any],dict[str,Any],list[dict[str,str]]]:
+    def _run_speech_process(self,command,progress,label):
+        if progress:progress(60,label)
+        try:
+            process=subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True,bufsize=1)
+            lines:queue.Queue[str|None]=queue.Queue()
+            def read_stderr():
+                try:
+                    for line in process.stderr or ():lines.put(line.rstrip())
+                finally:lines.put(None)
+            threading.Thread(target=read_stderr,daemon=True).start()
+            deadline=time.monotonic()+1800;last_progress=60;recent=[];closed=False
+            while process.poll() is None or not closed:
+                remaining=deadline-time.monotonic()
+                if remaining<=0:
+                    process.kill();process.wait();raise SaaSError("whisper_timeout","视频转写超时。",504)
+                try:line=lines.get(timeout=min(30,remaining))
+                except queue.Empty:
+                    if progress:progress(last_progress,label)
+                    continue
+                if line is None:
+                    closed=True;continue
+                recent.append(line);recent=recent[-20:]
+                match=re.search(r"(?:progress\s*=\s*|caption_progress=)(\d+)",line,re.IGNORECASE)
+                if match:
+                    value=int(match.group(1));last_progress=60+round(max(0,min(100,value))*0.25)
+                    if progress:progress(last_progress,label)
+            if process.stderr:process.stderr.close()
+            if process.returncode:
+                raise SaaSError("whisper_failed",("视频 Whisper 转写失败："+"\n".join(recent))[-1800:],422)
+        except FileNotFoundError as exc:raise SaaSError("whisper_unavailable","本机 Whisper 处理器未安装。",503) from exc
+        except OSError as exc:raise SaaSError("whisper_failed","无法启动视频 Whisper 转写。",422) from exc
+
+    def _transcribe_video_audio(self,audio,prefix,progress):
+        self._run_speech_process(self._whisper_command(audio,prefix,progress=True),progress,"Whisper 正在转写视频音频")
+        try:return json.loads(prefix.with_suffix(".json").read_text(encoding="utf-8"))
+        except (OSError,json.JSONDecodeError) as exc:raise SaaSError("whisper_failed","Whisper 没有产生可读视频转写。",422) from exc
+
+    def _manual_caption_book(self,audio,subtitle,root,duration,progress):
+        report={"source":"native-english-manual","method":"wav2vec2-ctc","status":"fallback"}
+        python=Path(os.environ.get("SHIYUE_CTC_PYTHON",str(ROOT/".local/forced-aligner/venv/bin/python"))).expanduser()
+        model_home=Path(os.environ.get("SHIYUE_CTC_MODEL_HOME",str(ROOT/".local/forced-aligner/models"))).expanduser()
+        if not python.is_file() or not (model_home/"hub/checkpoints"/MODEL_FILE).is_file():
+            return None,{**report,"reason":"aligner_unavailable"}
+        output=root/"caption-alignment.json"
+        try:
+            cues=caption_cues(subtitle,duration)
+            command=[str(python),str(ROOT/"tools/manual_caption_alignment.py"),"--audio",str(audio),"--subtitle",str(subtitle),"--model-home",str(model_home),"--output",str(output)]
+            alignment_progress=(lambda value,step:progress(60+round((value-60)*.48),step)) if progress else None
+            self._run_speech_process(command,alignment_progress,"正在对齐人工英文字幕与原音")
+            data=json.loads(output.read_text(encoding="utf-8"))
+            candidates={item["index"]:item["words"] for item in data["aligned"]}
+            aligned={}
+            # Only locally produced, complete, positive acoustic results may
+            # bypass ASR. Unknown/missing cue indices are always failures.
+            for cue in cues:
+                words=candidates.get(cue["index"],[])
+                if len(words)!=len(cue["words"]):continue
+                previous=max(0,cue["start"]-.25);valid=True
+                for word,expected in zip(words,cue["words"]):
+                    if not isinstance(word,dict) or word.get("text")!=expected["text"] or word.get("timingSource")!="manual-caption-ctc" or word.get("estimated") is not False:
+                        valid=False;break
+                    start=float(word["start"]);end=float(word["end"])
+                    if not (previous<=start<end<=min(duration,cue["end"]+.25)):
+                        valid=False;break
+                    previous=end
+                if valid:aligned[cue["index"]]=words
+            total_words=sum(len(c["words"]) for c in cues)
+            accepted_words=sum(len(aligned.get(c["index"],[])) for c in cues)
+            if accepted_words/max(1,total_words)<.65:
+                return None,{**report,"reason":"caption_audio_mismatch","acceptedWords":accepted_words,"captionWords":total_words}
+        except (OSError,ValueError,KeyError,TypeError,SaaSError):
+            return None,{**report,"reason":"alignment_failed"}
+        failed={cue["index"] for cue in cues if cue["index"] not in aligned}
+        windows=fallback_windows(cues,failed,duration)
+        fallback_mode="none";heard=[]
+        # Many small exceptions cost more model startup time than one pass.
+        # Keep accepted captions even when ASR must cover the full audio.
+        if len(windows)>8 or sum(w["end"]-w["start"] for w in windows)>duration*.25:
+            fallback_mode="full"
+            fallback_progress=(lambda value,step:progress(72+round((value-60)*.52),step)) if progress else None
+            heard=whisper_words(self._transcribe_video_audio(audio,root/"caption-fallback",fallback_progress))
+        elif windows:
+            fallback_mode="windows"
+            for index,window in enumerate(windows):
+                clip=root/f"caption-fallback-{index}.wav";prefix=clip.with_suffix("")
+                subprocess.run([str(self.ffmpeg),"-y","-v","error","-ss",str(window["start"]),"-i",str(audio),"-t",str(window["end"]-window["start"]),"-c:a","pcm_s16le",str(clip)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=120)
+                fallback_progress=(lambda value,step:progress(72+round(13*(index+(value-60)/25)/len(windows)),step)) if progress else None
+                local=whisper_words(self._transcribe_video_audio(clip,prefix,fallback_progress))
+                for word in local:
+                    word["start"]=round(word["start"]+window["start"],3);word["end"]=round(word["end"]+window["start"],3)
+                    if word["start"]<window["end"]:heard.append(word)
+        words=[];empty_cues=[]
+        for cue in cues:
+            selected=aligned.get(cue["index"])
+            if selected is None:
+                selected=[{**w,"start":max(cue["start"],w["start"]),"end":min(cue["end"],w["end"])} for w in heard if cue["start"]<=(w["start"]+w["end"])/2<cue["end"]]
+                selected=[w for w in selected if w["end"]>w["start"]]
+                if not selected:empty_cues.append(cue["index"])
+            words.extend(selected)
+        # No estimated manual words are inserted when acoustic checks fail.
+        sentences,segmentation=segment_timed_words(words,"yt",profile="youtube-manual")
+        timing=whisper_timing_report([w for s in sentences for w in s["words"]])
+        timing["timestampMethod"]="ctc" if not failed else "mixed"
+        segmentation.update(timing)
+        report.update({"status":"aligned" if not failed else "partial","captionCues":len(cues),"alignedCues":len(cues)-len(failed),"fallbackCues":len(failed),"acceptedWords":accepted_words,"captionWords":total_words,"fallbackMode":fallback_mode,"fallbackWindows":len(windows),"emptyFallbackCues":empty_cues,"rejections":data.get("rejected",[])})
+        return (sentences,segmentation),report
+
+    def _video_book(self,source:Path,task_id:str,title:str,asset_id:str,progress=None,manual_caption:Path|None=None)->tuple[dict[str,Any],dict[str,Any],list[dict[str,str]]]:
+        if progress:
+            notify=progress;last_progress=0
+            def monotonic_progress(value,step):
+                nonlocal last_progress
+                last_progress=max(last_progress,value);notify(last_progress,step)
+            progress=monotonic_progress
         if not self.whisper_cli.is_file() or not self.whisper_model.is_file():
             raise SaaSError("whisper_unavailable","本机 Whisper 处理器或模型未安装。",503)
         source=source.resolve();output_dir=source.parent;audio_path=output_dir/"audio.m4a";cover_path=output_dir/"cover.jpg";low_video_path=output_dir/"video-low.mp4"
         audio_relative=audio_path.relative_to(self.media.media_root).as_posix();cover_relative=cover_path.relative_to(self.media.media_root).as_posix();low_video_relative=low_video_path.relative_to(self.media.media_root).as_posix()
         try:
+            try:duration=float(self.audio_duration(source))
+            except Exception as exc:raise SaaSError("video_probe_failed","无法读取视频时长。",422) from exc
+            caption_result=None;caption_report=None
             with tempfile.TemporaryDirectory(prefix="shiyue-pg-import-video-") as temporary:
                 root=Path(temporary);whisper_audio=root/"whisper.wav";prefix=root/"whisper";ffmpeg=str(self.ffmpeg)
                 commands=[
@@ -231,47 +350,22 @@ class WorkspaceImportService:
                     except FileNotFoundError as exc:raise SaaSError("ffmpeg_unavailable","本机 FFmpeg 未安装。",503) from exc
                     except subprocess.TimeoutExpired as exc:raise SaaSError("video_processing_timeout","视频音频或封面提取超时。",504) from exc
                     except subprocess.CalledProcessError as exc:raise SaaSError("video_processing_failed","FFmpeg 无法处理该视频。",422) from exc
-                command=self._whisper_command(whisper_audio,prefix,progress=True)
-                if progress:progress(60,"Whisper 正在转写视频音频")
-                try:
-                    process=subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True,bufsize=1)
-                    lines:queue.Queue[str|None]=queue.Queue()
-                    def read_stderr():
-                        try:
-                            for line in process.stderr or ():lines.put(line.rstrip())
-                        finally:lines.put(None)
-                    threading.Thread(target=read_stderr,daemon=True).start()
-                    deadline=time.monotonic()+1800;last_progress=60;recent=[];closed=False
-                    while process.poll() is None or not closed:
-                        remaining=deadline-time.monotonic()
-                        if remaining<=0:
-                            process.kill();process.wait();raise SaaSError("whisper_timeout","视频转写超时。",504)
-                        try:line=lines.get(timeout=min(30,remaining))
-                        except queue.Empty:
-                            if progress:progress(last_progress,"Whisper 正在转写视频音频")
-                            continue
-                        if line is None:
-                            closed=True;continue
-                        recent.append(line);recent=recent[-20:]
-                        match=re.search(r"progress\s*=\s*(\d+)\s*%",line,re.IGNORECASE)
-                        if match:
-                            value=int(match.group(1));last_progress=60+round(max(0,min(100,value))*0.25)
-                            if progress:progress(last_progress,"Whisper 正在转写视频音频")
-                    if process.stderr:process.stderr.close()
-                    if process.returncode:
-                        raise SaaSError("whisper_failed",("视频 Whisper 转写失败："+"\n".join(recent))[-1800:],422)
-                except FileNotFoundError as exc:raise SaaSError("whisper_unavailable","本机 Whisper 处理器未安装。",503) from exc
-                except OSError as exc:raise SaaSError("whisper_failed","无法启动视频 Whisper 转写。",422) from exc
-                try:transcript=json.loads(prefix.with_suffix(".json").read_text(encoding="utf-8"))
-                except (OSError,json.JSONDecodeError) as exc:raise SaaSError("whisper_failed","Whisper 没有产生可读视频转写。",422) from exc
-            try:duration=float(self.audio_duration(source))
-            except Exception as exc:raise SaaSError("video_probe_failed","无法读取视频时长。",422) from exc
-            sentences,segmentation=whisper_book(transcript,media_duration=duration)
+                if manual_caption:
+                    caption_result,caption_report=self._manual_caption_book(whisper_audio,manual_caption,root,duration,progress)
+                if not caption_result:transcript=self._transcribe_video_audio(whisper_audio,prefix,progress)
+            sentences,segmentation=caption_result or whisper_book(transcript,media_duration=duration)
             if not sentences:raise SaaSError("empty_video_transcript","未从视频中识别到可导入英文内容。",422)
             base=f"/api/media/{asset_id}"
             timing={key:segmentation[key] for key in ("timestampMethod","timingVersion","wordTimingSources")}
             book={"id":f"private-{task_id}","title":title,"englishTitle":title,"sourceType":"video","duration":duration,"alignment":f"whisper-{timing['timestampMethod']}-normalized","video":base,"videoDefaultQuality":"high","videoVariants":{"high":{"label":"高清","url":base,"status":"ready"},"low":{"label":"流畅","url":f"{base}?variant=low","status":"ready"}},"audio":f"{base}?variant=audio","cover":f"{base}?variant=cover","sentences":sentences,"whisper":{"engine":"whisper.cpp","model":self.whisper_model.name,**timing,"transcribedWords":sum(len(sentence.get("words",[])) for sentence in sentences)},"segmentation":segmentation}
             extractor={"extractor":"ffmpeg+whisper.cpp","model":self.whisper_model.name,"sentences":len(sentences),"duration":duration}
+            if caption_report:
+                book["subtitleAlignment"]=caption_report
+                if caption_result:
+                    book["alignment"]="manual-caption-ctc" if caption_report["status"]=="aligned" else "manual-caption-ctc+whisper"
+                    book["whisper"]["transcribedWords"]=sum(w.get("timingSource")!="manual-caption-ctc" for s in sentences for w in s["words"])
+                    book["whisper"]["skipped"]=caption_report["fallbackMode"]=="none"
+                    extractor["extractor"]="ffmpeg+manual-caption-ctc";extractor["fallbackMode"]=caption_report["fallbackMode"]
             variants=[{"name":"audio","storagePath":audio_relative,"contentType":"audio/mp4"},{"name":"cover","storagePath":cover_relative,"contentType":"image/jpeg"},{"name":"low","storagePath":low_video_relative,"contentType":"video/mp4"}]
             return book,extractor,variants
         except Exception:
@@ -444,7 +538,11 @@ class WorkspaceImportService:
                 source,asset_id,youtube,captions=self._youtube_download(user_id,task_id,work["source_url"]);work["source_asset_id"]=asset_id
                 title=str(work["title"] or youtube.get("title") or "YouTube 视频").strip() or "YouTube 视频"
                 pending_variant_paths=[variant["storagePath"] for variant in captions]
-                data,extractor,variants=self._video_book(source,task_id,title,asset_id,lambda value,step:self._update_progress(task_id,value,step));data["sourceType"]="youtube";data["youtube"]=youtube;source_type="youtube";book_id=data["id"]
+                manual_caption=None
+                if youtube.get("youtubeSubtitleSource")=="manual" and youtube.get("youtubeSubtitleDownloaded"):
+                    native=next((v for v in captions if v["name"]=="subtitles-en"),None)
+                    if native:manual_caption=self.media._safe_path(native["storagePath"])[1]
+                data,extractor,variants=self._video_book(source,task_id,title,asset_id,lambda value,step:self._update_progress(task_id,value,step),manual_caption=manual_caption);data["sourceType"]="youtube";data["youtube"]=youtube;source_type="youtube";book_id=data["id"]
                 variants.extend(captions);pending_variant_paths=[variant["storagePath"] for variant in variants]
                 try:self.media.add_variants(user_id,asset_id,variants)
                 except Exception:

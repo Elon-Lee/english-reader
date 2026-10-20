@@ -1,5 +1,16 @@
 # 导入与媒体交接
 
+## 2026-10-21 仅人工英文字幕的新导入路径
+
+- 按用户限定，只为后续 YouTube 新导入接入已下载的原语言人工英文字幕；自动字幕、翻译英文字幕、无字幕、本地文件继续原有流程。已有书籍与学习数据未重处理、未覆盖。
+- `tools/manual_caption_alignment.py` 独立子进程复用本地 `WAV2VEC2_ASR_BASE_960H`，逐字幕段与原音 CTC 对齐，保留人工文本与标点。数字等显示文本通过 `ctc_forced_align.word_char_ranges` 仅作发音映射，不调用旧 SQLite CLI。字幕区间仅作搜索窗口，不均分词时长；结果记录 `manual-caption-ctc`、置信度、非估算标记和绝对媒体时间。
+- 声学贪心解码一致性、词置信度/时长及服务端时间单调/边界校验必须通过；重叠滚动字幕不走此路径。通过词数不足字幕词数的 65%、运行环境缺失或对齐异常时全量回退原 Whisper；其余只采用失败段的 ASR 正文。失败窗口超过 8 个或覆盖超过全片 25% 时只跑一次全量 Whisper，再提取失败段，避免重复启动模型。书籍 `subtitleAlignment` 保存采用状态、回退原因/范围，导入进度保持单调。
+- 不自动下载模型。默认运行环境 `.local/forced-aligner/venv/bin/python`（torch/torchaudio 2.2.2、numpy<2）与 `.local/forced-aligner/models/hub/checkpoints/wav2vec2_fairseq_base_ls960_asr_ls960.pth`，可用 `SHIYUE_CTC_PYTHON`、`SHIYUE_CTC_MODEL_HOME` 覆盖；`SHIYUE_CTC_THREADS` 默认 2、上限 3。本地已具备依赖；生产尚未发布，须配置同等环境，否则安全回退 Whisper。现有安装入口 `tools/install_forced_aligner.sh` 需要可用 Python 3.11。
+- 验证：864.316 秒真实原音/306 段人工字幕，275 段（1,615/1,830 词）通过 CTC，31 段拒绝；与先前保存的真实全片 Whisper 输出组合后 1,826 词，时间无重叠、负时长和越界。此前第 11 句 CTC 为 44.472–49.468 秒；真实 15 秒视频副本经完整 FFmpeg/CTC/分句路径得到 16 词，跳过 Whisper，用时 5.96 秒。真实错字幕、静音均被拒绝。证据 `.local/debug/manual-captions-20261021/{aligned.json,acoustic-negative-check.json,combined-check.json,end-to-end/result.json}`，均未写入业务书籍。
+- 自动化：人工字幕单测、词时间/分句/字幕选择回归、14 项独立 PostgreSQL phase8 测试通过（含人工字幕结果入库/不调用 Whisper、缺环境回退、自动字幕维持旧路径、租户隔离与真实 FFmpeg）；临时数据库已删除。构建、modern/UI/JS、Python 编译和 diff 检查通过。
+- 用户确认导入完成后，2026-10-21 已查询无活动导入，重启本地 8790 加载人工字幕路径；8790 与 5173 `/api/health` 均返回 200。再执行 15 项隔离 PostgreSQL 集成测试通过，新增真实 15 秒原音副本 + 人工字幕 + FFmpeg + 实际 CTC 子进程 + 入库验证，16 词对齐、跳过 Whisper、进度单调，总用时 6.15 秒；下载使用测试夹具，未重新执行 YouTube 网络下载。证据 `.local/debug/manual-captions-20261021/end-to-end/postgres-real-import-check.json`；测试库已删除，原有书籍未更改。9 项人工字幕、14 项词时间、9 项字幕选择回归及 Python 编译、diff 检查再次通过。尚未发布生产。
+- 这轮验证确认接入和时间合法性，不等于逐词人工标注精度基准或全片提速承诺；此样本拒绝段较分散，仍需一次全量 Whisper，端到端可能增加耗时。
+
 ## 2026-10-20 新导入词级时间轴修复
 
 - 已确认：旧解析器丢弃 token/DTW 时间，在片段内均分词时长；当前 Whisper 默认 Flash Attention 会禁用 DTW；`-p 2` 合并只偏移 segment，不偏移 token；时间归一化强制每词至少 30ms，会推迟密集词；所有结果却统一标记 DTW。
@@ -39,6 +50,7 @@
 
 ## 未完成
 
+- 用户本轮仅授权人工字幕；无字幕/自动字幕的 VAD + ASR + CTC、新识别引擎、FFmpeg 阶段并行、持久 worker、阶段缓存/版本化原始结果和断点恢复均未实施。后续比较引擎需实测目标服务器端到端耗时、峰值内存、正文错误及人工逐词标注边界误差（P50/P95、多秒异常率）；不将其他硬件加速宣传当作本站承诺。用户原有“不改已有书籍”要求继续有效。
 - 可恢复分片上传、断点续传和失败分片重试。
 - 重复文件/URL 的前端确认流程。
 - YouTube 导入前的信息预览。
