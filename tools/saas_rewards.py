@@ -9,11 +9,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Any
 
 from saas_auth import SaaSError, SaaSService, new_id, utcnow
-from saas_membership import FEATURES, MembershipService, as_json, timestamp
+from saas_membership import FEATURES, MembershipService, as_json, timestamp, can_watch_hd_video
 from saas_journey import learning_milestone
 
 
 MONTHLY_GROWTH_CAP = 100
+RETIRED_REWARD_FEATURES = {'official_unlocks', 'mp3_imports', 'video_imports', 'youtube_imports'}
+AI_REWARD_FEATURES = {'ai_context_generations', 'ai_grammar_generations'}
 
 
 def local_day(timezone_name: str, at: datetime | None = None) -> date:
@@ -157,6 +159,10 @@ class RewardService:
                 if existing:return {"redemption":self._redemption(existing),"idempotent":True,"statusInfo":self._status(cursor,user_id,user)}
                 cursor.execute("SELECT * FROM reward_catalog WHERE code=%s AND active=TRUE",(code,));reward=self.accounts._one(cursor)
                 if not reward:raise SaaSError("reward_not_found","奖励不存在或已下架。",404)
+                if reward['feature'] in RETIRED_REWARD_FEATURES:
+                    raise SaaSError('reward_unavailable', '该奖励已停止兑换，你的成长值不会扣除。', 409)
+                if reward['feature'] in AI_REWARD_FEATURES and can_watch_hd_video(cursor, user_id):
+                    raise SaaSError('reward_unnecessary', '当前会员已包含不限次 AI 分析，无需兑换次数。', 409)
                 balance=self._balances(cursor,user_id)
                 if balance["balance"]<int(reward["cost_points"]):raise SaaSError("insufficient_growth_points","成长值不足。",409,{"balance":balance["balance"],"required":int(reward["cost_points"])})
                 redemption_id=new_id();cursor.execute("INSERT INTO reward_redemptions(id,user_id,reward_catalog_id,cost_points,idempotency_key) VALUES(%s,%s,%s,%s,%s)",(redemption_id,user_id,reward["id"],reward["cost_points"],key))
@@ -226,11 +232,13 @@ class RewardService:
         cursor.execute("SELECT mi.id,i.code,mi.status,mi.invitee_id FROM member_invites mi JOIN invitations i ON i.id=mi.invitation_id WHERE mi.inviter_id=%s ORDER BY mi.created_at DESC",(user_id,));invites=[{"id":row["id"],"code":row["code"],"status":row["status"],"inviteeId":row["invitee_id"]} for row in self.accounts._many(cursor)]
         return {"today":today.isoformat(),"timezone":user["timezone"],"checkedIn":bool(checkin),"streak":int(checkin["streak_count"]) if checkin else 0,"checkinKind":checkin["kind"] if checkin else None,"makeupCards":cards,"inviteAllowance":invite_allowance,"invites":invites,**balances}
 
-    def catalog(self)->dict[str,Any]:
+    def catalog(self,user_id:str|None=None)->dict[str,Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT * FROM reward_catalog WHERE active=TRUE ORDER BY sort_order,code")
-                return {"rewards":[{"code":row["code"],"title":row["title"],"description":row["description"],"costPoints":int(row["cost_points"]),"rewardType":row["reward_type"],"feature":row["feature"],"quantity":int(row["quantity"])} for row in self.accounts._many(cursor)]}
+                rows = self.accounts._many(cursor)
+                paid = can_watch_hd_video(cursor, user_id) if user_id else False
+                return {"rewards":[{"code":row["code"],"title":row["title"],"description":'仅增加兑换当日的 AI 可用次数。' if row['feature'] in AI_REWARD_FEATURES else row["description"],"costPoints":int(row["cost_points"]),"rewardType":row["reward_type"],"feature":row["feature"],"quantity":int(row["quantity"])} for row in rows if row['feature'] not in RETIRED_REWARD_FEATURES and not (paid and row['feature'] in AI_REWARD_FEATURES)]}
 
     def ledger(self,user_id:str,limit:int=100)->dict[str,Any]:
         with self.accounts.transaction() as connection:

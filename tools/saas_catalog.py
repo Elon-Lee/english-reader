@@ -63,6 +63,7 @@ class CatalogService:
             "tags": tags, "featuredRank": int(row["featured_rank"]), "publishedAt": timestamp(row.get("published_at")),
             "favoriteCount": int(row.get("favorite_count", 0) or 0), "readingCount": int(row.get("reader_count", 0) or 0),
             "inLibrary": bool((state or {}).get("inLibrary")), "unlocked": bool((state or {}).get("inLibrary")),
+            "canRead": bool((state or {}).get("inLibrary")) and row['publication_status']=='published' and row['rights_status'] in ('public_domain','licensed') and bool(row.get('source_content_book_id')),
         }
         if detail:
             result.update({"description": row["description"], "preview": row["preview_json"] if isinstance(row["preview_json"], list) else json.loads(row["preview_json"] or "[]"),

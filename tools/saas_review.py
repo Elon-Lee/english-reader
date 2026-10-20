@@ -100,8 +100,11 @@ class ReviewService:
         if not key or len(key) > 100:
             raise SaaSError('invalid_idempotency_key', '缺少本轮复习操作标识，请重试。', 400)
         size, scope = data.get('size', 10), data.get('scope', 'due')
-        if type(size) is not int or size not in (5, 10, 20) or scope not in ('due', 'difficult', 'all'):
+        if type(size) is not int or size not in (5, 10, 20) or scope not in ('due', 'difficult', 'all', 'selected'):
             raise SaaSError('invalid_review_options', '请选择有效的复习范围和每轮词数。', 400)
+        ids = data.get('vocabularyIds', [])
+        if scope == 'selected' and (not isinstance(ids, list) or not 1 <= len(ids) <= 100 or any(type(value) is not int or value < 1 for value in ids)):
+            raise SaaSError('invalid_review_options', '本次生词范围无效，请回到学习空间重新选择。', 400)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 self.workspace._user(cursor, user_id)
@@ -110,11 +113,11 @@ class ReviewService:
                 existing = self.accounts._one(cursor)
                 if existing:
                     options = as_json(existing['state_json']).get('options', {})
-                    if existing['request_key'] == key and options and options != {'size': size, 'scope': scope}:
+                    if existing['request_key'] == key and options and options != ({'size': size, 'scope': scope, 'vocabularyIds': sorted(set(ids))} if scope == 'selected' else {'size': size, 'scope': scope}):
                         raise SaaSError('review_key_conflict', '同一操作标识不能创建不同的复习计划。', 409)
                     return {'session': self._view(existing, items)}
                 selected = sorted((item for item in items if
-                    (scope == 'all' or scope == 'due' and due_time(item['payload']) <= utcnow() or
+                    (scope == 'all' or scope == 'selected' and item['id'] in ids or scope == 'due' and due_time(item['payload']) <= utcnow() or
                      scope == 'difficult' and item['payload'].get('rating') in ('again', 'hard')) and
                     str(item['payload'].get('word') or item['payload'].get('form') or '').strip()),
                     key=lambda item: (due_time(item['payload']), item['id']))[:size]
@@ -122,7 +125,7 @@ class ReviewService:
                     raise SaaSError('review_queue_empty', '当前范围没有可复习的生词，请调整范围或先去阅读。', 409)
                 state = {'queue': [{'id': item['id'], 'repeated': False} for item in selected],
                          'step': 0, 'total': len(selected), 'results': {}, 'version': 1,
-                         'options': {'size': size, 'scope': scope}}
+                         'options': {'size': size, 'scope': scope, **({'vocabularyIds': sorted(set(ids))} if scope == 'selected' else {})}}
                 cursor.execute("INSERT INTO vocabulary_review_sessions(id,user_id,request_key,state_json) VALUES(%s,%s,%s,%s::jsonb) RETURNING *",
                                (new_id(), user_id, key, json.dumps(state)))
                 return {'session': self._view(self.accounts._one(cursor), items)}

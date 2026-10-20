@@ -65,6 +65,25 @@ export function isReviewDue(item, now = Date.now()) {
   return !Number.isFinite(due) || due <= now
 }
 
+export function continueReadingBook(books = []) {
+  const active = books.filter(book => book.shelfState !== 'later' && book.canRead !== false)
+  const recent = [...active].sort((a, b) => (Date.parse(b.readingProgress?.updatedAt) || 0) - (Date.parse(a.readingProgress?.updatedAt) || 0))
+  return recent.find(book => book.readingProgress?.updatedAt && !book.readingProgress?.completedAt)
+    || active.find(book => !book.readingProgress?.completedAt) || recent[0]
+}
+
+export function openReview({ mode = '', ids = [], size = 5, scope = '' } = {}) {
+  const query = new URLSearchParams({ screen: 'vocab', size: String(size) })
+  if (mode) query.set('review', mode)
+  if (scope) query.set('scope', scope)
+  if (ids.length) query.set('words', ids.join(','))
+  location.href = `/app?${query}`
+}
+
+export function learningDuration(seconds = 0) {
+  return seconds < 60 ? `${Math.floor(seconds)} 秒` : `${Math.floor(seconds / 60)} 分 ${Math.floor(seconds % 60)} 秒`
+}
+
 export function bookDescription(book) {
   const text = String(book.description || '').trim()
   if (text && text !== book.title && text !== book.englishTitle) return text

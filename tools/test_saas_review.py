@@ -12,6 +12,8 @@ from unittest.mock import patch
 
 from saas_auth import SaaSError, new_id, utcnow
 from saas_review import ReviewService, due_time, next_interval
+from saas_learning import LearningService, DEFAULT_PLAN
+from saas_rewards import RewardService
 from test_saas_phase7_integration import PrivateWorkspaceTests as Fixtures
 
 
@@ -153,6 +155,82 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(next_interval({'interval_days': 60}, 'easy', False, False), 90)
         self.assertAlmostEqual(next_interval({}, 'again', False, False), 10 / 1440)
 
+    def test_learning_plan_is_account_scoped_and_validated(self):
+        learning = LearningService(self.workspace, self.review)
+        plan = {'readingMinutes': 5, 'reviewWords': 20, 'weeklyMinutes': 60}
+        learning.update_plan(self.uid, plan)
+        self.assertEqual(learning.state(self.uid)['plan'], plan)
+        self.assertEqual(learning.state(str(self.other['id']))['plan'], DEFAULT_PLAN)
+        for invalid in ({}, {**plan, 'readingMinutes': True}, {**plan, 'weeklyMinutes': 999}, {**plan, 'extra': 1}):
+            with self.assertRaises(SaaSError): learning.update_plan(self.uid, invalid)
+
+    def test_learning_summary_new_words_are_not_edits_or_historical_backfill(self):
+        learning = LearningService(self.workspace, self.review)
+        word = self.word()
+        self.assertTrue(word['isNew'])
+        edited = self.word(meaning='改写释义')
+        self.assertFalse(edited['isNew'])
+        self.assertEqual(learning.state(self.uid)['today']['newWords'], 1)
+        with self.accounts.transaction() as connection:
+            connection.execute('UPDATE content_vocabulary SET created_at=NULL WHERE owner_id=%s', (self.uid,))
+        self.word(meaning='再次编辑历史词')
+        self.assertEqual(learning.state(self.uid)['today']['newWords'], 0)
+
+    def test_learning_summary_reviews_unique_and_reading_atomic_retry(self):
+        learning = LearningService(self.workspace, self.review)
+        self.word()
+        session = self.start()
+        session = self.answer(session, 'again')
+        self.answer(session, 'good')
+        self.workspace.activity(self.uid, self.book_id, 73, 2, 's1', 'summary-reading')
+        self.workspace.activity(self.uid, self.book_id, 73, 2, 's1', 'summary-reading')
+        state = learning.state(self.uid)
+        self.assertEqual(state['today']['readingSeconds'], 73)
+        self.assertEqual(state['today']['reviewedWords'], 1)
+        self.assertEqual(state['review']['latest']['completed'], 1)
+        self.assertEqual(state['learningStreak'], 1)
+        self.assertEqual(state['lastReading']['readingSeconds'], 73)
+        other = learning.state(str(self.other['id']))
+        self.assertEqual(other['today']['readingSeconds'], 0)
+        self.assertEqual(other['today']['reviewedWords'], 0)
+
+    def test_learning_streak_ignores_checkin_and_future_days(self):
+        learning = LearningService(self.workspace, self.review)
+        rewards = RewardService(self.accounts, self.memberships)
+        rewards.checkin(self.uid)
+        self.assertEqual(learning.state(self.uid)['learningStreak'], 0)
+        today = learning.state(self.uid)['today']['day']
+        with self.accounts.transaction() as connection:
+            connection.execute("""INSERT INTO content_learning_daily(owner_id,day,payload) VALUES
+                (%s,%s::date-1,'{"reviews":1}'),(%s,%s::date+1,'{"reading_seconds":600}')""", (self.uid,today,self.uid,today))
+        state = learning.state(self.uid)
+        self.assertEqual(state['learningStreak'], 1)
+        self.assertEqual(state['week']['readingSeconds'], 0)
+
+    def test_selected_review_filters_owner_and_has_stable_request_options(self):
+        a = self.word(0); b = self.word(1)
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("INSERT INTO content_vocabulary(owner_id,book_id,sentence_id,word_index,payload) VALUES(%s,%s,'s1',2,'{\"word\":\"private\",\"meaning\":\"私有\"}') RETURNING legacy_id", (str(self.other['id']),self.book_id))
+                foreign_id = self.accounts._one(cursor)['legacy_id']
+        options = {'size': 5, 'scope': 'selected', 'vocabularyIds': [a['id'], foreign_id], 'idempotencyKey':'selected-once'}
+        session = self.review.start(self.uid, options)['session']
+        self.assertEqual(session['total'], 1)
+        self.assertEqual(session['current']['item']['id'], a['id'])
+        with self.assertRaises(SaaSError): self.review.start(self.uid, {**options, 'vocabularyIds':[b['id']]})
+        with self.assertRaises(SaaSError): self.review.start(self.uid, {**options, 'vocabularyIds':[True]})
+        self.assertEqual(self.review.state(str(self.other['id']))['active'], None)
+
+    def test_retired_reward_cannot_consume_points(self):
+        rewards = RewardService(self.accounts, self.memberships)
+        with self.accounts.transaction() as connection:
+            connection.execute("INSERT INTO reward_ledger(id,user_id,month_key,event_type,event_key,points) VALUES(%s,%s,'2026-10','test','reward-balance',200)", (new_id(),self.uid))
+            connection.execute("INSERT INTO reward_catalog(id,code,title,cost_points,reward_type,feature,quantity) VALUES('retired-test','retired-test','旧奖励',80,'quota_credit','official_unlocks',1) ON CONFLICT DO NOTHING")
+        before = rewards.status(self.uid)['balance']
+        self.assertNotIn('retired-test', [reward['code'] for reward in rewards.catalog(self.uid)['rewards']])
+        with self.assertRaises(SaaSError): rewards.redeem(self.uid, 'retired-test', 'retired-key')
+        self.assertEqual(rewards.status(self.uid)['balance'], before)
+
     def test_official_source_access(self):
         self.word()
         with self.accounts.transaction() as connection:
@@ -162,6 +240,26 @@ class ReviewTests(unittest.TestCase):
         self.assertTrue(session['current']['item']['official'])
         self.assertEqual(session['current']['item']['bookId'], 'review-official')
         self.assertEqual(self.answer(session)['status'], 'completed')
+
+    def test_paid_account_cannot_redeem_already_unlimited_ai(self):
+        rewards = RewardService(self.accounts, self.memberships)
+        free_rewards = rewards.catalog(self.uid)['rewards']
+        ai_reward = next(item for item in free_rewards if item['feature'] == 'ai_context_generations')
+        self.memberships.create_manual_order(str(self.admin['id']), self.uid, 'advanced-v1', utcnow()-timedelta(minutes=1), utcnow()+timedelta(days=30))
+        self.assertNotIn(ai_reward['code'], [item['code'] for item in rewards.catalog(self.uid)['rewards']])
+        before = rewards.status(self.uid)['balance']
+        with self.assertRaises(SaaSError) as exc: rewards.redeem(self.uid, ai_reward['code'], 'paid-ai')
+        self.assertEqual(exc.exception.code, 'reward_unnecessary')
+        self.assertEqual(rewards.status(self.uid)['balance'], before)
+
+    def test_catalog_continuation_respects_removed_publication(self):
+        with self.accounts.transaction() as connection:
+            connection.execute("INSERT INTO catalog_books(id,source_content_book_id,title,rights_status,publication_status) VALUES('continue-official',%s,'官方来源','licensed','published')", (self.book_id,))
+            connection.execute("INSERT INTO user_library(id,user_id,catalog_book_id) VALUES(%s,%s,'continue-official')", (new_id(), self.uid))
+        self.assertTrue(self.catalog.library(self.uid)['items'][0]['canRead'])
+        with self.accounts.transaction() as connection:
+            connection.execute("UPDATE catalog_books SET publication_status='draft' WHERE id='continue-official'")
+        self.assertFalse(self.catalog.library(self.uid)['items'][0]['canRead'])
 
     def test_http_auth_csrf_and_recovery(self):
         self.word()
@@ -185,12 +283,17 @@ class ReviewTests(unittest.TestCase):
                     if request('/api/health')[0] == 200: break
                 except OSError: time.sleep(.1)
             self.assertEqual(request('/api/workspace/review')[0], 401)
+            self.assertEqual(request('/api/workspace/learning')[0], 401)
             status, headers, _ = request('/api/auth/login', 'POST', {'email': 'workspace-owner@local.test', 'password': 'workspace owner password'})
             self.assertEqual(status, 200)
             cookies = '; '.join(value.split(';', 1)[0] for name, value in headers if name.lower() == 'set-cookie')
             csrf = next(value.split('=', 1)[1] for value in cookies.split('; ') if value.startswith('shiyue_csrf='))
             self.assertEqual(request('/api/workspace/review/start', 'POST', {}, cookies)[0], 403)
             self.assertEqual(request('/api/workspace/review/answer', 'POST', {}, cookies)[0], 403)
+            self.assertEqual(request('/api/workspace/learning/plan', 'POST', {}, cookies)[0], 403)
+            plan = {'readingMinutes': 5, 'reviewWords': 5, 'weeklyMinutes': 60}
+            self.assertEqual(request('/api/workspace/learning/plan', 'POST', plan, cookies, csrf)[0], 200)
+            self.assertEqual(request('/api/workspace/learning', cookies=cookies)[2]['plan'], plan)
             status, _, result = request('/api/workspace/review/start', 'POST', {'size': 5, 'scope': 'due', 'idempotencyKey': 'http-start'}, cookies, csrf)
             self.assertEqual(status, 200); session = result['session']
             self.assertEqual(request('/api/workspace/review', cookies=cookies)[2]['active']['id'], session['id'])
@@ -201,6 +304,8 @@ class ReviewTests(unittest.TestCase):
             with self.accounts.transaction() as connection:
                 connection.execute('UPDATE users SET email_verified_at=NULL WHERE id=%s', (self.uid,))
             self.assertEqual(request('/api/workspace/review', cookies=cookies)[0], 403)
+            self.assertEqual(request('/api/workspace/learning', cookies=cookies)[0], 403)
+            self.assertEqual(request('/api/workspace/learning/plan', 'POST', plan, cookies, csrf)[0], 403)
             self.assertEqual(request('/api/workspace/review/start', 'POST', {}, cookies, csrf)[0], 403)
         finally:
             process.terminate(); process.wait(timeout=10)

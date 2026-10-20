@@ -68,6 +68,7 @@ function App() {
   const [catalogBooks, setCatalogBooks] = useState([])
   const [libraryBooks, setLibraryBooks] = useState([])
   const [learningDays, setLearningDays] = useState([])
+  const [learning, setLearning] = useState(null)
   const [membership, setMembership] = useState(null)
   const [membershipOrders, setMembershipOrders] = useState([])
   const [rewardStatus, setRewardStatus] = useState(null)
@@ -120,13 +121,13 @@ function App() {
       getJson('/api/health', health),
       targetScreen === 'settings' ? getJson('/api/auth/devices', { devices: [] }) : Promise.resolve({ devices }),
       needBooks ? getJson('/api/workspace/books') : Promise.resolve({ books: [] }),
-      targetScreen === 'workspace' ? getJson('/api/workspace/vocabulary') : Promise.resolve({ items: vocabulary }),
+      Promise.resolve({ items: vocabulary }),
       targetScreen === 'catalog' ? getJson('/api/catalog?limit=60') : Promise.resolve({ books: [] }),
       needBooks ? getJson('/api/library') : Promise.resolve({ items: [] }),
-      ['workspace', 'stats'].includes(targetScreen) ? getJson('/api/workspace/learning-days?limit=365') : Promise.resolve({ days: learningDays }),
+      ['workspace', 'stats'].includes(targetScreen) ? getJson('/api/workspace/learning') : Promise.resolve({ days: learningDays }),
       targetScreen === 'membership' ? getJson('/api/membership/usage') : Promise.resolve(membership),
       targetScreen === 'membership' ? getJson('/api/membership/orders') : Promise.resolve({ orders: membershipOrders }),
-      ['workspace', 'rewards'].includes(targetScreen) ? getJson('/api/rewards/status', null) : Promise.resolve(rewardStatus),
+      targetScreen === 'rewards' ? getJson('/api/rewards/status', null) : Promise.resolve(rewardStatus),
       targetScreen === 'rewards' ? getJson('/api/rewards/catalog', { rewards: [] }) : Promise.resolve({ rewards: rewardsCatalog }),
       targetScreen === 'rewards' ? getJson('/api/rewards/ledger', { items: [] }) : Promise.resolve({ items: rewardsLedger }),
       targetScreen === 'library' ? getJson('/api/workspace/imports', { tasks: [] }) : Promise.resolve({ tasks: importTasks }),
@@ -147,6 +148,7 @@ function App() {
     if (targetScreen === 'library') setLibraryBooks([...workspaceBooks, ...savedBooks])
     if (targetScreen === 'catalog') setCatalogBooks(officialBooks)
     setLearningDays(daysData.days || [])
+    if (['workspace', 'stats'].includes(targetScreen)) setLearning(daysData)
     setMembership(membershipData)
     setMembershipOrders(membershipOrderData.orders || [])
     setRewardStatus(rewardData)
@@ -233,7 +235,7 @@ function App() {
   }
   const exportAdminSummary = async () => { try { const response = await fetch('/api/admin/exports/summary', { credentials: 'include' }); const data = await response.json(); if (!response.ok) throw new Error(data.error || '导出失败'); const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `shiyue-admin-summary-${new Date().toISOString().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(url); messageApi.success('运营摘要已导出') } catch (error) { messageApi.error(error.message || '导出失败') } }
   const checkIn = async () => { try { await postJson('/api/checkins', {}); await reloadWorkspace({ silent: true }); messageApi.success('签到成功，成长值已更新') } catch (error) { messageApi.error(error.message || '签到失败') } }
-  const redeemReward = async code => { try { await postJson('/api/rewards/redeem', { code, idempotencyKey: `redeem-${code}-${crypto.randomUUID?.() || Date.now()}` }); await reloadWorkspace({ silent: true }); messageApi.success('奖励兑换成功') } catch (error) { messageApi.error(error.message || '奖励兑换失败') } }
+  const redeemReward = async (code, idempotencyKey) => { await postJson('/api/rewards/redeem', { code, idempotencyKey }); await reloadWorkspace({ silent: true }); messageApi.success('奖励兑换成功') }
   const filteredBooks = useMemo(() => books.filter(book => `${book.title} ${book.subtitle} ${book.author}`.toLowerCase().includes(query.toLowerCase()) && (filter === '全部' || book.source === filter)), [books, query, filter])
 
   const nav = [{ key: 'workspace', icon: <DashboardOutlined />, label: '学习空间' }, { key: 'catalog', icon: <ShopOutlined />, label: '书城' }, { key: 'library', icon: <BookOutlined />, label: '我的书架' }, { key: 'stats', icon: <BarChartOutlined />, label: '学习记录' }, { key: 'vocab', icon: <StarOutlined />, label: '生词复习' }, { key: 'rewards', icon: <GiftOutlined />, label: '成长奖励' }, { key: 'membership', icon: <ThunderboltFilled />, label: '会员中心' }, { key: 'admin', icon: <AppstoreOutlined />, label: '运营后台' }, { key: 'platform', icon: <SettingOutlined />, label: '平台与部署' }].filter(item => item.key === 'platform' ? currentUser?.isAdmin && currentUser?.canManagePlatform : item.key !== 'admin' || currentUser?.isAdmin)
@@ -261,7 +263,7 @@ function App() {
       </Sider>
       <Drawer placement="left" open={mobileOpen} onClose={() => setMobileOpen(false)} closable={false} width={280} styles={{ body: { padding: 0, background: '#17392b' } }}><Brand /><SidebarMenu nav={nav} settings={settings} screen={screen} selectScreen={selectScreen} /></Drawer>
       <Layout><Header className="modern-header"><Button className="mobile-menu" type="text" icon={<MenuOutlined />} onClick={() => setMobileOpen(true)} /><div className="header-context"><Text className="eyebrow">WORKSPACE / {nav.find(n => n.key === screen)?.label || '设置'}</Text><Text className="header-status">原声听读 · 逐句积累</Text></div></Header>
-        <Content className="modern-content"><PageErrorBoundary key={screen}>{pageError ? <Alert showIcon type="error" message="页面暂时无法加载" description={pageError} action={<Button onClick={() => reloadWorkspace({ targetScreen: screen }).catch(() => {})}>重试</Button>} /> : <Page loading={pageLoading} screen={screen} books={filteredBooks} allBooks={books} catalogBooks={catalogBooks} libraryBooks={libraryBooks} importTasks={importTasks} learningDays={learningDays} membership={membership} membershipOrders={membershipOrders} rewardStatus={rewardStatus} vocabulary={vocabulary} rewardsCatalog={rewardsCatalog} rewardsLedger={rewardsLedger} adminData={adminData} currentUser={currentUser} devices={devices} preferences={preferences} deletionStatus={deletionStatus} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} selectScreen={selectScreen} openReader={openReader} openImport={() => setImportOpen(true)} messageApi={messageApi} health={health} onRefresh={() => reloadWorkspace({ silent: true, targetScreen: screen })} onCatalogAction={catalogAction} onCancelImport={cancelImport} onRetryImport={retryImport} onUpdateUserStatus={updateUserStatus} onCreateInvitation={createInvitation} onDeleteUnusedInvitations={deleteUnusedInvitations} onRevokeDevice={revokeDevice} onAdjustQuota={adjustQuota} onUpdateSubscription={updateSubscription} onCreateManualOrder={createManualOrder} onCreateCommerceProduct={createCommerceProduct} onCreateCommerceVersion={createCommerceVersion} onPublishCommerceVersion={publishCommerceVersion} onSetCommerceProductActive={setCommerceProductActive} onCreateConfiguredBenefit={createConfiguredBenefit} onUpdateConfiguredBenefit={updateConfiguredBenefit} onRevokeOwnDevice={revokeOwnDevice} onExportAdminSummary={exportAdminSummary} onCheckIn={checkIn} onRedeemReward={redeemReward} onSavePreferences={savePreferences} onPreferencesChange={mergePreferences} onLogout={logout} onRequestDeletion={requestDeletion} onCancelDeletion={cancelDeletion} />}</PageErrorBoundary></Content>
+        <Content className="modern-content"><PageErrorBoundary key={screen}>{pageError ? <Alert showIcon type="error" message="页面暂时无法加载" description={pageError} action={<Button onClick={() => reloadWorkspace({ targetScreen: screen }).catch(() => {})}>重试</Button>} /> : <Page loading={pageLoading} screen={screen} books={filteredBooks} allBooks={books} catalogBooks={catalogBooks} libraryBooks={libraryBooks} importTasks={importTasks} learningDays={learningDays} learning={learning} membership={membership} membershipOrders={membershipOrders} rewardStatus={rewardStatus} vocabulary={vocabulary} rewardsCatalog={rewardsCatalog} rewardsLedger={rewardsLedger} adminData={adminData} currentUser={currentUser} devices={devices} preferences={preferences} deletionStatus={deletionStatus} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} selectScreen={selectScreen} openReader={openReader} openImport={() => setImportOpen(true)} messageApi={messageApi} health={health} onRefresh={() => reloadWorkspace({ silent: true, targetScreen: screen })} onCatalogAction={catalogAction} onCancelImport={cancelImport} onRetryImport={retryImport} onUpdateUserStatus={updateUserStatus} onCreateInvitation={createInvitation} onDeleteUnusedInvitations={deleteUnusedInvitations} onRevokeDevice={revokeDevice} onAdjustQuota={adjustQuota} onUpdateSubscription={updateSubscription} onCreateManualOrder={createManualOrder} onCreateCommerceProduct={createCommerceProduct} onCreateCommerceVersion={createCommerceVersion} onPublishCommerceVersion={publishCommerceVersion} onSetCommerceProductActive={setCommerceProductActive} onCreateConfiguredBenefit={createConfiguredBenefit} onUpdateConfiguredBenefit={updateConfiguredBenefit} onRevokeOwnDevice={revokeOwnDevice} onExportAdminSummary={exportAdminSummary} onCheckIn={checkIn} onRedeemReward={redeemReward} onSavePreferences={savePreferences} onPreferencesChange={mergePreferences} onLogout={logout} onRequestDeletion={requestDeletion} onCancelDeletion={cancelDeletion} />}</PageErrorBoundary></Content>
       </Layout>
     </Layout><ImportModal open={importOpen} onClose={() => setImportOpen(false)} onResume={() => setImportOpen(true)} onCreated={() => reloadWorkspace({ silent: true })} messageApi={messageApi} /><MembershipLimitModal onRefresh={async () => { setMembership(await getJson('/api/membership/usage')); await reloadWorkspace({ silent: true }) }} /></AntApp>
   </ConfigProvider>

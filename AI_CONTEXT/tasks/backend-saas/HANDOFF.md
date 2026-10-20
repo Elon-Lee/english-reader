@@ -29,9 +29,13 @@
 
 ## 当前架构
 
+- 2026-10-20 本地已迁移 0040，备份 `.local/saas-backups/learning-loop-20261020/080259/database.dump`。`content_vocabulary.created_at` 可空，历史不回填；新增真实词条才写创建时间、编辑保留。新 `saas_learning.py` 汇总当前账号时区的今日/本周学习、连续学习、复习状态和计划；GET `/api/workspace/learning` 要求已验证登录，POST `/api/workspace/learning/plan` 另校验 CSRF、精确字段/枚举及账号行锁，全量 UPSERT 可安全重试。
+- 计划存储于现有 `workspace_settings.learning_plan`；听读 5/10/15/20/30 分钟，复习 5/10/20 词，每周 30/60/90/120/180/240/300 分钟。新词按账号时区创建日期计数，复习按作答词条去重；连续学习取真实每日听读/句子/复习/跟读，忽略签到与未来记录。返回 days 最近 730 条记录日，不补造历史数据。
+- 奖励 catalog 按账号隐藏 retired 解锁/导入额度和付费已有不限次 AI；服务端同步拒绝新兑换且不扣成长值，历史回执幂等仍可返回。`CatalogService.library` 新增 canRead，供首页过滤下架/失权官方内容。32 review + 8 phase3 + 6 phase4 隔离库回归、独立库 HTTP smoke、构建及前端/编译/diff 均通过；8790 已重启，未发布生产。
+
 - 主服务：`tools/reader_server.py`。
 - PostgreSQL 服务模块：`tools/saas_auth.py`、`saas_membership.py`、`saas_catalog.py`、`saas_workspace.py`、`saas_imports.py`、`saas_ai.py`、`saas_admin.py` 等。
-- 当前本地迁移至 `0039_vocabulary_review.sql`（复习会话与作答）；此前 `0038` 学习旅程事件、`0037` 纠正个人导入归属、`0036` 回填 YouTube 频道系列。生产仍为 `0034`，尚未发布生产；备份及验收见各任务交接。
+- 当前本地迁移至 `0040_learning_word_created.sql`；`0039` 复习会话与作答、`0038` 学习旅程事件、`0037` 纠正个人导入归属、`0036` 回填 YouTube 频道系列。生产仍为 `0034`，尚未发布生产；备份及验收见各任务交接。
 - 认证使用数据库会话 Cookie 和 CSRF；所有写接口必须校验 CSRF。
 - 2026-10-18 修复已有会话缺失/失配 `shiyue_csrf` 时写 API 持续 403：认证读取会轮换当前 session 并补发配对 CSRF Cookie，使缺失 Cookie 同时撤销旧 session；前端收到一次 `csrf_failed` 后自动刷新认证并重试一次，写接口仍强制校验 CSRF。新增回归覆盖旧 session 失效、Cookie 恢复和后续安全登出；隔离 PostgreSQL 测试库当前未配置，尚未执行数据库集成测试。
 - 测试库名称必须以 `_test` 结尾。

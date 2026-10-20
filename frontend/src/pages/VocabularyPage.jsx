@@ -61,14 +61,16 @@ function RecallCard({ session, busy, pending, error, onAnswer, onRetry, onSync, 
 }
 
 export default function VocabularyPage({ selectScreen }) {
+  const entry = useRef(new URLSearchParams(location.search))
+  const selectedIds = useRef([...new Set((entry.current.get('words') || '').split(',').filter(value => /^\d+$/.test(value)).map(Number))].slice(0, 100))
   const [data, setData] = useState(null)
   const [loadError, setLoadError] = useState('')
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState('today')
   const [view, setView] = useState('home')
   const [session, setSession] = useState(null)
-  const [size, setSize] = useState(10)
-  const [scope, setScope] = useState('due')
+  const [size, setSize] = useState([5, 10, 20].includes(Number(entry.current.get('size'))) ? Number(entry.current.get('size')) : 10)
+  const [scope, setScope] = useState(selectedIds.current.length ? 'selected' : ['due', 'difficult', 'all'].includes(entry.current.get('scope')) ? entry.current.get('scope') : 'due')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [pending, setPending] = useState(null)
@@ -88,7 +90,11 @@ export default function VocabularyPage({ selectScreen }) {
   }, [])
   useEffect(() => {
     alive.current = true
-    load().catch(e => { if (alive.current) setLoadError(e.message) }).finally(() => { if (alive.current) setLoading(false) })
+    load().then(next => {
+      if (!alive.current) return
+      const session = entry.current.get('review') === 'summary' ? next.latest : entry.current.get('review') === 'resume' ? next.active : null
+      if (session) { setSession(session); setView(session.status === 'active' ? 'practice' : 'summary') }
+    }).catch(e => { if (alive.current) setLoadError(e.message) }).finally(() => { if (alive.current) setLoading(false) })
     return () => { alive.current = false }
   }, [load])
   useEffect(() => { setPage(1) }, [query, source, filter])
@@ -96,7 +102,7 @@ export default function VocabularyPage({ selectScreen }) {
     if (requestRef.current) return
     requestRef.current = true
     setBusy(true); setError('')
-    if (!startRef.current || startRef.current.scope !== startScope || startRef.current.size !== size) startRef.current = { size, scope: startScope, idempotencyKey: makeKey() }
+    if (!startRef.current || startRef.current.scope !== startScope || startRef.current.size !== size) startRef.current = { size, scope: startScope, ...(startScope === 'selected' ? { vocabularyIds: selectedIds.current } : {}), idempotencyKey: makeKey() }
     try {
       const result = await postJson('/api/workspace/review/start', startRef.current)
       if (!alive.current) return
@@ -136,7 +142,8 @@ export default function VocabularyPage({ selectScreen }) {
   const { stats, items } = data
   const due = items.filter(item => isReviewDue(item))
   const difficult = items.filter(item => ['again', 'hard'].includes(item.payload?.rating))
-  const candidates = scope === 'due' ? due : scope === 'difficult' ? difficult : items
+  const selected = items.filter(item => selectedIds.current.includes(item.id))
+  const candidates = scope === 'selected' ? selected : scope === 'due' ? due : scope === 'difficult' ? difficult : items
   const sources = [...new Map(items.map(item => [item.bookId, item])).values()]
   const preview = [...(due.length ? due : items)].sort((a, b) => new Date(a.payload?.due_at || 0) - new Date(b.payload?.due_at || 0)).slice(0, 5)
   const filtered = items.filter(item => (source === 'all' || item.bookId === source) && (filter === 'all' || filter === 'due' && isReviewDue(item) || filter === 'difficult' && ['again', 'hard'].includes(item.payload?.rating)) && `${wordOf(item)} ${item.payload?.meaning || ''} ${item.payload?.context || ''}`.toLowerCase().includes(query.toLowerCase()))
@@ -145,7 +152,7 @@ export default function VocabularyPage({ selectScreen }) {
 
   if (view === 'summary' && session) return <div className="page-stack review-summary">
     <Button type="text" icon={<ArrowLeftOutlined />} className="review-back-home" onClick={() => { setView('home'); setError('') }}>返回今日复习</Button>
-    <Card className="review-summary-hero"><CheckCircleOutlined className="review-summary-icon" /><Text className="eyebrow">SESSION COMPLETE</Text><Title level={1}>{session.completed ? '这一轮，积累已保存' : '这一轮已结束'}</Title><Paragraph>{session.completed ? '已安排后续复习。' : '跳过的词未计入学习成果，可在下一轮继续。'}{session.weakCount ? '还有一些词需要慢慢巩固，下一次继续。' : '带着刚刚复习的词，回到阅读中再遇见它们。'}</Paragraph><div className="review-summary-stats"><div><b>{session.completed}</b><span>实际练习 / 词</span></div><div><b>{session.firstRemembered}</b><span>首次独立自评记得</span></div><div><b>{session.reinforced}</b><span>经巩固后记得</span></div><div><b>{session.weakCount}</b><span>仍需巩固 / 词</span></div></div><Space><Button type="primary" size="large" icon={<ReadOutlined />} onClick={() => selectScreen('library')}>回到书架，继续阅读</Button><Button size="large" onClick={() => { setView('home'); setTab('today') }}>查看下一轮安排</Button></Space><Text className="review-summary-footnote">{session.skipped ? `另有 ${session.skipped} 词跳过，未计入练习成果。` : '以上为回忆自评，不代表客观正确率或长期掌握。'}{session.nextDueAt ? ` 最近一次安排：${displayDate(session.nextDueAt, true)}` : ''}</Text></Card>
+    <Card className="review-summary-hero"><CheckCircleOutlined className="review-summary-icon" /><Text className="eyebrow">SESSION COMPLETE</Text><Title level={1}>{session.completed ? '这一轮，积累已保存' : '这一轮已结束'}</Title><Paragraph>{session.completed ? '已安排后续复习。' : '跳过的词未计入学习成果，可在下一轮继续。'}{session.weakCount ? '还有一些词需要慢慢巩固，下一次继续。' : '带着刚刚复习的词，回到阅读中再遇见它们。'}</Paragraph><div className="review-summary-stats"><div><b>{session.completed}</b><span>实际练习 / 词</span></div><div><b>{session.firstRemembered}</b><span>首次独立自评记得</span></div><div><b>{session.reinforced}</b><span>经巩固后记得</span></div><div><b>{session.weakCount}</b><span>仍需巩固 / 词</span></div></div><Space><Button type="primary" size="large" icon={<ReadOutlined />} onClick={() => selectScreen('workspace')}>回学习空间，查看成果</Button><Button size="large" onClick={() => { setView('home'); setTab('today') }}>查看下一轮安排</Button></Space><Text className="review-summary-footnote">{session.skipped ? `另有 ${session.skipped} 词跳过，未计入练习成果。` : '以上为回忆自评，不代表客观正确率或长期掌握。'}{session.nextDueAt ? ` 最近一次安排：${displayDate(session.nextDueAt, true)}` : ''}</Text></Card>
     {!!session.weakWords.length && <Card title="这一轮值得再看一眼的词" extra={<Text type="secondary">回原文，在语境中巩固</Text>}><WordRows items={session.weakWords.map(entry => entry.item)} showMeaning /></Card>}
     {loadError && <Alert type="warning" message={loadError} action={<Button onClick={() => load().catch(e => setLoadError(e.message))}>刷新统计</Button>} />}
   </div>
@@ -153,14 +160,14 @@ export default function VocabularyPage({ selectScreen }) {
   return <div className="page-stack vocabulary-page">
     <div className="page-intro"><div><Text className="eyebrow">WORDS INTO KNOWLEDGE</Text><Title level={1}>让读过的词，真正留下来</Title><Paragraph>回到熟悉的语境，用一小轮复习，把生词变成自己的积累。</Paragraph></div><Button icon={<BookOutlined />} onClick={() => selectScreen('library')}>回到书架</Button></div>
     <div className="review-nav"><Segmented aria-label="生词页面" value={tab} onChange={setTab} options={[{ value: 'today', label: '今日复习' }, { value: 'notebook', label: `我的生词本 · ${stats.total}` }]} /><Text type="secondary">收藏于阅读，巩固于复习</Text></div>
-    {loadError && <Alert type="warning" showIcon message={loadError} action={<Button onClick={() => load().catch(e => setLoadError(e.message))}>刷新</Button>} />}
+    {scope === 'selected' && <Alert type={selected.length ? 'info' : 'warning'} showIcon message={selected.length ? '本轮将练习刚才阅读中新收藏的 ' + selected.length + ' 个词。' : '这批生词已不可访问，请切换复习范围。'} />}{loadError && <Alert type="warning" showIcon message={loadError} action={<Button onClick={() => load().catch(e => setLoadError(e.message))}>刷新</Button>} />}
     {tab === 'today' ? <>
       <div className="review-overview-grid">
         <Card className="review-today-hero"><div className="review-hero-label"><span><FlagOutlined /> 今天的一小步</span><Tag>{data.active ? '有一轮等待继续' : stats.due ? '复习计划已就绪' : stats.total ? '按自己的节奏来' : '从第一篇阅读开始'}</Tag></div>
           <Title level={2}>{data.active ? '接着上次的进度，再记牢一点' : stats.due ? '今天，让这些词再熟悉一点' : stats.total ? '当前没有到期词，积累还在继续' : '读到不熟悉的词，就把它留下'}</Title>
           <div className="review-due-count"><b>{data.active ? data.active.completed : stats.due}</b><span>{data.active ? `/ ${data.active.total} 词已练习` : '个词等待复习'}</span></div>
           <Paragraph>{data.active ? '每次评分都已保存，回来就能继续。' : stats.due ? `包含 ${stats.new} 个待学新词。先回忆，再看答案，薄弱词会在本轮再次出现。` : stats.total ? `${stats.total} 个生词已在你的词本中。${stats.nextDueAt ? `下一次复习：${displayDate(stats.nextDueAt, true)}。` : ''}也可以提前巩固一轮。` : '在阅读器里收藏生词并补充释义，这里会为你安排后续复习。'}</Paragraph>
-          {stats.total > 0 && !data.active && <div className="review-plan-controls"><label>每轮词数 <Segmented aria-label="每轮词数" disabled={busy} value={size} onChange={setSize} options={[5, 10, 20].map(value => ({ value, label: `${value} 词` }))} /></label><Select aria-label="复习范围" value={scope} disabled={busy} onChange={setScope} options={[{ value: 'due', label: `到期优先 · ${due.length}` }, { value: 'difficult', label: `薄弱词 · ${difficult.length}` }, { value: 'all', label: `全部生词 · ${items.length}` }]} /></div>}
+          {stats.total > 0 && !data.active && <div className="review-plan-controls"><label>每轮词数 <Segmented aria-label="每轮词数" disabled={busy} value={size} onChange={setSize} options={[5, 10, 20].map(value => ({ value, label: `${value} 词` }))} /></label><Select aria-label="复习范围" value={scope} disabled={busy} onChange={setScope} options={[...(selectedIds.current.length ? [{ value: 'selected', label: `本次新词 · ${selected.length}` }] : []), { value: 'due', label: `到期优先 · ${due.length}` }, { value: 'difficult', label: `薄弱词 · ${difficult.length}` }, { value: 'all', label: `全部生词 · ${items.length}` }]} /></div>}
           <div className="review-hero-actions">{data.active ? <Button type="primary" size="large" icon={<ArrowRightOutlined />} onClick={() => { setSession(data.active); setView('practice'); setError('') }}>继续上次复习</Button> : !stats.total ? <Button type="primary" size="large" icon={<ReadOutlined />} onClick={() => selectScreen('catalog')}>去阅读，收藏第一个生词</Button> : <Button type="primary" size="large" loading={busy} disabled={!candidates.length && !(scope === 'due' && !due.length)} onClick={() => begin(scope === 'due' && !due.length ? 'all' : scope)} icon={<ArrowRightOutlined />}>{scope === 'due' && !due.length ? '提前巩固一轮' : `开始本轮复习 · ${Math.min(size, candidates.length)} 词`}</Button>}<Text>{data.active ? '刷新或离开页面，进度仍会保留' : '小步完成，不必一次清空词本'}</Text></div>
           {error && <Alert type="error" showIcon message={error} />}
           <div className="review-method-strip"><span><EyeOutlined /> 独立回忆</span><ArrowRightOutlined /><span><CheckCircleOutlined /> 对照释义</span><ArrowRightOutlined /><span><ReloadOutlined /> 薄弱词再练</span></div>

@@ -119,13 +119,16 @@ class WorkspaceService:
         if index<0:raise SaaSError("invalid_vocabulary","单词索引无效。",400)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
+                self._user(cursor,user_id)
                 storage_book_id,public_book_id=self._learning_book(cursor,user_id,book_id,True)
-                cursor.execute("""INSERT INTO content_vocabulary(owner_id,book_id,sentence_id,word_index,payload)
-                VALUES(%s,%s,%s,%s,%s::jsonb) ON CONFLICT (owner_id,book_id,sentence_id,word_index) DO UPDATE SET payload=EXCLUDED.payload
+                cursor.execute("SELECT legacy_id FROM content_vocabulary WHERE owner_id=%s AND book_id=%s AND sentence_id=%s AND word_index=%s", (user_id,storage_book_id,str(sentence_id),index))
+                is_new = cursor.fetchone() is None
+                cursor.execute("""INSERT INTO content_vocabulary(owner_id,book_id,sentence_id,word_index,payload,created_at)
+                VALUES(%s,%s,%s,%s,%s::jsonb,NOW()) ON CONFLICT (owner_id,book_id,sentence_id,word_index) DO UPDATE SET payload=EXCLUDED.payload
                 RETURNING legacy_id""",(user_id,storage_book_id,str(sentence_id),index,json.dumps(payload)))
                 row=self.accounts._one(cursor)
                 learning_milestone(cursor,user_id,"first_word_saved")
-                return {"id":int(row["legacy_id"]),"bookId":public_book_id,"sentenceId":str(sentence_id),"wordIndex":index,"payload":payload}
+                return {"id":int(row["legacy_id"]),"bookId":public_book_id,"sentenceId":str(sentence_id),"wordIndex":index,"payload":payload,"isNew":is_new}
 
     def annotate(self,user_id:str,book_id:str,sentence_id:str,word_index:Any,payload:Any)->dict[str,Any]:
         if not isinstance(payload,dict):raise SaaSError("invalid_annotation","标注数据无效。",400)
