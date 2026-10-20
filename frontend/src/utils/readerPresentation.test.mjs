@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readerAppearance, dictionaryGroups, sentenceIndex, sentencePlaybackRange, wordNavigationIndex, mediaSentenceIndex } from './readerPresentation.mjs'
+import { readerAppearance, dictionaryGroups, sentenceIndex, sentencePlaybackRange, mediaSentenceIndex } from './readerPresentation.mjs'
 
 test('appearance accepts supported values and replaces invalid persisted values', () => {
   assert.deepEqual(readerAppearance({ readerFontSize: 24, readerLineHeight: 2, readerContentWidth: 920 }), { readerFontSize: 24, readerLineHeight: 2, readerContentWidth: 920 })
@@ -24,14 +24,6 @@ test('practice requires real usable sentence boundaries and supports next start 
   assert.equal(sentencePlaybackRange([{text:'No timestamps'}],0,8), null)
   assert.equal(sentencePlaybackRange([{start:null,end:3}],0,8), null)
   assert.equal(sentencePlaybackRange([{start:4,end:2}],0,8), null)
-})
-test('word navigation stays inside the sentence and supports Home and End', () => {
-  assert.equal(wordNavigationIndex(0,'ArrowLeft',4),0)
-  assert.equal(wordNavigationIndex(1,'ArrowRight',4),2)
-  assert.equal(wordNavigationIndex(3,'ArrowRight',4),3)
-  assert.equal(wordNavigationIndex(2,'Home',4),0)
-  assert.equal(wordNavigationIndex(0,'End',4),3)
-  assert.equal(wordNavigationIndex(0,'ArrowRight',0),-1)
 })
 test('media seeking resolves the first sentence, timestamp gaps and the final sentence', () => {
   const sentences = [{start:1,end:3},{start:5,end:7}]

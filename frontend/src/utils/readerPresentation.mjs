@@ -34,12 +34,6 @@ export function sentencePlaybackRange(sentences, index, duration) {
   const end = finite(sentences[index]?.end) ?? finite(sentences[index + 1]?.start) ?? finite(duration)
   return start !== null && start >= 0 && end !== null && end > start ? { start, end } : null
 }
-export function wordNavigationIndex(index, key, length) {
-  if (!length) return -1
-  if (key === 'Home') return 0
-  if (key === 'End') return length - 1
-  return Math.max(0, Math.min(length - 1, index + (key === 'ArrowLeft' ? -1 : key === 'ArrowRight' ? 1 : 0)))
-}
 export function mediaSentenceIndex(sentences, time) {
   let active = -1
   for (let index = 0; index < sentences.length; index++) {
