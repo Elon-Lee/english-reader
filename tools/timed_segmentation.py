@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build natural, non-overlapping sentences from a timed English word stream."""
-import re,subprocess
+import math,re,subprocess
 
 WORD_RE=re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?|\d+")
 PUNCTUATION_RE=re.compile(r"[.!?]")
@@ -59,20 +59,22 @@ def dedupe_caption_words(entries,automatic=False):
     return output,{"inputCues":len(entries),"deduplicatedWords":duplicates,"words":len(output)}
 
 def normalize_word_timeline(words):
-    """Make textual word order globally monotonic without stretching words over pauses."""
+    """Preserve measured onsets; trim overlaps without pushing later speech ahead."""
     fixed=0;capped=0
     for index,word in enumerate(words):
-        word["start"]=max(0,float(word.get("start",0)));word["end"]=max(word["start"]+.03,float(word.get("end",word["start"]+.03)))
+        start=float(word.get("start",0));end=float(word.get("end",start))
+        if not math.isfinite(start) or not math.isfinite(end):raise ValueError("Non-finite word timestamp")
+        start_ms=max(0,round(start*1000))
+        if index and start_ms<=round(words[index-1]["start"]*1000):
+            start_ms=round(words[index-1]["start"]*1000)+1;fixed+=1
+        word["start"]=start_ms/1000
+        word["end"]=max(start_ms+1,round(end*1000))/1000
         maximum=min(1.35,max(.32,.24+len(re.sub(r"[^A-Za-z0-9]","",word.get("text","")))*.09))
-        if word["end"]-word["start"]>maximum:word["end"]=word["start"]+maximum;capped+=1
-        if index:
-            previous=words[index-1]
-            if word["start"]<previous["end"]:
-                boundary=max(previous["start"]+.03,min(word["end"]-.03,(previous["end"]+word["start"])/2))
-                previous["end"]=boundary;word["start"]=boundary;fixed+=1
-            if word["start"]<previous["start"]+.03:word["start"]=previous["start"]+.03;fixed+=1
-            word["end"]=max(word["start"]+.03,word["end"])
+        if word.get("timingSource") not in {"whisper-dtw","whisper-token"} and word["end"]-word["start"]>maximum:
+            word["end"]=word["start"]+maximum;capped+=1
         word["start"]=round(word["start"],3);word["end"]=round(word["end"],3)
+    for left,right in zip(words,words[1:]):
+        if left["end"]>right["start"]:left["end"]=right["start"];fixed+=1
     return {"wordOverlapsFixed":fixed,"wordDurationsCapped":capped}
 
 def detect_silences(path,noise="-35dB",duration=.35):

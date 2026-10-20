@@ -19,11 +19,13 @@ def main():
     parser.add_argument("--level",default="")
     parser.add_argument("--audio-url",required=True)
     args=parser.parse_args()
-    whisper=json.loads(args.whisper.read_text());sentences,initial_segmentation=whisper_book(whisper)
+    media_seconds=duration(args.audio)
+    whisper=json.loads(args.whisper.read_text());sentences,initial_segmentation=whisper_book(whisper,media_duration=media_seconds)
+    timing={key:initial_segmentation[key] for key in ("timestampMethod","timingVersion","wordTimingSources")}
     book={"id":args.id,"title":args.title,"englishTitle":args.english_title,"level":args.level,
           "sourceType":"audio","audio":args.audio_url,"pdf":"","pageBase":"","hasOriginalPages":False,
-          "duration":duration(args.audio),"alignment":"whisper-dtw-normalized","sentences":sentences,
-          "whisper":{"engine":"whisper.cpp","model":"base.en","timestampMethod":"dtw",
+          "duration":media_seconds,"alignment":f"whisper-{timing['timestampMethod']}-normalized","sentences":sentences,
+          "whisper":{"engine":"whisper.cpp","model":"base.en",**timing,
                      "transcribedWords":sum(len(sentence["words"]) for sentence in sentences)},
           "segmentation":initial_segmentation}
     sat=annotate_sat_boundaries(book,"speech-asr")

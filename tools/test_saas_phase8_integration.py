@@ -130,6 +130,12 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         self.assertEqual(round(reader["duration"],1),4.2)
         self.assertEqual([sentence["text"] for sentence in reader["sentences"]],["Hello private audio.","Second audio sentence!"])
         self.assertTrue(reader["sentences"][0]["words"][0]["start"]>=0)
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT data_json FROM content_books WHERE id=%s",(completed["task"]["outputBookId"],))
+                stored=self.accounts._one(cursor)["data_json"]
+        self.assertEqual(stored["whisper"]["timestampMethod"],"segment-estimate")
+        self.assertEqual(stored["whisper"]["timingVersion"],3)
         usage=self.memberships.usage(owner);mp3=next(row for row in usage["usage"] if row["feature"]=="mp3_imports")
         self.assertEqual(mp3["used"],0);self.assertEqual(mp3["reserved"],0)
         self.assertEqual(next(row for row in usage["usage"] if row["feature"]=="audio_library_capacity")["used"],1)
@@ -155,7 +161,13 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         asset_id=completed["task"]["sourceAssetId"];reader=self.workspace.reader(owner,completed["task"]["outputBookId"])["book"]
         self.assertEqual(reader["resourceType"],"video");self.assertEqual(round(reader["duration"],1),2.0)
         self.assertFalse(reader["canWatchHdVideo"])
-        self.assertEqual([sentence["text"] for sentence in reader["sentences"]],["Hello private audio.","Second audio sentence!"])
+        self.assertEqual([sentence["text"] for sentence in reader["sentences"]],["Hello private audio."])
+        self.assertTrue(all(word["end"]<=reader["duration"] for sentence in reader["sentences"] for word in sentence["words"]))
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT data_json FROM content_books WHERE id=%s",(completed["task"]["outputBookId"],))
+                stored=self.accounts._one(cursor)["data_json"]
+        self.assertEqual(stored["segmentation"]["wordsOutsideMedia"],3)
         self.assertTrue(self.media.stream(owner,asset_id,"audio")["path"].is_file());self.assertTrue(self.media.stream(owner,asset_id,"cover")["path"].is_file())
         self.assertTrue(self.media.stream(owner,asset_id,"low")["path"].is_file())
         with self.assertRaises(SaaSError) as high:self.media.stream(owner,asset_id)

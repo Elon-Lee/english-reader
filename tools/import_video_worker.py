@@ -85,7 +85,7 @@ def import_video(job_id,relative,progress_base=0,progress_span=100):
         progress(35,"Whisper DTW 正在转写音频" if audio_only else "Whisper DTW 正在转写视频")
         log=ROOT/".local"/f"video-whisper-{job_id}.log"
         with log.open("w") as output:
-            run([WHISPER,"-m",MODEL,"-f",audio,"-l","en","-t",WHISPER_THREADS,"-p","2","-ng","-dtw","base.en","-ml","1","-sow","-ojf","-of",prefix,"-np"],stdout=subprocess.DEVNULL,stderr=output)
+            run([WHISPER,"-m",MODEL,"-f",audio,"-l","en","-t",WHISPER_THREADS,"-p","1","-ng","-nfa","-dtw","base.en","-ml","1","-sow","-ojf","-of",prefix,"-np"],stdout=subprocess.DEVNULL,stderr=output)
     progress(72,"构建音频正文与词级时间轴" if audio_only else "构建视频正文与词级时间轴")
     page_base="/books/"+str(pages.relative_to(BOOKS_ROOT)) if video else "";audio_url="/books/"+str(audio.relative_to(BOOKS_ROOT));video_url="/books/"+str(optimized_video.relative_to(BOOKS_ROOT)) if video else "";low_video_url="/books/"+str(low_video.relative_to(BOOKS_ROOT)) if video and low_video.exists() else ""
     book_file=generated/"book.json"

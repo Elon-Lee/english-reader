@@ -182,23 +182,32 @@ class WorkspaceImportService:
                 return "\n\n".join(lines),{"extractor":"local-pdf-ocr","pages":len(pages_data) if isinstance(pages_data,list) else 0,"lines":len(lines)}
         raise SaaSError("unsupported_document","当前原生文档处理器仅支持 TXT、Markdown 和 PDF。",422)
 
+    def _whisper_command(self,source:Path,prefix:Path,progress:bool=False)->list[str]:
+        # Parallel Whisper leaves token times local to each chunk; flash
+        # attention disables DTW in the bundled version.
+        command=[str(self.whisper_cli),"-m",str(self.whisper_model),"-f",str(source),"-l","en","-t",os.environ.get("SHIYUE_WHISPER_THREADS","3"),"-p","1","-ng","-nfa"]
+        preset=re.match(r"(?:ggml-)?(large-v3-turbo|large-v[123]|tiny(?:\.en)?|base(?:\.en)?|small(?:\.en)?|medium(?:\.en)?)(?:-|\.bin$)",self.whisper_model.name)
+        if preset:command += ["-dtw",preset.group(1).replace("large-v","large.v").replace("-turbo",".turbo")]
+        return command+["-ml","1","-sow","-ojf","-of",str(prefix),"-pp" if progress else "-np"]
+
     def _audio_book(self,source:Path,task_id:str,title:str)->tuple[dict[str,Any],dict[str,Any]]:
         if not self.whisper_cli.is_file() or not self.whisper_model.is_file():
             raise SaaSError("whisper_unavailable","本机 Whisper 处理器或模型未安装。",503)
         with tempfile.TemporaryDirectory(prefix="shiyue-pg-import-audio-") as temporary:
             prefix=Path(temporary)/"whisper"
-            command=[str(self.whisper_cli),"-m",str(self.whisper_model),"-f",str(source),"-l","en","-t",os.environ.get("SHIYUE_WHISPER_THREADS","3"),"-p","2","-ng","-dtw","base.en","-ml","1","-sow","-ojf","-of",str(prefix),"-np"]
+            command=self._whisper_command(source,prefix)
             try:subprocess.run(command,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=1800)
             except subprocess.TimeoutExpired as exc:raise SaaSError("whisper_timeout","MP3 转写超时。",504) from exc
             except subprocess.CalledProcessError as exc:raise SaaSError("whisper_failed","MP3 Whisper 转写失败。",422) from exc
             transcript_path=prefix.with_suffix(".json")
             try:transcript=json.loads(transcript_path.read_text(encoding="utf-8"))
             except (OSError,json.JSONDecodeError) as exc:raise SaaSError("whisper_failed","Whisper 没有产生可读转写。",422) from exc
-        sentences,segmentation=whisper_book(transcript)
-        if not sentences:raise SaaSError("empty_audio_transcript","未从 MP3 中识别到可导入英文内容。",422)
         try:duration=float(self.audio_duration(source))
         except Exception as exc:raise SaaSError("audio_probe_failed","无法读取 MP3 时长。",422) from exc
-        book={"id":f"private-{task_id}","title":title,"englishTitle":title,"sourceType":"audio","duration":duration,"alignment":"whisper-dtw-normalized","sentences":sentences,"whisper":{"engine":"whisper.cpp","model":self.whisper_model.name,"timestampMethod":"dtw","transcribedWords":sum(len(sentence.get("words",[])) for sentence in sentences)},"segmentation":segmentation}
+        sentences,segmentation=whisper_book(transcript,media_duration=duration)
+        if not sentences:raise SaaSError("empty_audio_transcript","未从 MP3 中识别到可导入英文内容。",422)
+        timing={key:segmentation[key] for key in ("timestampMethod","timingVersion","wordTimingSources")}
+        book={"id":f"private-{task_id}","title":title,"englishTitle":title,"sourceType":"audio","duration":duration,"alignment":f"whisper-{timing['timestampMethod']}-normalized","sentences":sentences,"whisper":{"engine":"whisper.cpp","model":self.whisper_model.name,**timing,"transcribedWords":sum(len(sentence.get("words",[])) for sentence in sentences)},"segmentation":segmentation}
         return book,{"extractor":"whisper.cpp","model":self.whisper_model.name,"sentences":len(sentences),"duration":duration}
 
     def _video_book(self,source:Path,task_id:str,title:str,asset_id:str,progress=None)->tuple[dict[str,Any],dict[str,Any],list[dict[str,str]]]:
@@ -222,7 +231,7 @@ class WorkspaceImportService:
                     except FileNotFoundError as exc:raise SaaSError("ffmpeg_unavailable","本机 FFmpeg 未安装。",503) from exc
                     except subprocess.TimeoutExpired as exc:raise SaaSError("video_processing_timeout","视频音频或封面提取超时。",504) from exc
                     except subprocess.CalledProcessError as exc:raise SaaSError("video_processing_failed","FFmpeg 无法处理该视频。",422) from exc
-                command=[str(self.whisper_cli),"-m",str(self.whisper_model),"-f",str(whisper_audio),"-l","en","-t",os.environ.get("SHIYUE_WHISPER_THREADS","3"),"-p","2","-ng","-dtw","base.en","-ml","1","-sow","-ojf","-of",str(prefix),"-pp"]
+                command=self._whisper_command(whisper_audio,prefix,progress=True)
                 if progress:progress(60,"Whisper 正在转写视频音频")
                 try:
                     process=subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True,bufsize=1)
@@ -255,12 +264,13 @@ class WorkspaceImportService:
                 except OSError as exc:raise SaaSError("whisper_failed","无法启动视频 Whisper 转写。",422) from exc
                 try:transcript=json.loads(prefix.with_suffix(".json").read_text(encoding="utf-8"))
                 except (OSError,json.JSONDecodeError) as exc:raise SaaSError("whisper_failed","Whisper 没有产生可读视频转写。",422) from exc
-            sentences,segmentation=whisper_book(transcript)
-            if not sentences:raise SaaSError("empty_video_transcript","未从视频中识别到可导入英文内容。",422)
             try:duration=float(self.audio_duration(source))
             except Exception as exc:raise SaaSError("video_probe_failed","无法读取视频时长。",422) from exc
+            sentences,segmentation=whisper_book(transcript,media_duration=duration)
+            if not sentences:raise SaaSError("empty_video_transcript","未从视频中识别到可导入英文内容。",422)
             base=f"/api/media/{asset_id}"
-            book={"id":f"private-{task_id}","title":title,"englishTitle":title,"sourceType":"video","duration":duration,"alignment":"whisper-dtw-normalized","video":base,"videoDefaultQuality":"high","videoVariants":{"high":{"label":"高清","url":base,"status":"ready"},"low":{"label":"流畅","url":f"{base}?variant=low","status":"ready"}},"audio":f"{base}?variant=audio","cover":f"{base}?variant=cover","sentences":sentences,"whisper":{"engine":"whisper.cpp","model":self.whisper_model.name,"timestampMethod":"dtw","transcribedWords":sum(len(sentence.get("words",[])) for sentence in sentences)},"segmentation":segmentation}
+            timing={key:segmentation[key] for key in ("timestampMethod","timingVersion","wordTimingSources")}
+            book={"id":f"private-{task_id}","title":title,"englishTitle":title,"sourceType":"video","duration":duration,"alignment":f"whisper-{timing['timestampMethod']}-normalized","video":base,"videoDefaultQuality":"high","videoVariants":{"high":{"label":"高清","url":base,"status":"ready"},"low":{"label":"流畅","url":f"{base}?variant=low","status":"ready"}},"audio":f"{base}?variant=audio","cover":f"{base}?variant=cover","sentences":sentences,"whisper":{"engine":"whisper.cpp","model":self.whisper_model.name,**timing,"transcribedWords":sum(len(sentence.get("words",[])) for sentence in sentences)},"segmentation":segmentation}
             extractor={"extractor":"ffmpeg+whisper.cpp","model":self.whisper_model.name,"sentences":len(sentences),"duration":duration}
             variants=[{"name":"audio","storagePath":audio_relative,"contentType":"audio/mp4"},{"name":"cover","storagePath":cover_relative,"contentType":"image/jpeg"},{"name":"low","storagePath":low_video_relative,"contentType":"video/mp4"}]
             return book,extractor,variants

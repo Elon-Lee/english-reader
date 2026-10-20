@@ -5,8 +5,8 @@ import re
 import subprocess
 from pathlib import Path
 
-from align_whisper import WORD_RE,whisper_words
-from timed_segmentation import dedupe_caption_words,detect_silences,segment_timed_words
+from align_whisper import WORD_RE,whisper_words,whisper_timing_report
+from timed_segmentation import dedupe_caption_words,detect_silences,normalize_word_timeline,segment_timed_words
 
 TIME_RE=re.compile(r"(\d+):(\d+):(\d+)[,.](\d+)")
 
@@ -77,24 +77,36 @@ def attach_chinese(sentences,entries):
             selected.sort(key=lambda cue:cue["start"]);text=" ".join(cue["text"] for cue in selected);text=re.sub(r"\s+"," ",text).strip();sentence["translation"]=text;sentence["translationSource"]="youtube-caption";matched+=1
     return {"cues":len(entries),"matchedSentences":matched,"coverage":round(matched/max(1,len(sentences)),4)}
 
-def whisper_book(data,silences=None):
-    return segment_timed_words(whisper_words(data),"yt",silences=silences)
+def whisper_book(data,silences=None,media_duration=None):
+    words=whisper_words(data);outside=0;normalization=normalize_word_timeline(words)
+    if media_duration is not None:
+        limit=round(float(media_duration),3);bounded=[]
+        for word in words:
+            if word["start"]>=limit:outside+=1;continue
+            word["end"]=min(word["end"],limit);bounded.append(word)
+        words=bounded
+    sentences,report=segment_timed_words(words,"yt",silences=silences)
+    for key,value in normalization.items():report[key]+=value
+    report["wordsOutsideMedia"]=outside
+    return sentences,{**report,**whisper_timing_report([word for s in sentences for word in s["words"]])}
 
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument("--whisper",type=Path); parser.add_argument("--audio",required=True,type=Path)
     parser.add_argument("--subtitle",type=Path);parser.add_argument("--translation-subtitle",type=Path);parser.add_argument("--preserve-cues",action="store_true"); parser.add_argument("--output",required=True,type=Path); parser.add_argument("--id",required=True); parser.add_argument("--title",required=True)
     parser.add_argument("--english-title",default=""); parser.add_argument("--level",default=""); parser.add_argument("--audio-url",required=True); parser.add_argument("--video-url",required=True); parser.add_argument("--page-base",required=True); parser.add_argument("--subtitle-type",default="whisper");parser.add_argument("--subtitle-source",default="")
     args=parser.parse_args();whisper=json.loads(args.whisper.read_text()) if args.whisper and args.whisper.exists() else None
+    media_seconds=duration(args.audio)
     subtitle=subtitle_entries(args.subtitle) if args.subtitle and args.subtitle.exists() else [];translation=subtitle_entries(args.translation_subtitle,False) if args.translation_subtitle and args.translation_subtitle.exists() else [];silences=detect_silences(args.audio)
     if subtitle:sentences,segmentation=original_cue_book(subtitle) if args.preserve_cues else subtitle_book(subtitle,args.subtitle_source=="automatic",silences)
-    elif whisper:sentences,segmentation=whisper_book(whisper,silences)
+    elif whisper:sentences,segmentation=whisper_book(whisper,silences,media_duration=media_seconds)
     else:raise ValueError("没有可用字幕，也没有 Whisper 转写结果")
-    alignment="whisper-dtw-normalized" if whisper else "subtitle-timing"
+    use_whisper=bool(whisper and not subtitle)
+    alignment=f"whisper-{segmentation['timestampMethod']}-normalized" if use_whisper else "subtitle-timing"
     book={"id":args.id,"title":args.title,"englishTitle":args.english_title,"level":args.level,"sourceType":"video","video":args.video_url,"audio":args.audio_url,
-      "pageBase":args.page_base,"subtitleType":args.subtitle_type,"duration":duration(args.audio),"alignment":alignment,"sentences":sentences}
+      "pageBase":args.page_base,"subtitleType":args.subtitle_type,"duration":media_seconds,"alignment":alignment,"sentences":sentences}
     book["segmentation"]=segmentation
     if translation:book["translationAlignment"]=attach_chinese(sentences,translation)
-    if whisper:book["whisper"]={"engine":"whisper.cpp","model":"base.en","timestampMethod":"dtw","transcribedWords":sum(len(s["words"]) for s in sentences)}
+    if use_whisper:book["whisper"]={"engine":"whisper.cpp","model":"base.en",**{key:segmentation[key] for key in ("timestampMethod","timingVersion","wordTimingSources")},"transcribedWords":sum(len(s["words"]) for s in sentences)}
     else:book["subtitleAlignment"]={"method":"subtitle-cues","cues":len(subtitle),"sentences":len(sentences),"whisperSkipped":True}
     args.output.write_text(json.dumps(book,ensure_ascii=False,indent=2)); print(f"Built video book: {len(sentences)} sentences")
 

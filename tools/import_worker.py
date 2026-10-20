@@ -78,12 +78,17 @@ def offset_whisper(data,seconds):
         offsets=segment.get("offsets",{})
         if "from" in offsets:offsets["from"]+=shift
         if "to" in offsets:offsets["to"]+=shift
+        for token in segment.get("tokens",[]):
+            token_offsets=token.get("offsets",{})
+            for key in ("from","to"):
+                if token_offsets.get(key,-1)>=0:token_offsets[key]+=shift
+            if token.get("t_dtw",-1)>=0:token["t_dtw"]+=round(seconds*100)
     return data
 
 def transcribe_parts(job_id,audios,generated,output,progress_base=63,progress_span=24):
     if len(audios)==1:
         log=ROOT/".local"/f"whisper-{job_id}.log"
-        run([WHISPER,"-m",MODEL,"-f",audios[0],"-l","en","-t",WHISPER_THREADS,"-p","2","-ng","-dtw","base.en","-ml","1","-sow","-ojf","-of",output.with_suffix(""),"-np"],
+        run([WHISPER,"-m",MODEL,"-f",audios[0],"-l","en","-t",WHISPER_THREADS,"-p","1","-ng","-nfa","-dtw","base.en","-ml","1","-sow","-ojf","-of",output.with_suffix(""),"-np"],
             stdout=subprocess.DEVNULL,stderr=log.open("w"));return
     parts=generated/"whisper-parts";parts.mkdir(parents=True,exist_ok=True);combined=None;transcription=[];offset=0.0
     for index,audio in enumerate(audios,1):
@@ -91,7 +96,7 @@ def transcribe_parts(job_id,audios,generated,output,progress_base=63,progress_sp
         prefix=parts/f"part-{index:03d}";part_json=prefix.with_suffix(".json")
         if not part_json.exists():
             log=ROOT/".local"/f"whisper-{job_id}-{index:03d}.log"
-            run([WHISPER,"-m",MODEL,"-f",audio,"-l","en","-t",WHISPER_THREADS,"-p","2","-ng","-dtw","base.en","-ml","1","-sow","-ojf","-of",prefix,"-np"],
+            run([WHISPER,"-m",MODEL,"-f",audio,"-l","en","-t",WHISPER_THREADS,"-p","1","-ng","-nfa","-dtw","base.en","-ml","1","-sow","-ojf","-of",prefix,"-np"],
                 stdout=subprocess.DEVNULL,stderr=log.open("w"))
         data=offset_whisper(json.loads(part_json.read_text()),offset)
         if combined is None:combined={key:value for key,value in data.items() if key!="transcription"}
