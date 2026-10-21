@@ -9,7 +9,7 @@ import secrets
 from datetime import datetime
 from typing import Any
 
-from saas_auth import SaaSError, SaaSService, new_id, utcnow
+from saas_auth import SaaSError, SaaSService, hash_password, new_id, utcnow
 from saas_membership import FEATURES, MembershipService, as_json, parse_time, timestamp
 
 
@@ -78,12 +78,43 @@ class AdminService:
         if not str(reason or "").strip():raise SaaSError("audit_reason_required","封禁或恢复账号需要填写操作原因。",400)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT id FROM users WHERE id=%s FOR UPDATE",(user_id,))
-                if not cursor.fetchone():raise SaaSError("user_not_found","用户不存在。",404)
+                cursor.execute("SELECT id,status FROM users WHERE id=%s FOR UPDATE",(user_id,))
+                user=self.accounts._one(cursor)
+                if not user:raise SaaSError("user_not_found","用户不存在。",404)
+                if user["status"]=="deleted":raise SaaSError("account_deleted","已删除账号不能恢复或暂停。",409)
                 cursor.execute("UPDATE users SET status=%s,updated_at=NOW() WHERE id=%s",(status,user_id))
                 if status=="suspended":cursor.execute("UPDATE user_sessions SET revoked_at=NOW() WHERE user_id=%s AND revoked_at IS NULL",(user_id,))
                 self._audit(cursor,actor_id,"user_status",user_id,reason,{"status":status})
                 return {"userId":user_id,"status":status}
+
+    def verify_user(self, actor_id: str, user_id: str) -> dict[str, Any]:
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT email_verified_at,status FROM users WHERE id=%s FOR UPDATE",(user_id,))
+                user=self.accounts._one(cursor)
+                if not user or user["status"]=="deleted":raise SaaSError("user_not_found","用户不存在。",404)
+                if user["email_verified_at"]:return {"userId":user_id,"emailVerified":True,"idempotent":True}
+                cursor.execute("UPDATE users SET email_verified_at=NOW(),updated_at=NOW() WHERE id=%s",(user_id,))
+                self._audit(cursor,actor_id,"user_email_verified",user_id,"管理员标记邮箱已验证",{})
+                return {"userId":user_id,"emailVerified":True,"idempotent":False}
+
+    def delete_unverified_user(self, actor_id: str, user_id: str) -> dict[str, Any]:
+        if actor_id==user_id:raise SaaSError("invalid_user_delete","不能删除当前管理员账号。",400)
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT email,email_verified_at,status FROM users WHERE id=%s FOR UPDATE",(user_id,))
+                user=self.accounts._one(cursor)
+                if not user or user["status"]=="deleted":raise SaaSError("user_not_found","用户不存在。",404)
+                if user["email_verified_at"]:raise SaaSError("user_already_verified","仅待验证账号可以通过此操作删除。",409)
+                cursor.execute("SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=%s AND r.name='admin'",(user_id,))
+                if cursor.fetchone():raise SaaSError("admin_account_protected","管理员账号不能通过待验证账号入口删除。",409)
+                cursor.execute("UPDATE user_sessions SET revoked_at=NOW() WHERE user_id=%s AND revoked_at IS NULL",(user_id,))
+                cursor.execute("DELETE FROM email_verifications WHERE user_id=%s",(user_id,))
+                cursor.execute("DELETE FROM password_reset_tokens WHERE user_id=%s",(user_id,))
+                cursor.execute("UPDATE devices SET revoked_at=COALESCE(revoked_at,NOW()) WHERE user_id=%s",(user_id,))
+                cursor.execute("UPDATE users SET status='deleted',email=%s,display_name='',password_hash=%s,email_verified_at=NULL,updated_at=NOW() WHERE id=%s",(f"deleted-{user_id}@invalid.local",hash_password(new_id()+new_id()),user_id))
+                self._audit(cursor,actor_id,"unverified_user_deleted",user_id,"删除待验证账号",{"email":user["email"]})
+                return {"userId":user_id,"status":"deleted"}
 
     def revoke_device(self, actor_id: str, user_id: str, device_id: str, reason: str) -> dict[str, Any]:
         if not str(reason or "").strip(): raise SaaSError("audit_reason_required", "撤销设备需要填写操作原因。", 400)
@@ -195,6 +226,22 @@ class AdminService:
                 self._audit(cursor,actor_id,"unused_invitations_deleted",None,"批量删除未使用邀请码",{"batchId":batch_id,"invitationIds":ids,"deleted":deleted})
                 return {"batchId":batch_id,"deleted":int(deleted),"remaining":remaining,"batchDeleted":remaining==0}
 
+    def delete_expired_invitations(self,actor_id:str)->dict[str,Any]:
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""DELETE FROM invitations i WHERE i.expires_at IS NOT NULL AND i.expires_at<=NOW()
+                AND i.used_count=0 AND NOT EXISTS(SELECT 1 FROM invitation_uses iu WHERE iu.invitation_id=i.id)
+                AND NOT EXISTS(SELECT 1 FROM member_invites mi WHERE mi.invitation_id=i.id) RETURNING batch_id""")
+                deleted_rows=self.accounts._many(cursor)
+                batch_ids=list({row["batch_id"] for row in deleted_rows if row.get("batch_id")})
+                deleted=len(deleted_rows)
+                if batch_ids:
+                    cursor.execute("""DELETE FROM invitation_batches b WHERE b.id=ANY(%s)
+                    AND NOT EXISTS(SELECT 1 FROM invitations i WHERE i.batch_id=b.id)""",(batch_ids,))
+                deleted_batches=cursor.rowcount if batch_ids else 0
+                self._audit(cursor,actor_id,"expired_invitations_deleted",None,"一键删除过期未使用邀请码",{"deleted":deleted,"deletedBatches":deleted_batches})
+                return {"deleted":int(deleted),"deletedBatches":int(deleted_batches)}
+
     def adjust_quota(self, actor_id: str, user_id: str, feature: str, quantity: Any, reason: str, idempotency_key: str) -> dict[str, Any]:
         if not str(reason or "").strip():raise SaaSError("audit_reason_required","调整额度需要填写原因。",400)
         try: amount=int(quantity)
@@ -252,7 +299,8 @@ class AdminService:
                 self._audit(cursor,actor_id,"plan_version_created",None,"",{"versionId":version_id,"planSlug":plan_slug})
                 return {"id":version_id,"planSlug":plan_slug,"name":display_name,"rank":rank_value,"periodDays":days,"quotas":normalized,"pricing":pricing}
 
-    def audit(self, limit: int = 100, query: str = "", action: str = "") -> dict[str, Any]:
+    def audit(self, limit: int = 20, query: str = "", action: str = "", offset: int = 0) -> dict[str, Any]:
+        size=max(1,min(100,int(limit)));start=max(0,int(offset))
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 terms, values = [], []
@@ -262,10 +310,15 @@ class AdminService:
                 if str(action or "").strip():
                     terms.append("a.action=%s"); values.append(str(action).strip())
                 where = f"WHERE {' AND '.join(terms)}" if terms else ""
+                cursor.execute(f"SELECT COUNT(*) AS total FROM admin_audit_logs a LEFT JOIN users actor ON actor.id=a.actor_id LEFT JOIN users target ON target.id=a.target_user_id {where}",values)
+                total=int((self.accounts._one(cursor)or{"total":0})["total"])
                 cursor.execute(f"""SELECT a.*,actor.email AS actor_email,target.email AS target_email FROM admin_audit_logs a
                 LEFT JOIN users actor ON actor.id=a.actor_id LEFT JOIN users target ON target.id=a.target_user_id
-                {where} ORDER BY a.created_at DESC LIMIT %s""",(*values,max(1,min(300,int(limit)))))
-                return {"items":[{"id":r["id"],"action":r["action"],"actor":r["actor_email"],"target":r["target_email"],"reason":r["reason"],"payload":as_json(r["payload_json"]),"createdAt":timestamp(r["created_at"])} for r in self.accounts._many(cursor)]}
+                {where} ORDER BY a.created_at DESC LIMIT %s OFFSET %s""",(*values,size,start))
+                rows=self.accounts._many(cursor)
+                cursor.execute("SELECT DISTINCT action FROM admin_audit_logs ORDER BY action")
+                actions=[row["action"] for row in self.accounts._many(cursor)]
+                return {"items":[{"id":r["id"],"action":r["action"],"actor":r["actor_email"],"target":r["target_email"],"reason":r["reason"],"payload":as_json(r["payload_json"]),"createdAt":timestamp(r["created_at"])} for r in rows],"total":total,"limit":size,"offset":start,"actions":actions}
 
     def platform_config(self) -> dict[str, Any]:
         with self.accounts.transaction() as connection:

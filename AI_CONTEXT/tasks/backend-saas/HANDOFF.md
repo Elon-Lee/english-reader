@@ -1,5 +1,13 @@
 # SaaS 后端交接
 
+## 2026-10-21 管理后台写操作
+
+- `POST /api/admin/users/{id}/verify` 管理员标记邮箱已验证并写审计；`DELETE /api/admin/users/{id}` 仅允许删除待验证非管理员账号，匿名化身份、撤销会话、设备、验证和重置令牌并保留关联业务历史。
+- `POST /api/admin/invitations/delete-expired` 只清理过期、未使用且未关联邀请奖励的邀请码；删除后若批次不再有任何邀请码，同事务删除空批次，并在审计与响应中记录删除批次数。
+- `GET /api/admin/audit` 支持 `limit/offset/q/action`，返回 `total/actions`；默认 20 条、上限 100。
+- `POST /api/admin/commerce/products/{id}/delete` 只删除无版本或全为草稿且没有订单、兑换码、订阅、用量或会员变更引用的非免费套餐；无版本套餐列表使用 `commerce_products.id`，避免左连接空值导致请求误传 `null` 并返回 404；写入审计。
+- 验证：初始 phase5 与 commerce 隔离 PostgreSQL 测试共 21 项通过，覆盖 service 与用户/审计 HTTP 路由；本次修复后 phase5 8 项、commerce 13 项通过，覆盖整批过期码清理和空版本套餐删除；未新增 migration，未发布生产。
+
 ## 2026-10-20 生词复习会话
 
 - 新增 `0039_vocabulary_review.sql`、`saas_review.py`：GET `/api/workspace/review`，POST `/api/workspace/review/start`、`/api/workspace/review/answer`。验证邮箱与 CSRF、私人归属/官方当前收藏和发布授权校验、账号/会话锁、稳定幂等键；回执/排程/活动/每日计数同事务，奖励沿用稳定事件键。

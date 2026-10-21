@@ -21,6 +21,8 @@ export default function CatalogModeration({ messageApi }) {
   const [mode, setMode] = useState('review')
   const [saving, setSaving] = useState(false)
   const [filter, setFilter] = useState('all')
+  const [selectedKeys, setSelectedKeys] = useState([])
+  const [batchBusy, setBatchBusy] = useState(false)
   const [form] = Form.useForm()
   const load = async (silent = false) => {
     if (!silent) setLoading(true)
@@ -80,6 +82,28 @@ export default function CatalogModeration({ messageApi }) {
     } catch (e) { messageApi.error(e.message) }
     finally { setSaving(false) }
   }
+  const bulkApprove = () => {
+    const selected = sources.filter(row => selectedKeys.includes(row.sourceBookId))
+    const eligible = selected.filter(row => ['licensed', 'public_domain'].includes(row.rightsStatus))
+    if (!eligible.length) { messageApi.warning('所选内容均未确认版权，不能批量发布'); return }
+    Modal.confirm({ title: `批量审核并发布 ${eligible.length} 项内容？`, content: eligible.length === selected.length ? '请确认所选内容均已核实版权及内容质量。' : `${selected.length - eligible.length} 项因版权尚未确认将跳过。`, okText: '确认发布', cancelText: '取消', onOk: async () => {
+      setBatchBusy(true)
+      let succeeded = 0
+      const failed = []
+      try {
+        for (const row of eligible) {
+          try {
+            await postJson('/api/admin/catalog/books', { ...row, sourceBookId: row.sourceBookId, rightsStatus: row.rightsStatus, publicationStatus: 'published', seriesTitle: row.series || '未分组', tags: (row.tags || []).map(item => item.title) })
+            succeeded += 1
+          } catch (error) { failed.push(`${row.title}：${error.message}`) }
+        }
+        setSelectedKeys([])
+        await load()
+        if (failed.length) messageApi.warning(`已发布 ${succeeded} 项，${failed.length} 项失败：${failed.slice(0, 2).join('；')}`)
+        else messageApi.success(`已审核并发布 ${succeeded} 项内容`)
+      } finally { setBatchBusy(false) }
+    } })
+  }
   const submit = async () => {
     let values
     try { values = await form.validateFields() } catch { return }
@@ -98,9 +122,9 @@ export default function CatalogModeration({ messageApi }) {
     { title: '审核状态', dataIndex: 'publicationStatus', render: value => <Tag color={value === 'published' ? 'success' : value === 'draft' ? 'warning' : 'default'}>{publications.find(item => item.value === value)?.label || value}</Tag> },
     { title: '操作', render: (_, row) => <Space><Button onClick={() => edit(row, 'review')}>审核</Button><Button onClick={() => edit(row, 'edit')}>编辑</Button><Button danger onClick={() => remove(row)}>永久删除</Button></Space> },
   ]
-  return <Card title="内容管理" extra={<Space><Button type="primary" onClick={() => setImportOpen(true)}>内容导入</Button><Select aria-label="审核状态" value={filter} onChange={setFilter} options={[{ value: 'all', label: '全部状态' }, ...publications]} /><Button loading={loading} onClick={() => { load(); loadTasks() }}>刷新</Button></Space>}>
+  return <Card title="内容管理" extra={<Space><Button type="primary" onClick={() => setImportOpen(true)}>内容导入</Button><Select aria-label="审核状态" value={filter} onChange={value => { setFilter(value); setSelectedKeys([]) }} options={[{ value: 'all', label: '全部状态' }, ...publications]} /><Button loading={loading} onClick={() => { load(); loadTasks() }}>刷新</Button></Space>}>
     <Alert type="info" showIcon message="这里只管理官方内容。通过内容导入或本地同步进入的内容须审核发布后才进入书城；我的数据导入的私人读物不在此展示。" style={{ marginBottom: 16 }} />
-    {error ? <Alert type="error" showIcon message={error} action={<Button onClick={() => load()}>重试</Button>} /> : <Table loading={loading} rowKey="sourceBookId" columns={columns} dataSource={sources.filter(row => filter === 'all' || row.publicationStatus === filter)} pagination={{ pageSize: 10 }} locale={{ emptyText: '暂无待审核内容' }} />}
+    {error ? <Alert type="error" showIcon message={error} action={<Button onClick={() => load()}>重试</Button>} /> : <><Space style={{ marginBottom: 12 }}><Button type="primary" disabled={!selectedKeys.length} loading={batchBusy} onClick={bulkApprove}>批量审核并发布 {selectedKeys.length ? `(${selectedKeys.length})` : ''}</Button><Button disabled={!selectedKeys.length || batchBusy} onClick={() => setSelectedKeys([])}>清除选择</Button></Space><Table loading={loading} rowKey="sourceBookId" columns={columns} dataSource={sources.filter(row => filter === 'all' || row.publicationStatus === filter)} rowSelection={{ selectedRowKeys: selectedKeys, onChange: setSelectedKeys, getCheckboxProps: row => ({ disabled: row.publicationStatus === 'published' }) }} pagination={{ pageSize: 10 }} locale={{ emptyText: '暂无待审核内容' }} /></>}
     <ImportModal official open={importOpen} onClose={() => setImportOpen(false)} onCreated={async () => { setTaskPage(1); await loadTasks(); await load() }} messageApi={messageApi} />
     {taskError && <Alert type="error" message={taskError} action={<Button onClick={() => loadTasks()}>重试加载导入任务</Button>} />}
     <Table size="small" rowKey="id" loading={taskLoading} dataSource={tasks} locale={{ emptyText: '暂无官方导入任务' }} pagination={{ current: taskPage, pageSize: 5, total: taskTotal, onChange: setTaskPage, showSizeChanger: false }} columns={[

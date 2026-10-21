@@ -76,6 +76,9 @@ class CommercePostgresTests(unittest.TestCase):
                 cursor.execute("DELETE FROM users WHERE email='commerce-cycle@local.test'")
                 cursor.execute("DELETE FROM invitations WHERE code='COMMERCE-CYCLE-TEST'")
                 cursor.execute("DELETE FROM commerce_product_versions WHERE product_id IN (SELECT id FROM commerce_products WHERE slug='commerce-test-90')")
+                cursor.execute("DELETE FROM commerce_product_versions WHERE product_id IN (SELECT id FROM commerce_products WHERE slug IN ('commerce-delete-draft','commerce-delete-published'))")
+                cursor.execute("DELETE FROM plan_versions WHERE id LIKE 'commerce-commerce-delete-%'")
+                cursor.execute("DELETE FROM commerce_products WHERE slug IN ('commerce-delete-empty','commerce-delete-draft','commerce-delete-published')")
                 cursor.execute("DELETE FROM usage_periods WHERE plan_version_id LIKE 'commerce-commerce-test-90-v%'")
                 cursor.execute("DELETE FROM subscriptions WHERE plan_version_id LIKE 'commerce-commerce-test-90-v%'")
                 cursor.execute("DELETE FROM manual_orders WHERE plan_version_id LIKE 'commerce-commerce-test-90-v%'")
@@ -122,6 +125,28 @@ class CommercePostgresTests(unittest.TestCase):
             with connection.cursor() as cursor:
                 cursor.execute("SELECT quotas_json->>'video_library_capacity',quotas_json->>'storage_bytes',quotas_json->>'devices',active FROM plan_versions WHERE id=%s", (admin["versions"][0]["planVersion"],))
                 self.assertEqual(cursor.fetchone(), ("20", str(10 * 1024**3), "2", True))
+
+    def test_only_unlisted_unused_draft_package_can_be_deleted(self):
+        actor=str(self.admin["id"])
+        empty=self.commerce.create_product(actor,"commerce-delete-empty","advanced",999)
+        listed=next(item for item in self.commerce.admin_catalog()["products"] if item["slug"]=="commerce-delete-empty")
+        self.assertEqual(listed["id"],empty["id"])
+        self.assertEqual(listed["versions"],[])
+        self.assertTrue(self.commerce.delete_unlisted_product(actor,listed["id"])["deleted"])
+
+        draft=self.commerce.create_product(actor,"commerce-delete-draft","advanced",998)
+        version=self.commerce.create_version(actor,draft["id"],{"name":"待配置草稿","shortName":"草稿","tagline":"测试未上架删除","description":"仅供隔离测试。","durationDays":30,"amountCents":100,"featureLimits":{"video_library_capacity":2,"audio_library_capacity":5,"storage_bytes":1},"configuredBenefitIds":[]})
+        deleted=self.commerce.delete_unlisted_product(actor,draft["id"])
+        self.assertTrue(deleted["deleted"])
+        self.assertNotIn(draft["id"],[item["id"] for item in self.commerce.admin_catalog()["products"]])
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:cursor.execute("SELECT COUNT(*) FROM plan_versions WHERE id=%s",("commerce-"+version["id"],));self.assertEqual(cursor.fetchone()[0],0)
+
+        published=self.commerce.create_product(actor,"commerce-delete-published","advanced",997)
+        published_version=self.commerce.create_version(actor,published["id"],{"name":"已发布套餐","shortName":"已发布","tagline":"测试删除保护","description":"仅供隔离测试。","durationDays":30,"amountCents":100,"purchaseUrl":"https://catfk.com/shop/TEST1234","featureLimits":{"video_library_capacity":2,"audio_library_capacity":5,"storage_bytes":1},"configuredBenefitIds":[]})
+        self.commerce.publish_version(actor,published_version["id"])
+        with self.assertRaises(SaaSError) as blocked:self.commerce.delete_unlisted_product(actor,published["id"])
+        self.assertEqual(blocked.exception.code,"product_not_unlisted")
 
     def test_entitlement_catalog_only_exposes_enforced_features(self):
         catalog = self.commerce.entitlement_catalog()

@@ -616,6 +616,15 @@ class Handler(SimpleHTTPRequestHandler):
             except SaaSError as exc:self.reply(exc.payload(),exc.status)
             except SaaSConfigurationError as exc:self.reply({"code":"admin_unavailable","error":str(exc)},503)
             return
+        if SAAS.enabled and route.path.startswith("/api/admin/users/") and route.path.count("/")==4:
+            if not self.require_saas_user() or not self.require_csrf():return
+            if not self._saas_session.get("is_admin"):
+                self.reply({"code":"admin_required","error":"该操作仅允许管理员执行。"},403);return
+            user_id=unquote(route.path[len("/api/admin/users/"):])
+            try:self.reply(ADMIN.delete_unverified_user(str(self._saas_session["id"]),user_id))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"admin_unavailable","error":str(exc)},503)
+            return
         if SAAS.enabled and route.path.startswith("/api/media/"):
             if not self.require_saas_user() or not self.require_csrf():return
             self.reply({"code":"book_deletion_required","error":"请在我的书架或运营后台内容管理中永久删除读物。"},409)
@@ -831,7 +840,7 @@ class Handler(SimpleHTTPRequestHandler):
             if path=="/api/admin/commerce/products":self.reply(COMMERCE.admin_catalog());return
             if path=="/api/admin/commerce/entitlements":self.reply(COMMERCE.entitlement_catalog());return
             if path=="/api/admin/catalog/sources":self.reply(CATALOG.review_sources());return
-            if path=="/api/admin/audit":self.reply(ADMIN.audit((query.get("limit")or[100])[0],(query.get("q")or[""])[0],(query.get("action")or[""])[0]));return
+            if path=="/api/admin/audit":self.reply(ADMIN.audit((query.get("limit")or[20])[0],(query.get("q")or[""])[0],(query.get("action")or[""])[0],(query.get("offset")or[0])[0]));return
             if path=="/api/admin/platform-config":self.reply(ADMIN.platform_config());return
             if path=="/api/admin/exports/summary":self.reply(ADMIN.export_summary());return
             if path=="/api/admin/media-assets":self.reply(MEDIA.user_storage((query.get("ownerId")or[""])[0],(query.get("limit")or[20])[0],(query.get("offset")or[0])[0]));return
@@ -878,6 +887,8 @@ class Handler(SimpleHTTPRequestHandler):
                 result=MEMBERSHIPS.update_subscription(actor_id,str(item.get("subscriptionId","")).strip(),action,item.get("endsAt"),str(item.get("note","")or""),item.get("idempotencyKey"));ADMIN.record_action(actor_id,f"subscription_{action}",None,str(item.get("note","")or""),{"subscriptionId":item.get("subscriptionId")});self.reply(result);return
             if path=="/api/admin/commerce/products":
                 self.reply(COMMERCE.create_product(actor_id,item.get("slug"),item.get("family"),item.get("displayOrder",100)),201);return
+            if path=="/api/admin/invitations/delete-expired":
+                self.reply(ADMIN.delete_expired_invitations(actor_id));return
             if path=="/api/admin/commerce/redemption-batches":
                 self.reply(REDEMPTIONS.generate(actor_id,item.get("productVersionId"),item.get("count"),item.get("note","")),201);return
             if path=="/api/admin/commerce/redemption-codes/revoke":
@@ -896,6 +907,10 @@ class Handler(SimpleHTTPRequestHandler):
                 version_id=unquote(path[len("/api/admin/commerce/versions/"):-len("/purchase-link")].rstrip("/"));self.reply(COMMERCE.update_draft_purchase_url(actor_id,version_id,item.get("purchaseUrl")));return
             if path.startswith("/api/admin/users/") and path.endswith("/status"):
                 user_id=unquote(path[len("/api/admin/users/"):-len("/status")].rstrip("/"));self.reply(ADMIN.set_user_status(actor_id,user_id,str(item.get("status","")).strip(),str(item.get("reason","")or"")));return
+            if path.startswith("/api/admin/users/") and path.endswith("/verify"):
+                user_id=unquote(path[len("/api/admin/users/"):-len("/verify")].rstrip("/"));self.reply(ADMIN.verify_user(actor_id,user_id));return
+            if path.startswith("/api/admin/commerce/products/") and path.endswith("/delete"):
+                product_id=unquote(path[len("/api/admin/commerce/products/"):-len("/delete")].rstrip("/"));self.reply(COMMERCE.delete_unlisted_product(actor_id,product_id));return
             self.reply({"error":"not found"},404)
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
         except SaaSConfigurationError as exc:self.reply({"code":"admin_unavailable","error":str(exc)},503)

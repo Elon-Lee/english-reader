@@ -76,6 +76,55 @@ class PhaseFivePostgresTests(unittest.TestCase):
         with self.assertRaises(SaaSError) as blocked:self.admin_service.delete_unused_invitations(actor,batch_id,[used_id])
         self.assertEqual(blocked.exception.code,"invitation_in_use")
 
+    def test_expired_invitation_cleanup_and_user_verification_actions(self):
+        actor=str(self.admin["id"]);past=utcnow()-timedelta(days=2)
+        expired=self.admin_service.create_invitations(actor,"",1,2,None,"expired cleanup test","test")
+        used_code=expired["invitations"][0]["code"]
+        self.accounts.register("expired-code-user@local.test","expired code user password",used_code)
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:cursor.execute("UPDATE invitations SET expires_at=%s WHERE batch_id=%s",(past,expired["batch"]["id"]))
+        result=self.admin_service.delete_expired_invitations(actor)
+        self.assertEqual(result["deleted"],1)
+        self.assertEqual(result["deletedBatches"],0)
+        detail=self.admin_service.invitation_batch_detail(expired["batch"]["id"])
+        self.assertEqual(len(detail["invitations"]),1)
+        self.assertEqual(detail["invitations"][0]["code"],used_code)
+
+        all_expired=self.admin_service.create_invitations(actor,"",1,2,None,"all expired cleanup test","test")
+        all_expired_batch=all_expired["batch"]["id"]
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:cursor.execute("UPDATE invitations SET expires_at=%s WHERE batch_id=%s",(past,all_expired_batch))
+        result=self.admin_service.delete_expired_invitations(actor)
+        self.assertEqual(result["deleted"],2)
+        self.assertEqual(result["deletedBatches"],1)
+        self.assertNotIn(all_expired_batch,[row["id"] for row in self.admin_service.invitation_batches()["batches"]])
+
+        pending=self.accounts.register("pending-admin-test@local.test","pending admin test password",self.accounts.create_invitation("PENDING-ADMIN-TEST",created_by=actor)["code"])["user"]
+        self.assertFalse(pending["emailVerified"])
+        verified=self.admin_service.verify_user(actor,str(pending["id"]))
+        self.assertTrue(verified["emailVerified"])
+        self.assertTrue(self.admin_service.users("pending-admin-test@local.test")["users"][0]["emailVerified"])
+        with self.assertRaises(SaaSError) as verified_delete:self.admin_service.delete_unverified_user(actor,str(pending["id"]))
+        self.assertEqual(verified_delete.exception.code,"user_already_verified")
+
+        pending_delete=self.accounts.register("pending-delete-test@local.test","pending delete test password",self.accounts.create_invitation("PENDING-DELETE-TEST",created_by=actor)["code"])["user"]
+        result=self.admin_service.delete_unverified_user(actor,str(pending_delete["id"]))
+        self.assertEqual(result["status"],"deleted")
+        anonymized=self.admin_service.users(pending_delete["id"])["users"][0]
+        self.assertEqual(anonymized["status"],"deleted")
+        self.assertTrue(anonymized["email"].endswith("@invalid.local"))
+
+    def test_audit_search_filter_and_pagination(self):
+        actor=str(self.admin["id"])
+        self.admin_service.create_invitations(actor,"AUDIT-SEARCH-A",1,1,None,"audit alpha","test")
+        self.admin_service.create_invitations(actor,"AUDIT-SEARCH-B",1,1,None,"audit beta","test")
+        page=self.admin_service.audit(limit=1,offset=0,query="audit")
+        next_page=self.admin_service.audit(limit=1,offset=1,query="audit")
+        self.assertEqual(page["total"],2)
+        self.assertEqual(len(page["items"]),1)
+        self.assertEqual(len(next_page["items"]),1)
+        self.assertNotEqual(page["items"][0]["id"],next_page["items"][0]["id"])
+
     def test_adjustments_allowances_status_and_audit(self):
         actor,user_id=str(self.admin["id"]),str(self.user["id"])
         granted=self.admin_service.adjust_quota(actor,user_id,"ai_context_generations",5,"support grant","admin-adjust-1")
@@ -141,6 +190,14 @@ class PhaseFivePostgresTests(unittest.TestCase):
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection);connection.request("POST","/api/auth/login",json.dumps({"email":"admin@local.test","password":"phase5 admin password"}),{"Content-Type":"application/json","X-Device-Id":"phase5-http-admin-1"});response=connection.getresponse();self.assertEqual(response.status,200);headers=response.getheaders();response.read();connection.close();connections.remove(connection)
             values=[value.split(";",1)[0] for name,value in headers if name.lower()=="set-cookie"];cookies="; ".join(values);csrf=next(value.split("=",1)[1] for value in values if value.startswith("shiyue_csrf="))
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection);connection.request("POST","/api/admin/invitations",json.dumps({"code":"HTTP-CHANNEL","maxUses":2,"channel":"test","note":"http"}),{"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf});response=connection.getresponse();created=json.loads(response.read());self.assertEqual(response.status,201);self.assertEqual(created["channel"],"test");connection.close();connections.remove(connection)
+            pending=self.accounts.register("http-pending-verify@local.test","pending verify password",self.accounts.create_invitation("HTTP-PENDING-VERIFY",created_by=str(self.admin["id"]))["code"])["user"]
+            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection);connection.request("POST",f"/api/admin/users/{pending['id']}/verify",b"{}",{"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf});response=connection.getresponse();verified=json.loads(response.read());self.assertEqual(response.status,200);self.assertTrue(verified["emailVerified"]);connection.close();connections.remove(connection)
+            pending_delete=self.accounts.register("http-pending-delete@local.test","pending delete password",self.accounts.create_invitation("HTTP-PENDING-DELETE",created_by=str(self.admin["id"]))["code"])["user"]
+            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection);connection.request("DELETE",f"/api/admin/users/{pending_delete['id']}",headers={"Cookie":cookies,"X-CSRF-Token":csrf});response=connection.getresponse();deleted=json.loads(response.read());self.assertEqual(response.status,200);self.assertEqual(deleted["status"],"deleted");connection.close();connections.remove(connection)
+            audit=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(audit);audit.request("GET","/api/admin/audit?limit=1&offset=0&q=http",headers={"Cookie":cookies});response=audit.getresponse();audit_data=json.loads(response.read());self.assertEqual(response.status,200);self.assertGreaterEqual(audit_data["total"],1);self.assertLessEqual(len(audit_data["items"]),1);audit.close();connections.remove(audit)
+            product_connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(product_connection);product_connection.request("POST","/api/admin/commerce/products",json.dumps({"slug":"http-delete-draft","family":"advanced"}),{"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf});response=product_connection.getresponse();product=json.loads(response.read());self.assertEqual(response.status,201)
+            product_connection.request("POST",f"/api/admin/commerce/products/{product['id']}/versions",json.dumps({"name":"HTTP 草稿","shortName":"HTTP 草稿","tagline":"路由验收","description":"隔离测试草稿。","durationDays":30,"originalAmountCents":100,"discountPercent":100,"featureLimits":{"video_library_capacity":2,"audio_library_capacity":5,"storage_bytes":1},"configuredBenefitIds":[]}),{"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf});response=product_connection.getresponse();self.assertEqual(response.status,201);response.read()
+            product_connection.request("POST",f"/api/admin/commerce/products/{product['id']}/delete",b"{}",{"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf});response=product_connection.getresponse();deleted_product=json.loads(response.read());self.assertEqual(response.status,200);self.assertTrue(deleted_product["deleted"]);product_connection.close();connections.remove(product_connection)
         finally:
             for connection in connections:connection.close()
             process.terminate()

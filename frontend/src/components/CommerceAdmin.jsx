@@ -23,9 +23,9 @@ function FeaturePicker({ items, value = {}, onChange }) {
   })}</div>
 }
 
-export default function CommerceAdmin({ products = [], entitlements = { builtIn: [], configured: [] }, onCreateProduct, onCreateVersion, onPublishVersion, onSetProductActive, onCreateConfiguredBenefit, onUpdateConfiguredBenefit }) {
+export default function CommerceAdmin({ products = [], entitlements = { builtIn: [], configured: [] }, onCreateProduct, onCreateVersion, onPublishVersion, onSetProductActive, onDeleteProduct, onCreateConfiguredBenefit, onUpdateConfiguredBenefit }) {
   const [query, setQuery] = useState('')
-  const [status, setStatus] = useState('all')
+  const [status, setStatus] = useState('active')
   const [productOpen, setProductOpen] = useState(false)
   const [versionProduct, setVersionProduct] = useState(null)
   const [historyProduct, setHistoryProduct] = useState(null)
@@ -43,7 +43,8 @@ export default function CommerceAdmin({ products = [], entitlements = { builtIn:
     const published = product.versions?.find(item => item.status === 'published')
     if (product.family === 'free' && product.active && published) return 'free'
     if (!product.active) return 'stopped'
-    if (!published || (published.amountCents > 0 && !published.purchaseUrl)) return 'draft'
+    if (!published) return !product.versions?.length || product.versions.every(item => item.status === 'draft') ? 'draft' : 'stopped'
+    if (published.amountCents > 0 && !published.purchaseUrl) return 'draft'
     return 'active'
   }
   const filtered = useMemo(() => products.filter(product => {
@@ -74,12 +75,14 @@ export default function CommerceAdmin({ products = [], entitlements = { builtIn:
     { key: 'history', label: '历史套餐' },
     { type: 'divider' },
     { key: 'status', danger: product.active, label: product.active ? '停止新售' : '恢复销售' },
+    ...((!product.versions?.length || product.versions.every(item => item.status === 'draft')) && product.family !== 'free' ? [{ type: 'divider' }, { key: 'delete', danger: true, label: '删除未上架套餐' }] : []),
   ]
   const act = (product, key) => {
     if (key === 'detail') setDetailProduct(product)
     if (key === 'new-version') openVersion(product)
     if (key === 'history') setHistoryProduct(product)
     if (key === 'status') Modal.confirm({ title: product.active ? '确认停止新售？' : '确认恢复销售？', content: product.active ? '停售仅影响新订单，历史订单和已有会员权益保持不变。' : '恢复后，当前已发布版本会重新出现在公开套餐页。', okText: product.active ? '停止新售' : '恢复销售', cancelText: '取消', okButtonProps: { danger: product.active }, onOk: () => onSetProductActive?.(product.id, !product.active) })
+    if (key === 'delete') Modal.confirm({ title: `删除未上架套餐 ${product.slug}？`, content: '仅全部版本均为草稿的套餐可删除。若已有订单、兑换码或订阅引用，服务端会拒绝删除。', okText: '删除套餐', cancelText: '取消', okButtonProps: { danger: true }, onOk: () => onDeleteProduct?.(product.id) })
   }
   const columns = [
     { title: '套餐', key: 'name', render: (_, product) => { const current = product.versions?.find(item => item.status === 'published'); return <Space direction="vertical" size={1}><Text strong>{current?.name || product.slug}</Text><Text type="secondary">{product.slug} · {product.family}</Text></Space> } },

@@ -163,7 +163,7 @@ class CommerceService:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    """SELECT cp.slug,cp.family_slug,cp.display_order,cp.active AS product_active,cpv.*,pv.quotas_json AS limits_json
+                    """SELECT cp.id AS commerce_product_id,cp.slug,cp.family_slug,cp.display_order,cp.active AS product_active,cpv.*,pv.quotas_json AS limits_json
                     FROM commerce_products cp LEFT JOIN commerce_product_versions cpv ON cpv.product_id=cp.id
                     LEFT JOIN plan_versions pv ON pv.id=cpv.plan_version_id
                     ORDER BY cp.display_order,cpv.version_number DESC"""
@@ -172,8 +172,8 @@ class CommerceService:
         products: dict[str, dict[str, Any]] = {}
         for row in rows:
             item = products.setdefault(
-                row["product_id"],
-                {"id": row["product_id"], "slug": row["slug"], "family": row["family_slug"], "displayOrder": int(row["display_order"]), "active": bool(row["product_active"]), "versions": []},
+                row["commerce_product_id"],
+                {"id": row["commerce_product_id"], "slug": row["slug"], "family": row["family_slug"], "displayOrder": int(row["display_order"]), "active": bool(row["product_active"]), "versions": []},
             )
             if row.get("id"):
                 item["versions"].append(self._version(row, True))
@@ -373,6 +373,36 @@ class CommerceService:
                     raise SaaSError("product_not_found", "商品不存在。", 404)
                 self._audit(cursor, actor_id, "commerce_product_status_updated", {"productId": product_id, "active": bool(active)})
         return {"id": product_id, "slug": row["slug"], "active": bool(active)}
+
+    def delete_unlisted_product(self, actor_id: str, product_id: str) -> dict[str, Any]:
+        product_id=str(product_id or "").strip()
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT id,slug,family_slug FROM commerce_products WHERE id=%s FOR UPDATE",(product_id,))
+                product=self.accounts._one(cursor)
+                if not product:raise SaaSError("product_not_found","套餐不存在。",404)
+                if product["family_slug"]=="free":raise SaaSError("product_not_deletable","免费套餐不能删除。",409)
+                cursor.execute("SELECT id,plan_version_id,status FROM commerce_product_versions WHERE product_id=%s FOR UPDATE",(product_id,))
+                versions=self.accounts._many(cursor)
+                if any(row["status"]!="draft" for row in versions):
+                    raise SaaSError("product_not_unlisted","只有全部版本均为草稿的未上架套餐可以删除。",409)
+                version_ids=[row["id"] for row in versions];plan_ids=[row["plan_version_id"] for row in versions]
+                cursor.execute("""SELECT EXISTS(SELECT 1 FROM payment_orders WHERE product_version_id=ANY(%s)) AS has_orders,
+                    EXISTS(SELECT 1 FROM commerce_redemption_codes WHERE product_version_id=ANY(%s)) AS has_codes,
+                    EXISTS(SELECT 1 FROM commerce_redemption_batches WHERE product_version_id=ANY(%s)) AS has_batches,
+                    EXISTS(SELECT 1 FROM subscriptions WHERE plan_version_id=ANY(%s)) AS has_subscriptions,
+                    EXISTS(SELECT 1 FROM manual_orders WHERE plan_version_id=ANY(%s)) AS has_manual_orders,
+                    EXISTS(SELECT 1 FROM usage_periods WHERE plan_version_id=ANY(%s)) AS has_usage,
+                    EXISTS(SELECT 1 FROM membership_change_requests WHERE current_plan_version_id=ANY(%s) OR requested_plan_version_id=ANY(%s)) AS has_change_requests,
+                    EXISTS(SELECT 1 FROM membership_change_orders WHERE from_plan_version_id=ANY(%s) OR to_plan_version_id=ANY(%s)) AS has_change_orders,
+                    EXISTS(SELECT 1 FROM external_subscriptions WHERE plan_version_id=ANY(%s)) AS has_external_subscriptions""",(version_ids,version_ids,version_ids,plan_ids,plan_ids,plan_ids,plan_ids,plan_ids,plan_ids,plan_ids,plan_ids))
+                refs=self.accounts._one(cursor) or {}
+                if any(refs.values()):raise SaaSError("product_in_use","套餐已有订单、兑换码或订阅记录，不能删除。",409)
+                cursor.execute("DELETE FROM commerce_product_versions WHERE product_id=%s",(product_id,))
+                cursor.execute("DELETE FROM plan_versions WHERE id=ANY(%s)",(plan_ids,))
+                cursor.execute("DELETE FROM commerce_products WHERE id=%s",(product_id,))
+                self._audit(cursor,actor_id,"commerce_unlisted_product_deleted",{"productId":product_id,"slug":product["slug"],"versionIds":version_ids})
+                return {"id":product_id,"slug":product["slug"],"deleted":True}
 
     def create_configured_benefit(self, actor_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         code = str(payload.get("code", "") or "").strip().lower()
