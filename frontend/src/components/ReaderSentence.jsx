@@ -18,6 +18,6 @@ export default memo(function ReaderSentence({sentence,index,active,spoken,select
       <Button className="reader-sentence-action" onClick={e=>{e.stopPropagation();actions.current.analyze(s,e.currentTarget)}}>语法</Button>
       {showTranslation&&<Button className={'reader-sentence-action reader-translation-action '+(expanded?'is-expanded':'')} aria-expanded={expanded} onClick={e=>{e.stopPropagation();actions.current.translate(s)}}>{expanded?'收起翻译':'翻译'}</Button>}
     </div>
-    {expanded&&<div className="reader-sentence-translation" onClick={e=>e.stopPropagation()}>{s.translation||'原始中文字幕未提供该段译文'}</div>}
+    {expanded&&showTranslation&&<div className="reader-sentence-translation" onClick={e=>e.stopPropagation()}>{s.translation}</div>}
   </article>
 })

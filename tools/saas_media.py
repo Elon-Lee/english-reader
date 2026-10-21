@@ -41,6 +41,24 @@ class MediaService:
             for block in iter(lambda:source.read(1024*1024),b""):hasher.update(block)
         return hasher.hexdigest()
 
+    def attach_reader_captions(self,cursor:Any,content_book_id:str,sentences:list,catalog_book_id:str|None=None)->None:
+        """Called only after reader authorization; enrich the response, never stored books."""
+        missing=[sentence for sentence in sentences if not str(sentence.get("translation") or "").strip() and sentence.get("start") is not None and sentence.get("end") is not None]
+        if not missing:return
+        cursor.execute("""SELECT v.storage_path FROM asset_variants v JOIN media_assets a ON a.id=v.asset_id
+        WHERE a.status='active' AND (a.content_book_id=%s OR a.catalog_book_id=%s)
+        AND v.deleted_at IS NULL AND v.variant_name='subtitles-zh-CN' ORDER BY a.created_at""",(content_book_id,catalog_book_id))
+        from build_video_book import attach_chinese,subtitle_entries
+        for row in self.accounts._many(cursor):
+            try:
+                _,path=self._safe_path(row["storage_path"])
+                entries=subtitle_entries(path,require_english=False)
+            except (OSError,ValueError,SaaSError):continue
+            if entries:
+                attach_chinese(missing,entries)
+                missing=[sentence for sentence in missing if not sentence.get("translation")]
+                if not missing:break
+
     def _file_record(self, relative: Any, content_type: str = "") -> dict[str, Any]:
         normalized,path=self._safe_path(relative)
         if not path.is_file():raise SaaSError("media_not_found","媒体文件不存在。",404)

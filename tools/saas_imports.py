@@ -21,7 +21,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from saas_auth import ROOT, SaaSError, SaaSService, new_id, utcnow
-from build_video_book import duration as media_duration, whisper_book
+from build_video_book import duration as media_duration, whisper_book, attach_chinese, subtitle_entries
 from align_whisper import whisper_words,whisper_timing_report
 from manual_caption_alignment import MODEL_FILE,caption_cues,fallback_windows
 from timed_segmentation import segment_timed_words
@@ -543,6 +543,13 @@ class WorkspaceImportService:
                     native=next((v for v in captions if v["name"]=="subtitles-en"),None)
                     if native:manual_caption=self.media._safe_path(native["storagePath"])[1]
                 data,extractor,variants=self._video_book(source,task_id,title,asset_id,lambda value,step:self._update_progress(task_id,value,step),manual_caption=manual_caption);data["sourceType"]="youtube";data["youtube"]=youtube;source_type="youtube";book_id=data["id"]
+                chinese=next((variant for variant in captions if variant["name"]=="subtitles-zh-CN"),None)
+                if chinese:
+                    try:
+                        entries=subtitle_entries(self.media._safe_path(chinese["storagePath"])[1],require_english=False)
+                        data["chineseSubtitleAlignment"]=attach_chinese(data["sentences"],entries)
+                    except (OSError,ValueError):
+                        data["chineseSubtitleAlignment"]={"cues":0,"matchedSentences":0,"status":"unreadable"}
                 variants.extend(captions);pending_variant_paths=[variant["storagePath"] for variant in variants]
                 try:self.media.add_variants(user_id,asset_id,variants)
                 except Exception:

@@ -105,6 +105,7 @@ export default function CatalogModeration({ messageApi }) {
     {taskError && <Alert type="error" message={taskError} action={<Button onClick={() => loadTasks()}>重试加载导入任务</Button>} />}
     <Table size="small" rowKey="id" loading={taskLoading} dataSource={tasks} locale={{ emptyText: '暂无官方导入任务' }} pagination={{ current: taskPage, pageSize: 5, total: taskTotal, onChange: setTaskPage, showSizeChanger: false }} columns={[
       { title: '官方导入任务', render: (_, task) => task.title || task.originalFilename || task.sourceUrl },
+      { title: '导入时间', dataIndex: 'createdAt', width: 180, render: value => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—' },
       { title: '进度', render: (_, task) => <><Progress percent={task.progress} size="small" status={task.status === 'failed' ? 'exception' : task.status === 'complete' ? 'success' : 'normal'} />{task.error || task.step}</> },
       { title: '操作', render: (_, task) => task.status === 'failed' ? <Button loading={taskBusy === task.id} onClick={() => { void taskAction(task, 'retry').catch(() => {}) }}>重试</Button> : ['queued', 'uploading', 'running', 'processing', 'awaiting_processor'].includes(task.status) ? <Button loading={taskBusy === task.id} onClick={() => Modal.confirm({ title: '取消该导入任务？', okText: '确认取消', cancelText: '继续处理', onOk: () => taskAction(task, 'cancel') })}>取消</Button> : null },
     ]} />

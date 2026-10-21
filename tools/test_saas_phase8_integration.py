@@ -47,7 +47,7 @@ if '--dump-single-json' in args:
  print(json.dumps({'id':'fake123','title':'Private YouTube','channel':'Test Channel','duration':2,'subtitles':{'en':[{'ext':'vtt','url':'https://example.test/caption?lang=en'}]},'automatic_captions':{'zh-CN':[{'ext':'vtt','url':'https://example.test/caption?lang=zh-CN'}]}}));raise SystemExit
 template=Path(args[args.index('-o')+1])
 if '--skip-download' in args:
- target=Path(str(template).replace('%(ext)s','srt'));target.parent.mkdir(parents=True,exist_ok=True);target.write_text('1\\n00:00:00,000 --> 00:00:01,000\\nCaption text.\\n');raise SystemExit
+ target=Path(str(template).replace('%(ext)s','srt'));target.parent.mkdir(parents=True,exist_ok=True);text='这是中文字幕。' if 'chinese' in str(template) else 'Caption text.';target.write_text('1\\n00:00:00,000 --> 00:00:01,000\\n'+text+'\\n');raise SystemExit
 target=Path(str(template).replace('%(ext)s','mp4'));target.parent.mkdir(parents=True,exist_ok=True)
 subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=320x180:d=2','-f','lavfi','-i','sine=frequency=500:duration=2','-shortest','-c:v','mpeg4','-c:a','aac',str(target)],check=True)
 """,encoding="utf-8");cls.fake_ytdlp.chmod(0o755)
@@ -239,6 +239,21 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
                 cursor.execute("SELECT data_json FROM content_books WHERE id=%s",(completed["task"]["outputBookId"],));data=(self.accounts._one(cursor)or{})["data_json"]
         data=data if isinstance(data,dict) else json.loads(data);self.assertEqual(data["youtube"]["youtubeId"],"fake123");self.assertTrue(data["youtube"]["youtubeSubtitleDownloaded"]);self.assertTrue(data["youtube"]["youtubeChineseSubtitleDownloaded"])
         self.assertEqual(data["subtitleAlignment"]["reason"],"aligner_unavailable")
+        self.assertEqual(data["sentences"][0]["translation"],"这是中文字幕。")
+        self.assertEqual(reader["sentences"][0]["translation"],"这是中文字幕。")
+        # Historical books are enriched on read without a write-back or re-import.
+        for sentence in data["sentences"]:sentence.pop("translation",None)
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:cursor.execute("UPDATE content_books SET data_json=%s::jsonb WHERE id=%s",(json.dumps(data),completed["task"]["outputBookId"]))
+        hydrated=self.workspace.reader(owner,completed["task"]["outputBookId"])["book"]
+        self.assertEqual(hydrated["sentences"][0]["translation"],"这是中文字幕。")
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT data_json FROM content_books WHERE id=%s",(completed["task"]["outputBookId"],));stored=self.accounts._one(cursor)["data_json"]
+        if isinstance(stored,str):stored=json.loads(stored)
+        self.assertFalse(any(s.get("translation") for s in stored["sentences"]))
+        self.media.stream(owner,asset_id,"subtitles-zh-CN")["path"].unlink()
+        self.assertFalse(any(s.get("translation") for s in self.workspace.reader(owner,completed["task"]["outputBookId"])["book"]["sentences"]))
         usage=self.memberships.usage(owner);youtube=next(row for row in usage["usage"] if row["feature"]=="youtube_imports");video=next(row for row in usage["usage"] if row["feature"]=="video_imports")
         self.assertEqual(youtube["used"],0);self.assertEqual(youtube["reserved"],0);self.assertEqual(video["used"],0)
 
@@ -328,6 +343,10 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         summary=next(row for row in self.media.user_storage()["users"] if row["id"]==admin)
         self.assertEqual(summary["totalBytes"],sum(path.stat().st_size for path in paths))
         published=catalog.review(admin,book_id,"licensed","published")["book"]
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE content_books SET data_json=jsonb_set(data_json,'{sentences}',(SELECT jsonb_agg(value-'translation') FROM jsonb_array_elements(data_json->'sentences'))) WHERE id=%s",(book_id,))
+        self.assertEqual(catalog.reader(owner,published["id"],trial=True)["book"]["sentences"][0]["translation"],"这是中文字幕。")
         expected=f"/api/media/{asset_id}?variant=cover&trialBook={published['id']}"
         self.assertEqual(catalog.detail(published["id"],owner)["book"]["coverUrl"],expected)
         self.assertTrue(self.media.trial_stream(owner,asset_id,published["id"],"cover")["path"].is_file())
