@@ -92,5 +92,24 @@ class ContentUploadPostgresTests(unittest.TestCase):
             apply_bundle(phase3.TEST_URL,bundle)
             self.assertEqual(self.catalog.catalog()["books"],[])
 
+    def test_upload_reuses_destination_series_and_tag_ids_by_slug(self):
+        book_id=self.publish(73)
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);bundle,_=self.export(root)
+            payload=json.loads(gzip.decompress(bundle.read_bytes()))
+            tables=payload["tables"]
+            series=tables["catalog_series"][0]
+            old_series_id=series["id"];series["id"]="independent-source-series-id"
+            for book in tables["catalog_books"]:
+                if book.get("series_id")==old_series_id:book["series_id"]=series["id"]
+            tag_ids={tag["id"]:f"independent-source-{index}" for index,tag in enumerate(tables["catalog_tags"])}
+            for tag in tables["catalog_tags"]:tag["id"]=tag_ids[tag["id"]]
+            for relation in tables["catalog_book_tags"]:relation["tag_id"]=tag_ids[relation["tag_id"]]
+            bundle.write_bytes(gzip.compress(json.dumps(payload).encode()))
+            self.assertEqual(apply_bundle(phase3.TEST_URL,bundle)["pendingReviewBooks"],1)
+            detail=self.catalog.detail(book_id)["book"]
+            self.assertEqual(detail["series"]["title"],"Test Series")
+            self.assertEqual({item["title"] for item in detail["tags"]},{"测试","阅读"})
+
 
 if __name__=="__main__":unittest.main()

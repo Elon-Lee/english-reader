@@ -13,6 +13,7 @@ export default function PlatformOperationsPage({ messageApi }) {
   const [deploy, setDeploy] = useState({ targets: [], jobs: [], status: {} })
   const [selectedTarget, setSelectedTarget] = useState(null)
   const [releases, setReleases] = useState([])
+  const [releaseLookupTarget, setReleaseLookupTarget] = useState(null)
   const [busy, setBusy] = useState(false)
   const [deletingInvalid, setDeletingInvalid] = useState(false)
   const [nodeOpen, setNodeOpen] = useState(false)
@@ -31,10 +32,17 @@ export default function PlatformOperationsPage({ messageApi }) {
     const targetId = selectedTarget || deploymentData?.targets?.[0]?.id || null
     if (!selectedTarget && targetId) setSelectedTarget(targetId)
     if (targetId) {
-      const code = await getJson(`/api/deployment/releases?targetId=${targetId}`, { releases: [] })
-      setReleases(code.releases || [])
+      try {
+        const code = await getJson(`/api/deployment/releases?targetId=${targetId}`)
+        setReleases(code.releases || [])
+        setReleaseLookupTarget(targetId)
+      } catch {
+        setReleases([])
+        setReleaseLookupTarget(null)
+      }
     } else {
       setReleases([])
+      setReleaseLookupTarget(null)
     }
     } finally {
       if (initial) setInitialLoading(false)
@@ -49,12 +57,16 @@ export default function PlatformOperationsPage({ messageApi }) {
     return () => clearInterval(timer)
   }, [deploy.jobs])
   useEffect(() => {
-    if (!selectedTarget) { setReleases([]); return }
-    getJson(`/api/deployment/releases?targetId=${selectedTarget}`, { releases: [] })
-      .then(code => setReleases(code.releases || []))
+    if (!selectedTarget) { setReleases([]); setReleaseLookupTarget(null); return }
+    getJson(`/api/deployment/releases?targetId=${selectedTarget}`)
+      .then(code => { setReleases(code.releases || []); setReleaseLookupTarget(selectedTarget) })
+      .catch(() => { setReleases([]); setReleaseLookupTarget(null) })
   }, [selectedTarget])
 
-  const target = useMemo(() => deploy.targets.find(item => item.id === selectedTarget), [deploy.targets, selectedTarget])
+  const storedTarget = useMemo(() => deploy.targets.find(item => item.id === selectedTarget), [deploy.targets, selectedTarget])
+  const deploymentStateKnown = typeof storedTarget?.deployedBefore === 'boolean' || releaseLookupTarget === selectedTarget
+  const deployedBefore = Boolean(storedTarget?.deployedBefore || (releaseLookupTarget === selectedTarget && releases.some(item => ['current', 'available'].includes(item.status))))
+  const target = storedTarget ? { ...storedTarget, deployedBefore } : null
   const refresh = async () => { setBusy(true); try { await loadPlatform(); messageApi.success('运营数据已刷新') } finally { setBusy(false) } }
 
   const deleteInvalidJobs = () => Modal.confirm({
@@ -83,8 +95,15 @@ export default function PlatformOperationsPage({ messageApi }) {
   const saveAiConfig = async values => { try { const result = await postJson('/api/admin/platform-config', values); setPlatformConfig(result); aiForm.setFieldValue('token', ''); messageApi.success('AI 服务配置已保存并立即生效') } catch (error) { messageApi.error(error.message); throw error } }
   const startJob = (action, payload = {}, danger = false) => {
     if (!selectedTarget) { messageApi.warning('请先选择部署节点'); return }
-    const labels = { test: '连接测试', sync: '上传待审核内容', deploy: '首次部署', upgrade: '程序升级', cleanup: '远程清理' }
-    Modal.confirm({ title: `确认启动${labels[action] || action}？`, content: action === 'sync' ? `目标节点：${target?.name || selectedTarget}。上传的新增或变更内容将设为未审核，请登录线上运营后台审核后发布到首页书城。` : `目标节点：${target?.name || selectedTarget}。发布来源是当前本机工作区；升级会备份远程数据库、执行并核验 SQL migrations 与基础数据，再验收候选版本后切换线上服务。`, okText: '启动任务', okButtonProps: { danger }, onOk: async () => { const endpoint = action === 'upgrade' ? 'saas-upgrade' : action; const result = await postJson(`/api/deployment/${endpoint}`, { targetId: selectedTarget, ...payload }); messageApi.success(`任务 #${result.jobId} 已启动`); await loadPlatform() } })
+    if (action === 'deploy' && !deploymentStateKnown) { messageApi.warning('尚未读取到节点部署状态，请刷新后重试'); return }
+    const reinstall = action === 'deploy' && deployedBefore
+    const labels = { test: '连接测试', sync: '上传官方内容', deploy: reinstall ? '重新部署' : '首次部署', upgrade: '程序升级', cleanup: '远程清理' }
+    const content = action === 'sync'
+      ? `目标节点：${target?.name || selectedTarget}。仅上传本地新增或变更的官方内容；新增或变更内容会设为未审核，需在线上运营后台审核后才会发布。`
+      : reinstall
+        ? `目标节点：${target?.name || selectedTarget}。将先备份远程数据库到节点目录之外，再卸载并完整安装。重装会删除远端原有用户数据，并以本机数据库快照重新初始化；如需保留远端数据，请使用“程序升级”。`
+        : `目标节点：${target?.name || selectedTarget}。发布来源是当前本机工作区；首次部署会安装 SaaS 服务并初始化线上数据。`
+    Modal.confirm({ title: `确认启动${labels[action] || action}？`, content, okText: reinstall ? '备份并重新部署' : '启动任务', okButtonProps: { danger: danger || reinstall }, onOk: async () => { const endpoint = action === 'upgrade' ? 'saas-upgrade' : action; const result = await postJson(`/api/deployment/${endpoint}`, { targetId: selectedTarget, ...payload, ...(action === 'deploy' ? { reinstall } : {}) }); messageApi.success(`任务 #${result.jobId} 已启动`); await loadPlatform() } })
   }
   const rollback = releaseId => {
     if (!releaseId) return
@@ -92,11 +111,11 @@ export default function PlatformOperationsPage({ messageApi }) {
   }
 
   const jobColumns = [
-    { title: '任务', dataIndex: 'kind' }, { title: '节点', dataIndex: 'target_id' }, { title: '状态', dataIndex: 'status', render: value => <Tag color={value === 'complete' ? 'success' : value === 'failed' ? 'error' : 'processing'}>{value}</Tag> }, { title: '进度', render: (_, row) => <Progress percent={row.progress || 0} size="small" status={row.status === 'failed' ? 'exception' : undefined} /> }, { title: '步骤', dataIndex: 'step' }, { title: '失败原因', dataIndex: 'error', render: value => value ? <Text type="danger">{value}</Text> : '—' },
+    { title: '任务', dataIndex: 'kind', render: value => value === 'saas_redeploy' ? '重新部署' : value === 'saas_deploy' ? '首次部署' : value }, { title: '节点', dataIndex: 'target_id' }, { title: '部署日期', dataIndex: 'created_at', render: value => value ? new Date(value).toLocaleString() : '—' }, { title: '状态', dataIndex: 'status', render: value => <Tag color={value === 'complete' ? 'success' : value === 'failed' ? 'error' : 'processing'}>{value}</Tag> }, { title: '进度', render: (_, row) => <Progress percent={row.progress || 0} size="small" status={row.status === 'failed' ? 'exception' : undefined} /> }, { title: '步骤', dataIndex: 'step' }, { title: '失败原因', dataIndex: 'error', render: value => value ? <Text type="danger">{value}</Text> : '—' },
   ]
 
   const items = [
-    { key: 'deployment', label: '部署节点', children: <Space direction="vertical" size={18} style={{ width: '100%' }}><Card title="节点与版本" extra={<Button type="primary" onClick={() => openNode(null)}>新增节点</Button>}><Row gutter={16}><Col span={8}><Select value={selectedTarget} onChange={setSelectedTarget} placeholder="选择部署节点" style={{ width: '100%' }} options={deploy.targets.map(item => ({ value: item.id, label: `${item.name} · ${item.host}` }))} /></Col><Col span={16}><Space wrap><Button disabled={!target} onClick={() => openNode(target)}>编辑节点</Button><Button disabled={!target} onClick={() => startJob('test')}>测试连接</Button><Button disabled={!target} onClick={() => startJob('sync')}>上传待审核内容</Button><Button disabled={!target} onClick={() => startJob('deploy')}>首次部署</Button><Button disabled={!target} onClick={() => startJob('upgrade')}>程序升级</Button><Button disabled={!target} onClick={() => startJob('cleanup', { retentionDays: 30 }, true)}>清理旧版本</Button></Space></Col></Row>{target && <Descriptions bordered size="small" column={3} style={{ marginTop: 18 }}><Descriptions.Item label="地址">{target.username}@{target.host}:{target.port}</Descriptions.Item><Descriptions.Item label="远程目录">{target.remote_root}</Descriptions.Item><Descriptions.Item label="服务端口">{target.service_port}</Descriptions.Item><Descriptions.Item label="认证">{target.passwordConfigured ? '已配置' : '未配置'}</Descriptions.Item><Descriptions.Item label="远程当前代码版本">{releases.find(item => item.status === 'current')?.releaseId || '无法读取'}</Descriptions.Item><Descriptions.Item label="内容版本">{deploy.status?.contentVersion || '—'}</Descriptions.Item><Descriptions.Item label="代码回滚" span={3}><Select aria-label="代码回滚" placeholder="选择历史代码版本" style={{ width: 360, maxWidth: '100%' }} disabled={!target} onChange={rollback} options={releases.filter(item => item.status !== 'current').map(item => ({ value: item.releaseId, label: item.releaseId }))} /></Descriptions.Item></Descriptions>}</Card><Card title="部署任务" extra={<Button danger loading={deletingInvalid} disabled={!deploy.invalidCount} onClick={deleteInvalidJobs}>删除无效任务</Button>}><Table rowKey="id" columns={jobColumns} dataSource={deploy.jobs || []} pagination={{ pageSize: 8 }} scroll={{ x: 900 }} /></Card></Space> },
+    { key: 'deployment', label: '部署节点', children: <Space direction="vertical" size={18} style={{ width: '100%' }}><Card title="节点与版本" extra={<Button type="primary" onClick={() => openNode(null)}>新增节点</Button>}><Row gutter={16}><Col span={8}><Select value={selectedTarget} onChange={setSelectedTarget} placeholder="选择部署节点" style={{ width: '100%' }} options={deploy.targets.map(item => ({ value: item.id, label: `${item.name} · ${item.host}` }))} /></Col><Col span={16}><Space wrap><Button disabled={!target} onClick={() => openNode(target)}>编辑节点</Button><Button disabled={!target} onClick={() => startJob('test')}>测试连接</Button><Button disabled={!target} onClick={() => startJob('sync')}>上传官方内容</Button><Button disabled={!target} onClick={() => startJob('deploy')}>{target?.deployedBefore ? '重新部署' : '首次部署'}</Button><Button disabled={!target} onClick={() => startJob('upgrade')}>程序升级</Button><Button disabled={!target} onClick={() => startJob('cleanup', { retentionDays: 30 }, true)}>清理旧版本</Button></Space></Col></Row>{target && <Descriptions bordered size="small" column={3} style={{ marginTop: 18 }}><Descriptions.Item label="地址">{target.username}@{target.host}:{target.port}</Descriptions.Item><Descriptions.Item label="远程目录">{target.remote_root}</Descriptions.Item><Descriptions.Item label="服务端口">{target.service_port}</Descriptions.Item><Descriptions.Item label="认证">{target.passwordConfigured ? '已配置' : '未配置'}</Descriptions.Item><Descriptions.Item label="远程当前代码版本">{releases.find(item => item.status === 'current')?.releaseId || '无法读取'}</Descriptions.Item><Descriptions.Item label="内容版本">{deploy.status?.contentVersion || '—'}</Descriptions.Item><Descriptions.Item label="代码回滚" span={3}><Select aria-label="代码回滚" placeholder="选择历史代码版本" style={{ width: 360, maxWidth: '100%' }} disabled={!target} onChange={rollback} options={releases.filter(item => item.status !== 'current').map(item => ({ value: item.releaseId, label: item.releaseId }))} /></Descriptions.Item></Descriptions>}</Card><Card title="部署任务" extra={<Button danger loading={deletingInvalid} disabled={!deploy.invalidCount} onClick={deleteInvalidJobs}>删除无效任务</Button>}><Table rowKey="id" columns={jobColumns} dataSource={deploy.jobs || []} pagination={{ pageSize: 8 }} scroll={{ x: 1050 }} /></Card></Space> },
     { key: 'config', label: '平台配置', children: <Row gutter={16}><Col span={12}><Card title="AI 服务" extra={platformConfig?.dioco?.configured ? <Tag color="success">已配置 {platformConfig.dioco.tokenMask}</Tag> : <Tag color="warning">未配置</Tag>}><Form form={aiForm} layout="vertical" onFinish={saveAiConfig}><Form.Item label="服务邮箱" name="email" rules={[{ required: true, type: 'email', message: '请输入有效服务邮箱' }]}><Input /></Form.Item><Form.Item label="Dioco Token" name="token" extra="留空保持现有 Token；浏览器不会读取已保存的完整值。"><Input.Password placeholder={platformConfig?.dioco?.configured ? '已保存，留空保持不变' : '输入平台 Token'} /></Form.Item><Form.Item label="API 地址" name="upstream" rules={[{ required: true, type: 'url', message: '请输入有效 API 地址' }]}><Input /></Form.Item><Space><Button type="primary" htmlType="submit">保存并启用</Button>{platformConfig?.dioco?.configured && <Button danger onClick={() => Modal.confirm({ title: '清除 AI Token？', content: '清除后词汇语境和 AI 句法服务将停止工作。', okButtonProps: { danger: true }, onOk: async () => saveAiConfig({ ...aiForm.getFieldsValue(), clearToken: true }) })}>清除 Token</Button>}</Space></Form><Alert style={{ marginTop: 18 }} type="info" showIcon message="超级管理员配置保存在 PostgreSQL platform_settings 中，AI 请求即时读取，无需重启或修改 environment。" /></Card></Col><Col span={12}><Card title="运维原则"><Button danger onClick={cleanupAccounts} style={{ marginBottom: 16 }}>清理到期注销账户</Button><List dataSource={['所有高风险操作要求二次确认', '部署与代码回滚均产生任务记录', '媒体删除先标记，再执行可审计清理', '到期账户清理由管理员显式触发']} renderItem={item => <List.Item><SafetyCertificateOutlined style={{ color: '#2f6f50', marginRight: 8 }} />{item}</List.Item>} /></Card></Col></Row> },
   ]
 

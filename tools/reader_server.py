@@ -539,7 +539,7 @@ class Handler(SimpleHTTPRequestHandler):
                     self.reply(result);return
                 if not target_id:self.reply({"error":"请选择远程节点"},400);return
                 if self.path == "/api/deployment/test":self.reply({"jobId":deployment_manager.start_test(target_id)},202);return
-                if self.path == "/api/deployment/deploy":self.reply({"jobId":deployment_manager.start_saas_deploy(target_id)},202);return
+                if self.path == "/api/deployment/deploy":self.reply({"jobId":deployment_manager.start_saas_deploy(target_id,bool(item.get("reinstall")))},202);return
                 if self.path in {"/api/deployment/upgrade","/api/deployment/saas-upgrade"}:self.reply({"jobId":deployment_manager.start_saas_upgrade(target_id)},202);return
                 if self.path == "/api/deployment/sync":self.reply({"jobId":deployment_manager.start_saas_public_sync(target_id)},202);return
                 if self.path == "/api/deployment/uninstall":self.reply({"jobId":deployment_manager.start_uninstall(target_id,str(item.get("confirmName","")).strip())},202);return

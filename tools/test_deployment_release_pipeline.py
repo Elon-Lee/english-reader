@@ -99,6 +99,19 @@ class DeploymentReleasePipelineTests(unittest.TestCase):
         self.assertIn("saas.env",manager.saas_app_run_command(target,"/srv/shiyue/candidate"))
         self.assertIn("ensure_migrated",manager.saas_migration_check_command())
 
+    def test_saas_redeploy_backs_up_outside_install_root_before_uninstall(self):
+        class RedeployRemote(SyntaxRemote):
+            def ssh(self,script):
+                subprocess.run(["bash","-n"],input=script,text=True,check=True);self.scripts.append(script)
+                return "SHIYUE_REDEPLOY_BACKUP_READY deadbeef\n" if "SHIYUE_REDEPLOY_BACKUP_READY" in script else "SHIYUE_UNINSTALLED\n"
+        target={"id":4,"remote_root":"/srv/shiyue-prod"};remote=RedeployRemote();job=Job()
+        backup=manager.uninstall_saas_for_redeploy(job,remote,target)
+        self.assertTrue(backup.startswith("/var/backups/shiyue/deployment-target-4/"))
+        self.assertEqual(len(remote.scripts),2)
+        self.assertIn("pg_dump",remote.scripts[0]);self.assertIn("chmod 600",remote.scripts[0])
+        self.assertIn("SHIYUE_UNINSTALLED",remote.scripts[1]);self.assertIn("docker rm -f shiyue-saas shiyue-saas-frontend shiyue-postgres shiyue-redis",remote.scripts[1]);self.assertIn("rm -rf -- /srv/shiyue-prod",remote.scripts[1])
+        self.assertNotIn("/srv/shiyue-prod/",backup)
+
     def test_post_activation_verification_resolves_symlinked_mount(self):
         source=inspect.getsource(manager.start_saas_upgrade)
         self.assertIn('readlink -f "$mount_source"',source)

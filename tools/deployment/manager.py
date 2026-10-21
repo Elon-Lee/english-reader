@@ -50,11 +50,13 @@ def list_targets():
     latest={}
     for row in db.execute("SELECT * FROM deployment_jobs WHERE target_id IS NOT NULL AND kind NOT IN ('release_list','content_release_list') ORDER BY id DESC"):
         latest.setdefault(row["target_id"],dict(row))
-    db.close();result=[]
+    result=[]
     for row in rows:
         item=public_target(row);job=latest.get(row["id"])
         item["latestJob"]={key:job.get(key) for key in ("id","kind","status","progress","step","error","updated_at")} if job else None
+        item["deployedBefore"]=bool(db.execute("SELECT 1 FROM deployment_releases WHERE target_id=? LIMIT 1",(row["id"],)).fetchone() or db.execute("SELECT 1 FROM deployment_jobs WHERE target_id=? AND kind='saas_deploy' AND status='complete' LIMIT 1",(row["id"],)).fetchone())
         result.append(item)
+    db.close()
     return result
 def save_target(data,password=""):
     host=str(data.get("host","")).strip();username=str(data.get("username","root")).strip() or "root"
@@ -967,8 +969,43 @@ echo SHIYUE_SAAS_RELEASE_ACTIVE
         job.complete({"targetId":target["id"],"releaseId":release,"health":health,"backup":backup,"candidate":activation["candidate"],"verification":verification,"buildInfo":build_info,"diocoConfigured":dioco["configured"]},"SaaS 程序升级完成")
     return run_task("saas_upgrade",worker,target_id)
 
-def start_saas_deploy(target_id):
+def uninstall_saas_for_redeploy(job,remote,target):
+    backup_release=new_release_id("code")
+    backup=f"/var/backups/shiyue/deployment-target-{target['id']}/pre-redeploy-{backup_release}.dump"
+    root=shlex.quote(target["remote_root"])
+    job.update(3,"备份远程 SaaS 数据库",release_id=backup_release)
+    backup_script=f"""set -euo pipefail
+umask 077
+backup={shlex.quote(backup)}
+mkdir -p "$(dirname "$backup")"
+chmod 700 "$(dirname "$backup")"
+set -a; . {root}/shared/config/saas.env; set +a
+docker exec shiyue-postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > "$backup"
+test -s "$backup"
+chmod 600 "$backup"
+sha256sum "$backup" | awk '{{print "SHIYUE_REDEPLOY_BACKUP_READY " $1}}'
+"""
+    backup_result=remote.ssh(backup_script)
+    if "SHIYUE_REDEPLOY_BACKUP_READY" not in backup_result:raise ValueError("重新部署前的远程数据库备份未完成")
+    job.write(f"远程数据库备份已保存到节点目录之外：{backup}")
+    job.update(7,"卸载远程拾页服务")
+    uninstall_script=f"""set -euo pipefail
+docker rm -f shiyue-saas shiyue-saas-frontend shiyue-postgres shiyue-redis shiyue-reader >/dev/null 2>&1 || true
+rm -rf -- {root}
+docker images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' 2>/dev/null | while read image; do
+  case "$image" in shiyue-saas:*|shiyue-reader:*|shiyue-reader-runtime:*) docker image rm "$image" >/dev/null 2>&1 || true ;; esac
+done
+test ! -e {root}
+echo SHIYUE_UNINSTALLED
+"""
+    uninstall_result=remote.ssh(uninstall_script)
+    if "SHIYUE_UNINSTALLED" not in uninstall_result:raise ValueError("重新部署前的远程卸载未完成")
+    job.write("远程服务已卸载，保留 PostgreSQL 备份")
+    return backup
+
+def start_saas_deploy(target_id,reinstall=False):
     def worker(job,remote,target):
+        if reinstall:uninstall_saas_for_redeploy(job,remote,target)
         release=new_release_id("code");job.update(4,"检查远程 SaaS 运行环境",release_id=release);_,oci_arch=remote_arch(remote)
         ensure_remote_docker(job,remote);ensure_remote_runtime(job,remote,oci_arch)
         job.update(24,"生成根路径 SaaS 程序包");package,digest=build_code_package(job,release);dump,dump_digest=build_saas_database_dump(job,release)
@@ -987,7 +1024,7 @@ def start_saas_deploy(target_id):
         activation=activate_saas_release(job,remote,target,release);final_health=remote.ssh(saas_health_check_command(target["service_port"]))
         db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health,"mode":"saas"}),now()));db.commit();db.close()
         job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"databaseImported":restored,"publicContentRevision":public["contentRevision"],"publicMedia":public["media"],"candidate":activation["candidate"]},"SaaS 根站完整部署完成")
-    return run_task("saas_deploy",worker,target_id)
+    return run_task("saas_redeploy" if reinstall else "saas_deploy",worker,target_id)
 def start_saas_public_sync(target_id):
     def worker(job,remote,target):
         output=remote.ssh(f"set -e; docker inspect shiyue-saas >/dev/null; docker inspect shiyue-saas-frontend >/dev/null; docker inspect shiyue-postgres >/dev/null; docker inspect shiyue-redis >/dev/null; test -s {shlex.quote(target['remote_root'])}/current/reader/site/index.html; echo SHIYUE_SAAS_READY")
@@ -1113,7 +1150,7 @@ def recent_jobs(target_id=None,limit=20):
 def dashboard_status(target_id=None):
     db=connect();books=db.execute("SELECT COUNT(*) FROM books WHERE status='ready'").fetchone()[0]
     clause=" AND target_id=?" if target_id is not None else "";params=(int(target_id),) if target_id is not None else ()
-    code=db.execute(f"SELECT result_json FROM deployment_jobs WHERE kind IN ('code_deploy','program_upgrade','saas_upgrade','saas_deploy') AND status='complete'{clause} ORDER BY id DESC LIMIT 1",params).fetchone()
+    code=db.execute(f"SELECT result_json FROM deployment_jobs WHERE kind IN ('code_deploy','program_upgrade','saas_upgrade','saas_deploy','saas_redeploy') AND status='complete'{clause} ORDER BY id DESC LIMIT 1",params).fetchone()
     content=db.execute(f"SELECT result_json FROM deployment_jobs WHERE kind IN ('resource_sync','code_deploy') AND status='complete'{clause} ORDER BY id DESC LIMIT 1",params).fetchone();db.close()
     def value(row,key):
         if not row:return ""

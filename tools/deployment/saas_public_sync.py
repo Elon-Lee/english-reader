@@ -112,6 +112,33 @@ def upsert_rows(cursor,table,items):
         cursor.execute(statement,values)
 
 
+def merge_slug_rows(cursor,table,items):
+    """Reuse destination IDs for named catalog rows whose slugs already exist."""
+    from uuid import uuid4
+    from psycopg import sql
+    id_map={}
+    for original in items:
+        item=dict(original);old_id=item["id"]
+        cursor.execute(sql.SQL("SELECT id FROM {} WHERE slug=%s").format(sql.Identifier(table)),(item["slug"],))
+        row=cursor.fetchone()
+        if row:
+            destination_id=row[0]
+            updates=[column for column in item if column not in {"id","slug","created_at"}]
+            if updates:
+                statement=sql.SQL("UPDATE {} SET {} WHERE id=%s").format(
+                    sql.Identifier(table),sql.SQL(",").join(sql.SQL("{}=%s").format(sql.Identifier(column)) for column in updates))
+                cursor.execute(statement,(*(item[column] for column in updates),destination_id))
+        else:
+            cursor.execute(sql.SQL("SELECT slug FROM {} WHERE id=%s").format(sql.Identifier(table)),(old_id,))
+            id_collision=cursor.fetchone()
+            if id_collision and id_collision[0]!=item["slug"]:
+                item["id"]=uuid4().hex
+            upsert_rows(cursor,table,[item])
+            destination_id=item["id"]
+        id_map[old_id]=destination_id
+    return id_map
+
+
 def apply_bundle(database_url:str,bundle:Path,previous_manifest:Path|None=None)->dict:
     import psycopg
     payload=json.loads(gzip.open(bundle,"rt",encoding="utf-8").read());tables=payload["tables"]
@@ -141,8 +168,12 @@ def apply_bundle(database_url:str,bundle:Path,previous_manifest:Path|None=None)-
                     for item in tables["catalog_books"]:
                         for column in ("created_by","reviewed_by"):
                             if item.get(column) in missing:item[column]=fallback
-            for table in ("catalog_series","catalog_tags"):
-                upsert_rows(cursor,table,tables[table])
+            series_ids=merge_slug_rows(cursor,"catalog_series",tables["catalog_series"])
+            tag_ids=merge_slug_rows(cursor,"catalog_tags",tables["catalog_tags"])
+            for item in tables["catalog_books"]:
+                if item.get("series_id") in series_ids:item["series_id"]=series_ids[item["series_id"]]
+            for item in tables["catalog_book_tags"]:
+                if item.get("tag_id") in tag_ids:item["tag_id"]=tag_ids[item["tag_id"]]
             # Unchanged retries preserve the destination's review and edits. New
             # uploads and changed revisions must be reviewed on the destination.
             from psycopg.rows import dict_row

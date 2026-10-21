@@ -27,6 +27,12 @@ class DeploymentNodeTests(unittest.TestCase):
         self.assertEqual(manager.job_info(job.id)["target_id"],target["id"])
         self.assertEqual(manager.recent_jobs(target["id"],10)[0]["id"],job.id)
 
+    def test_target_deployment_state_uses_successful_deployment_history(self):
+        target=manager.save_target({"name":"节点","host":"10.0.0.30","remoteRoot":"/srv/shiyue-state"})
+        self.assertFalse(manager.list_targets()[0]["deployedBefore"])
+        job=manager.Job("saas_deploy",target["id"]);job.complete({"releaseId":"code-test"})
+        self.assertTrue(manager.list_targets()[0]["deployedBefore"])
+
     def test_delete_invalid_jobs_preserves_active_completed_and_logs(self):
         jobs=[]
         for status in ['failed','cancelled','queued','running','complete']:
