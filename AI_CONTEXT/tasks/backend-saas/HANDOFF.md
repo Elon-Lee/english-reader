@@ -1,5 +1,12 @@
 # SaaS 后端交接
 
+## 2026-10-21 系统设置与设备状态
+
+- 偏好写接口不再接受已移除且无运行时消费者的 `wordTipSeconds`、`reviewPageSize`、`manualRepeatCount`、`manualPauseSeconds`、`reminder`、`heatmapRange` 及旧 `readerMode`；用户已有 JSONB 历史值不会被批量清除。
+- 用户另要求移除 `highlightLeadMs`：偏好 API 不再接受该字段，读取时过滤历史值；下次保存有效偏好自然移除该历史字段，不做批量数据库迁移。React 阅读器使用原始媒体时间轴。临时独立 PostgreSQL phase7 共 12 项通过，包含旧值过滤、混合写入及现有偏好持久化/隔离；测试库已删除，编译与 diff 检查通过，8790 已重启且健康。未发布生产。
+- `/api/auth/devices` 对每条有效设备返回 `current`，服务端用当前会话的 `device_id` 标记；用户设备列表隐藏当前设备的撤销操作。隔离库 phase1/phase7 测试有对应断言，HTTP smoke 与 Python 编译通过。
+- 8790 已按本地启动脚本重载；PC 浏览器确认 `/api/auth/devices` 将当前会话对应设备标记为 `current: true`，设置页显示“当前设备”并隐藏该设备的撤销按钮。未发布生产。若接口未返回当前标记，前端显示“状态待确认”并隐藏撤销操作。
+
 ## 2026-10-21 支付订单与退款
 
 - 新增 `saas_payments.py` 和迁移 `0041_alipay_commerce_operations.sql`：支付方式保存在 `platform_settings`，管理员写配置保留权限、会话、CSRF 与审计；支付宝当面付订单使用服务端 RSA2 签名，通知验签后仍主动查单并核对应用号/订单/金额，幂等开通权益。
@@ -8,6 +15,7 @@
 
 ## 2026-10-21 管理后台写操作
 
+- 邀请码批次 GET 增加 `expiredCount`，逐码 SQL 聚合：已使用优先；`used_count=0 AND expires_at<=NOW()` 才算过期，`unusedCount` 排除过期码。详情 GET 增加同口径 `usageStatus`，原始 `status` 保留；不改历史数据、无需迁移。phase5 9 项在新建隔离库通过，覆盖混合逐码到期、部分使用码到期仍归已用，以及删除未用码后仅剩一个已用码（过期为 0）。临时库已删除，8790 已重启，Chrome 列表/详情核对通过；未发布生产。
 - `POST /api/admin/users/{id}/verify` 管理员标记邮箱已验证并写审计；`DELETE /api/admin/users/{id}` 仅允许删除待验证非管理员账号，匿名化身份、撤销会话、设备、验证和重置令牌并保留关联业务历史。
 - `POST /api/admin/invitations/delete-expired` 只清理过期、未使用且未关联邀请奖励的邀请码；删除后若批次不再有任何邀请码，同事务删除空批次，并在审计与响应中记录删除批次数。
 - `GET /api/admin/audit` 支持 `limit/offset/q/action`，返回 `total/actions`；默认 20 条、上限 100。

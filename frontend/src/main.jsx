@@ -28,6 +28,7 @@ import StatsPageNew from './pages/StatsPage'
 import VocabularyPage from './pages/VocabularyPage'
 import WorkspacePage from './pages/WorkspacePage'
 import PageSkeleton from './components/PageSkeleton'
+import AppSkeleton from './components/AppSkeleton'
 import PublicSite, { PurchasePage } from './pages/PublicSite'
 import LegalPage, { isLegalPath, legalPageTitle } from './pages/LegalPage'
 import './styles.css'
@@ -231,7 +232,7 @@ function App() {
   const logout = async () => { try { await postJson('/api/auth/logout', {}); setCurrentUser(null); setAuthState('unauthenticated') } catch (error) { messageApi.error(error.message || '退出登录失败') } }
   const savePreferences = async values => { try { const result = await postJson('/api/preferences', values); setPreferences(current => ({ ...current, ...(result.preferences || result || values) })); messageApi.success('阅读偏好已保存') } catch (error) { messageApi.error(error.message || '阅读偏好保存失败'); throw error } }
   const mergePreferences = values => setPreferences(current => ({ ...current, ...values }))
-  const requestDeletion = () => { Modal.confirm({ title: '确认申请注销账户？', content: '提交后会退出当前设备，并进入 7 天宽限期。宽限期内重新登录可以取消。', okText: '申请注销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { await postJson('/api/account/deletion', { reason: '用户在新版工作台申请注销' }); setAuthState('unauthenticated'); messageApi.success('注销申请已提交') } catch (error) { messageApi.error(error.message || '注销申请失败'); throw error } } }) }
+  const requestDeletion = () => { Modal.confirm({ title: '确认申请注销账户？', content: '提交后会退出当前设备，并进入 30 天宽限期。期间重新登录可以取消。', okText: '申请注销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { await postJson('/api/account/deletion', { reason: '用户在新版工作台申请注销' }); setAuthState('unauthenticated'); messageApi.success('注销申请已提交') } catch (error) { messageApi.error(error.message || '注销申请失败'); throw error } } }) }
   const cancelDeletion = async () => { try { await postJson('/api/account/deletion/cancel', {}); await reloadWorkspace({ silent: true }); messageApi.success('注销申请已取消') } catch (error) { messageApi.error(error.message || '取消注销失败') } }
   const revokeOwnDevice = async deviceId => {
     Modal.confirm({ title: '确认撤销此设备？', content: '撤销后，该设备需要重新登录才能访问工作台。', okText: '确认撤销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { const response = await fetchWithCsrf(`/api/auth/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || '设备撤销失败'); await reloadWorkspace({ silent: true }); messageApi.success('设备已撤销') } catch (error) { messageApi.error(error.message || '设备撤销失败'); throw error } } })
@@ -249,7 +250,7 @@ function App() {
   const theme = { token: { colorPrimary: '#2f6f50', colorInfo: '#2f6f50', borderRadius: 12, fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif' }, components: { Layout: { siderBg: '#17392b', headerBg: '#fbfaf7' }, Menu: { darkItemBg: '#17392b', darkItemSelectedBg: '#2b5943', darkItemHoverBg: '#234b38', itemBorderRadius: 10 } } }
   if (['/verify-email', '/reset-password'].includes(location.pathname)) return <ConfigProvider theme={theme}><AntApp>{contextHolder}<AuthActionPage path={location.pathname} /></AntApp></ConfigProvider>
   if (isLegalPath(routePath)) return <ConfigProvider theme={theme}><AntApp><LegalPage path={routePath} authenticated={authState === 'authenticated'} /></AntApp></ConfigProvider>
-  if (authState === 'loading') return <ConfigProvider theme={theme}><AntApp>{contextHolder}<main className="modern-auth"><Card className="modern-auth-card"><Skeleton active avatar title paragraph={{ rows: 6 }} /></Card></main></AntApp></ConfigProvider>
+  if (authState === 'loading') return <ConfigProvider theme={theme}><AntApp>{contextHolder}{consoleRoute ? <AppSkeleton reader={screen === 'reader'} /> : <main className="modern-auth"><Card className="modern-auth-card"><Skeleton active avatar title paragraph={{ rows: 6 }} /></Card></main>}</AntApp></ConfigProvider>
   if (publicPage) return <ConfigProvider theme={theme}><AntApp>{contextHolder}<PublicSite authenticated={authState === 'authenticated'} page={publicPage} /></AntApp></ConfigProvider>
   if (purchaseRoute) return <ConfigProvider theme={theme}><AntApp>{contextHolder}<PageErrorBoundary key={routePath}><PurchasePage authenticated={authState === 'authenticated'} /></PageErrorBoundary></AntApp></ConfigProvider>
   if (routePath === '/login' || routePath === '/register') {

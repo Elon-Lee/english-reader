@@ -4,7 +4,7 @@ import { Alert, Button, Card, Col, Collapse, Empty, Input, Modal, QRCode, Row, S
 
 import { getJson, postJson } from '../api/client'
 import usePurchasePreviews from '../hooks/usePurchasePreviews'
-import { displayBenefits, displayDate, featuredProductId, planHighlights, purchaseAction, sharedBenefits } from '../utils/presentation.mjs'
+import { displayDate, featuredProductId, planHighlights, purchaseAction, sharedBenefits } from '../utils/presentation.mjs'
 import { refreshJourney, updateJourney } from '../api/journey'
 import { PurchaseRecovery } from '../components/LearningJourney'
 
@@ -63,7 +63,6 @@ export function PricingSection({ authenticated, products, loading = false, error
       : error ? <Alert type="error" showIcon message="套餐暂时无法加载" description={error} action={<Button onClick={onRetry}>重试</Button>} />
         : products.length ? <><Row gutter={[20, 20]}>{products.map(product => <Col xs={24} md={12} xl={8} key={product.id}><ProductCard product={product} authenticated={authenticated} onPurchase={onPurchase} featured={product.id === featured} state={states[product.planVersion]} onRetry={retry} /></Col>)}</Row>
           {common.length > 0 && <div className="plan-common-benefits"><Text strong>所有方案都包含</Text><ul>{common.map(item => <li key={item}><CheckCircleFilled aria-hidden />{item}</li>)}</ul></div>}
-          <Collapse className="plan-full-benefits" ghost items={[{ key: 'full', label: '展开完整权益与方案说明', children: <Row gutter={[24, 16]}>{products.map(product => <Col span={8} key={product.id}><Title level={4}>{product.shortName || product.name}</Title><ul>{displayBenefits(product).map(item => <li key={item}>{item}</li>)}</ul>{product.configuredBenefits?.map((benefit, index) => <Paragraph key={benefit.id || index}>{benefit.text || benefit.name}</Paragraph>)}</Col>)}</Row> }]} />
         </> : <Empty description="暂无在售套餐，请稍后再来" />}
     <Paragraph className="public-capacity-note">音视频收藏按官方书架与私人内容合计；移出官方书架或删除私人读物可释放名额。注册需要有效邀请码，<a href="/support#invitation">没有邀请码？</a></Paragraph>
   </section>

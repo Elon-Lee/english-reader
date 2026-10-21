@@ -64,7 +64,7 @@ class PrivateWorkspaceTests(unittest.TestCase):
         self.accounts.verify_email(raw)
 
     def test_reader_appearance_preferences_persist_for_owner(self):
-        values={"readerFontSize":24,"readerLineHeight":2.1,"readerContentWidth":920,"readerToolsPinned":True,"wordAutoPronounce":False,"wordHoverPause":True,"readerMode":"extensive"}
+        values={"readerFontSize":24,"readerLineHeight":2.1,"readerContentWidth":920,"readerToolsPinned":True,"wordAutoPronounce":False,"wordHoverPause":True}
         result=self.accounts.update_preferences(str(self.owner["id"]),values)
         self.assertEqual(result,values)
         self.assertEqual(self.accounts.preferences(str(self.owner["id"])),values)
@@ -78,8 +78,28 @@ class PrivateWorkspaceTests(unittest.TestCase):
         for key,value in (("readerFontSize",29),("readerFontSize",True),("readerLineHeight",float("nan")),("readerContentWidth",float("inf")),("readerToolsPinned","false"),("wordHoverPause",1)):
             with self.subTest(key=key,value=value):
                 with self.assertRaises(SaaSError):
-                    self.accounts.update_preferences(user_id,{"readerMode":"extensive",key:value})
+                    self.accounts.update_preferences(user_id,{key:value})
                 self.assertEqual(self.accounts.preferences(user_id),{"readerFontSize":20})
+
+    def test_retired_preferences_are_not_accepted(self):
+        user_id=str(self.owner["id"])
+        for key,value in (("wordTipSeconds",3),("reviewPageSize",15),("manualRepeatCount",4),
+                          ("manualPauseSeconds",2),("reminder","daily"),("heatmapRange","quarter"),
+                          ("readerMode","shadow"),("highlightLeadMs",200)):
+            with self.subTest(key=key):
+                with self.assertRaises(SaaSError):
+                    self.accounts.update_preferences(user_id,{key:value})
+
+    def test_retired_highlight_offset_is_ignored_for_existing_accounts(self):
+        user_id=str(self.owner["id"])
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("INSERT INTO user_preferences(user_id,preferences_json) VALUES(%s,%s::jsonb)",
+                               (user_id,json.dumps({"highlightLeadMs":600,"playbackRate":1.25})))
+        self.assertEqual(self.accounts.preferences(user_id),{"playbackRate":1.25})
+        result=self.accounts.update_preferences(user_id,{"highlightLeadMs":-300,"eyeComfort":True})
+        self.assertEqual(result,{"playbackRate":1.25,"eyeComfort":True})
+        self.assertEqual(self.accounts.preferences(user_id),result)
 
     def create_private_book(self,owner_id:str)->str:
         book_id="private-workspace-book";data={"id":book_id,"title":"私人读物","englishTitle":"Private Reader","sentences":[{"id":"s1","text":"My private first sentence.","translation":"我的私人第一句。","words":[{"text":"My"}]},{"id":"s2","text":"My private second sentence.","words":[{"text":"My"}]}]}

@@ -146,6 +146,8 @@ class PhaseOnePostgresTests(unittest.TestCase):
         self.assertEqual(device_error.exception.code, "device_limit_exceeded")
         devices = self.service.devices(user_id)
         self.assertEqual(len(devices), 1)
+        self.assertFalse(devices[0]["current"])
+        self.assertTrue(self.service.devices(user_id, str(session["device_id"]))[0]["current"])
         self.service.logout(session)
         self.assertIsNone(self.service.authenticate(login["sessionToken"]))
 

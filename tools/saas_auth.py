@@ -495,7 +495,7 @@ class SaaSService:
             with connection.cursor() as cursor:
                 cursor.execute("UPDATE user_sessions SET revoked_at=NOW() WHERE id=%s", (session["session_id"],))
 
-    def devices(self, user_id: str) -> list[dict[str, Any]]:
+    def devices(self, user_id: str, current_device_id: str = "") -> list[dict[str, Any]]:
         with self.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -503,7 +503,7 @@ class SaaSService:
                     WHERE user_id=%s AND revoked_at IS NULL ORDER BY last_seen_at DESC""",
                     (user_id,),
                 )
-                return [{"id":row["id"],"label":row["label"],"userAgent":row["user_agent"],"firstSeenAt":iso(row["first_seen_at"]) if row["first_seen_at"] else "","lastSeenAt":iso(row["last_seen_at"]) if row["last_seen_at"] else "","revoked":False} for row in self._many(cursor)]
+                return [{"id":row["id"],"label":row["label"],"userAgent":row["user_agent"],"firstSeenAt":iso(row["first_seen_at"]) if row["first_seen_at"] else "","lastSeenAt":iso(row["last_seen_at"]) if row["last_seen_at"] else "","current":str(row["id"]) == current_device_id} for row in self._many(cursor)]
 
     def preferences(self, user_id: str) -> dict[str, Any]:
         with self.transaction() as connection:
@@ -513,17 +513,15 @@ class SaaSService:
                 if not row:
                     return {}
                 value = row.get("preferences_json", {})
-                return value if isinstance(value, dict) else json.loads(value or "{}")
+                value = value if isinstance(value, dict) else json.loads(value or "{}")
+                return {key: item for key, item in value.items() if key != "highlightLeadMs"} if isinstance(value, dict) else {}
 
     def update_preferences(self, user_id: str, incoming: Any) -> dict[str, Any]:
         if not isinstance(incoming, dict):
             raise SaaSError("invalid_preferences", "阅读偏好数据无效。", 400)
         enum_fields = {
-            "readerMode": {"intensive", "extensive", "shadow"},
             "density": {"comfortable", "compact"},
-            "reminder": {"off", "daily", "weekdays"},
             "readerLayout": {"side", "stack"},
-            "heatmapRange": {"month", "quarter", "year"},
             "shortcutPrevious": {"a", "s", "d", "space", "arrowleft", "arrowright", "enter"},
             "shortcutRepeat": {"a", "s", "d", "space", "arrowleft", "arrowright", "enter"},
             "shortcutNext": {"a", "s", "d", "space", "arrowleft", "arrowright", "enter"},
@@ -531,11 +529,6 @@ class SaaSService:
         }
         boolean_fields = {"eyeComfort", "focusMode", "sentenceAutoPause", "readerToolsPinned", "wordAutoPronounce", "wordHoverPause"}
         number_fields = {
-            "wordTipSeconds": (0.5, 10.0),
-            "reviewPageSize": (5, 50),
-            "manualRepeatCount": (1, 10),
-            "manualPauseSeconds": (0.5, 10.0),
-            "highlightLeadMs": (-300, 600),
             "playbackRate": (0.5, 2.0),
             "readerFontSize": (16, 28),
             "readerLineHeight": (1.4, 2.4),
@@ -564,8 +557,6 @@ class SaaSService:
                     raise SaaSError("invalid_preferences", f"阅读偏好 {key} 无效。", 400) from exc
                 if not minimum <= value <= maximum or isinstance(incoming[key], bool):
                     raise SaaSError("invalid_preferences", f"阅读偏好 {key} 超出允许范围。", 400)
-                if key in {"reviewPageSize", "manualRepeatCount", "highlightLeadMs"}:
-                    value = int(value)
                 current[key] = value
                 changed = True
         shortcut_values = [current.get(key) for key in ("shortcutPrevious", "shortcutRepeat", "shortcutNext", "shortcutPlay") if current.get(key)]

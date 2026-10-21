@@ -45,8 +45,8 @@ function Heatmap({ learningDays, range }) {
   </>
 }
 
-export default function StatsPage({ allBooks, learningDays, learning, openReader, preferences }) {
-  const [range, setRange] = useState(['week', 'month', 'year'].includes(preferences?.heatmapRange) ? preferences.heatmapRange : 'year')
+export default function StatsPage({ allBooks, learningDays, learning, openReader }) {
+  const [range, setRange] = useState('year')
   const readingSeconds = learningDays.reduce((sum, item) => sum + Number(item.payload?.reading_seconds || 0), 0)
   const dayCount = learningDays.filter(day => ['reading_seconds', 'sentences', 'reviews', 'shadow_attempts'].some(key => Number(day.payload?.[key]) > 0)).length
   const totalSentences = learningDays.reduce((sum, day) => sum + Number(day.payload?.sentences || 0), 0)

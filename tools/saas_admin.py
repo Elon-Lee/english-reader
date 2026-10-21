@@ -183,16 +183,17 @@ class AdminService:
             with connection.cursor() as cursor:
                 cursor.execute(f"SELECT COUNT(*) AS total FROM invitation_batches b {where}",values);total=int((self.accounts._one(cursor)or{"total":0})["total"])
                 cursor.execute(f"""SELECT b.*,u.email AS creator_email,COUNT(i.id) AS actual_count,
-                COUNT(i.id) FILTER(WHERE i.used_count=0) AS unused_count,COUNT(i.id) FILTER(WHERE i.used_count>0) AS used_count,
+                COUNT(i.id) FILTER(WHERE i.used_count=0 AND (i.expires_at IS NULL OR i.expires_at>NOW())) AS unused_count,
+                COUNT(i.id) FILTER(WHERE i.used_count>0) AS used_count,
+                COUNT(i.id) FILTER(WHERE i.used_count=0 AND i.expires_at<=NOW()) AS expired_count,
                 COALESCE(SUM(i.used_count),0) AS registrations
                 FROM invitation_batches b LEFT JOIN invitations i ON i.batch_id=b.id LEFT JOIN users u ON u.id=b.created_by
                 {where} GROUP BY b.id,u.email ORDER BY b.created_at DESC LIMIT %s OFFSET %s""",(*values,size,start))
                 batches=[]
                 for row in self.accounts._many(cursor):
-                    expired=bool(row["expires_at"] and row["expires_at"]<=datetime.now().astimezone())
-                    actual=int(row["actual_count"]);unused=int(row["unused_count"]);used=int(row["used_count"])
-                    status="expired" if expired else "empty" if actual==0 else "unused" if used==0 else "partial" if unused>0 else "used"
-                    batches.append({"id":row["id"],"count":actual,"requestedCount":int(row["requested_count"]),"unusedCount":unused,"usedCount":used,"registrations":int(row["registrations"]),"maxUses":int(row["max_uses"]),"expiresAt":timestamp(row["expires_at"]),"note":row["note"],"channel":row["channel"],"createdBy":row["creator_email"],"createdAt":timestamp(row["created_at"]),"status":status})
+                    actual=int(row["actual_count"]);unused=int(row["unused_count"]);used=int(row["used_count"]);expired=int(row["expired_count"])
+                    status="empty" if actual==0 else "used" if used==actual else "expired" if expired==actual else "unused" if unused==actual else "partial"
+                    batches.append({"id":row["id"],"count":actual,"requestedCount":int(row["requested_count"]),"unusedCount":unused,"usedCount":used,"expiredCount":expired,"registrations":int(row["registrations"]),"maxUses":int(row["max_uses"]),"expiresAt":timestamp(row["expires_at"]),"note":row["note"],"channel":row["channel"],"createdBy":row["creator_email"],"createdAt":timestamp(row["created_at"]),"status":status})
                 return {"batches":batches,"total":total,"limit":size,"offset":start}
 
     def invitation_batch_detail(self,batch_id:str)->dict[str,Any]:
@@ -200,12 +201,14 @@ class AdminService:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT b.*,u.email AS creator_email FROM invitation_batches b LEFT JOIN users u ON u.id=b.created_by WHERE b.id=%s",(batch_id,));batch=self.accounts._one(cursor)
                 if not batch:raise SaaSError("invitation_batch_not_found","邀请码批次不存在。",404)
-                cursor.execute("""SELECT i.*,NOT EXISTS(SELECT 1 FROM invitation_uses iu WHERE iu.invitation_id=i.id)
+                cursor.execute("""SELECT i.*,CASE WHEN i.used_count>0 THEN 'used'
+                WHEN i.expires_at<=NOW() THEN 'expired' ELSE 'unused' END AS usage_status,
+                NOT EXISTS(SELECT 1 FROM invitation_uses iu WHERE iu.invitation_id=i.id)
                 AND NOT EXISTS(SELECT 1 FROM member_invites mi WHERE mi.invitation_id=i.id) AS deletable
                 FROM invitations i WHERE i.batch_id=%s ORDER BY i.created_at,i.code""",(batch_id,));codes=[]
                 for row in self.accounts._many(cursor):
                     cursor.execute("SELECT email,used_at FROM invitation_uses WHERE invitation_id=%s ORDER BY used_at",(row["id"],));uses=[{"email":item["email"],"usedAt":timestamp(item["used_at"])} for item in self.accounts._many(cursor)]
-                    codes.append({"id":row["id"],"code":row["code"],"status":row["status"],"maxUses":int(row["max_uses"]),"usedCount":int(row["used_count"]),"verificationEmailCount":int(row["verification_email_count"]),"deletable":bool(row["deletable"] and int(row["used_count"])==0),"uses":uses})
+                    codes.append({"id":row["id"],"code":row["code"],"status":row["status"],"usageStatus":row["usage_status"],"maxUses":int(row["max_uses"]),"usedCount":int(row["used_count"]),"verificationEmailCount":int(row["verification_email_count"]),"deletable":bool(row["deletable"] and int(row["used_count"])==0),"uses":uses})
                 return {"batch":{"id":batch["id"],"requestedCount":int(batch["requested_count"]),"maxUses":int(batch["max_uses"]),"expiresAt":timestamp(batch["expires_at"]),"note":batch["note"],"channel":batch["channel"],"createdBy":batch["creator_email"],"createdAt":timestamp(batch["created_at"])},"invitations":codes}
 
     def delete_unused_invitations(self,actor_id:str,batch_id:str,invitation_ids:Any)->dict[str,Any]:

@@ -76,6 +76,28 @@ class PhaseFivePostgresTests(unittest.TestCase):
         with self.assertRaises(SaaSError) as blocked:self.admin_service.delete_unused_invitations(actor,batch_id,[used_id])
         self.assertEqual(blocked.exception.code,"invitation_in_use")
 
+    def test_invitation_usage_counts_match_detail_and_exclude_used_from_expired(self):
+        actor=str(self.admin["id"])
+        created=self.admin_service.create_invitations(actor,"",3,3,None,"usage counts","test")
+        batch_id=created["batch"]["id"];used,expired,unused=created["invitations"]
+        self.accounts.register("usage-counts@local.test","usage counts password",used["code"])
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE invitations SET expires_at=%s WHERE id IN (%s,%s)",
+                               (utcnow()-timedelta(days=1),used["id"],expired["id"]))
+        def summary():
+            return next(row for row in self.admin_service.invitation_batches()["batches"] if row["id"]==batch_id)
+        row=summary()
+        self.assertEqual((row["unusedCount"],row["usedCount"],row["expiredCount"],row["count"]),(1,1,1,3))
+        detail=self.admin_service.invitation_batch_detail(batch_id)["invitations"]
+        self.assertEqual({item["id"]:item["usageStatus"] for item in detail},
+                         {used["id"]:"used",expired["id"]:"expired",unused["id"]:"unused"})
+        self.admin_service.delete_unused_invitations(actor,batch_id,[expired["id"],unused["id"]])
+        row=summary()
+        self.assertEqual((row["unusedCount"],row["usedCount"],row["expiredCount"],row["count"]),(0,1,0,1))
+        self.assertEqual(row["status"],"used")
+        self.assertEqual(self.admin_service.invitation_batch_detail(batch_id)["invitations"][0]["usageStatus"],"used")
+
     def test_expired_invitation_cleanup_and_user_verification_actions(self):
         actor=str(self.admin["id"]);past=utcnow()-timedelta(days=2)
         expired=self.admin_service.create_invitations(actor,"",1,2,None,"expired cleanup test","test")

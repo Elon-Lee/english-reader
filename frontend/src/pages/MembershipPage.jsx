@@ -115,7 +115,7 @@ export default function MembershipPage({ membership, membershipOrders, onRefresh
       {redeemError && <Alert showIcon type="error" message={redeemError} style={{ marginTop: 12 }} />}
       {redeemResult && <Alert showIcon type="success" message={`${redeemResult.planName}兑换成功`} description={`有效期至 ${displayDate(redeemResult.endsAt)}`} />}
     </Modal>
-    <Modal width={1200} title="选择学习方案" open={manageOpen} onCancel={() => setManageOpen(false)} footer={null} destroyOnClose>
+    <Modal className="membership-plan-modal" width={1080} title="选择学习方案" open={manageOpen} onCancel={() => setManageOpen(false)} footer={null} destroyOnClose>
       {manageOpen && <PricingSection authenticated products={catalog.products} loading={catalogLoading} error={catalogError} onRetry={() => setRevision(value => value + 1)} onPurchase={product => openPurchase(product)} title="按需要续费或升级" />}
     </Modal>
     {catalogError && purchaseSlug && !manageOpen && <Alert type="error" showIcon message={catalogError} action={<Button onClick={() => setRevision(value => value + 1)}>重试</Button>} />}

@@ -748,7 +748,7 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path=="/api/auth/devices":
             if not self.require_saas_user():return
-            try:self.reply({"devices":SAAS.devices(str(self._saas_session["id"]))})
+            try:self.reply({"devices":SAAS.devices(str(self._saas_session["id"]),str(self._saas_session.get("device_id") or ""))})
             except SaaSConfigurationError as exc:self.reply({"code":"saas_unavailable","error":str(exc)},503)
             return
         self.reply({"error":"not found"},404)

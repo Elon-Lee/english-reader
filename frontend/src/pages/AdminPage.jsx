@@ -77,14 +77,13 @@ export default function AdminPage({ messageApi, adminData, onUpdateUserStatus, o
   const invitationColumns = [
     { title: '创建记录', key: 'summary', render: (_, row) => <Space direction="vertical" size={1}><Text strong>{row.note || '邀请码批次'}</Text><Text type="secondary">{new Date(row.createdAt).toLocaleString('zh-CN')} · {row.channel || '未标记渠道'}</Text></Space> },
     { title: '邀请码', dataIndex: 'count', width: 100, render: (value, row) => `${value}/${row.requestedCount} 个` },
-    { title: '使用情况', key: 'usage', width: 150, render: (_, row) => <Space><Tag color="success">未使用 {row.unusedCount}</Tag><Tag>已使用 {row.usedCount}</Tag></Space> },
+    { title: '使用情况', key: 'usage', width: 255, render: (_, row) => <Space size={[0, 4]} wrap><Tag color="success">未使用 {row.unusedCount}</Tag><Tag>已使用 {row.usedCount}</Tag>{row.expiredCount > 0 && <Tag color="error">已过期 {row.expiredCount}</Tag>}</Space> },
     { title: '单码次数', dataIndex: 'maxUses', width: 100, render: value => `${value} 次` },
-    { title: '状态', dataIndex: 'status', width: 105, render: value => <Tag color={value === 'unused' ? 'success' : value === 'partial' ? 'processing' : value === 'expired' ? 'error' : 'default'}>{{ unused: '未使用', partial: '部分使用', used: '已使用', expired: '已过期', empty: '已清空' }[value] || value}</Tag> },
     { title: '操作', width: 90, render: (_, row) => <Button onClick={() => openInvitationBatch(row.id)}>详情</Button> },
   ]
   const invitationDetailColumns = [
     { title: '邀请码', dataIndex: 'code', render: value => <Text code>{value}</Text> },
-    { title: '状态', key: 'status', width: 105, render: (_, row) => <Tag color={row.usedCount ? 'default' : 'success'}>{row.usedCount ? '已使用' : '未使用'}</Tag> },
+    { title: '状态', key: 'status', width: 105, render: (_, row) => <Tag color={row.usageStatus === 'expired' ? 'error' : row.usedCount ? 'default' : 'success'}>{row.usedCount ? '已使用' : row.usageStatus === 'expired' ? '已过期' : '未使用'}</Tag> },
     { title: '使用次数', key: 'uses', width: 110, render: (_, row) => `${row.usedCount}/${row.maxUses}` },
     { title: '注册邮箱', key: 'emails', render: (_, row) => row.uses?.length ? row.uses.map(item => item.email).join('、') : '—' },
     { title: '操作', width: 80, render: (_, row) => <Button size="small" onClick={() => navigator.clipboard?.writeText(row.code)}>复制</Button> },
