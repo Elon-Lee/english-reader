@@ -61,6 +61,37 @@ class RedemptionService:
                     "revokedCount": int(row["revoked_count"]), "note": row["note"], "createdAt": timestamp(row["created_at"]),
                 } for row in self.accounts._many(cursor)]}
 
+    def admin_records(self, query: str = "", status: str = "", limit: Any = 20, offset: Any = 0) -> dict[str, Any]:
+        try:
+            size, start = max(1, min(100, int(limit))), max(0, int(offset))
+        except (TypeError, ValueError):
+            size, start = 20, 0
+        terms, values = [], []
+        if status in {"active", "redeemed", "revoked"}:
+            terms.append("rc.status=%s"); values.append(status)
+        if str(query or "").strip():
+            needle = "%" + str(query).strip()[:120] + "%"
+            terms.append("(rc.id ILIKE %s OR rc.code_prefix ILIKE %s OR b.id ILIKE %s OR u.email ILIKE %s OR cpv.display_name ILIKE %s)")
+            values.extend([needle] * 5)
+        where = "WHERE " + " AND ".join(terms) if terms else ""
+        source = """FROM commerce_redemption_codes rc
+            JOIN commerce_redemption_batches b ON b.id=rc.batch_id
+            JOIN commerce_product_versions cpv ON cpv.id=rc.product_version_id
+            LEFT JOIN users u ON u.id=rc.redeemed_by"""
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT COUNT(*) AS total {source} {where}", values)
+                total = int(self.accounts._one(cursor)["total"])
+                cursor.execute(f"""SELECT rc.id,rc.batch_id,rc.code_prefix,rc.status,rc.redeemed_by,rc.redeemed_at,rc.subscription_id,rc.created_at,
+                    cpv.display_name,u.email {source} {where} ORDER BY COALESCE(rc.redeemed_at,rc.created_at) DESC LIMIT %s OFFSET %s""",
+                    (*values, size, start))
+                rows = self.accounts._many(cursor)
+        return {"records": [{"id": row["id"], "batchId": row["batch_id"], "codePrefix": row["code_prefix"],
+            "status": row["status"], "userId": row["redeemed_by"], "email": row["email"],
+            "productName": row["display_name"], "subscriptionId": row["subscription_id"],
+            "redeemedAt": timestamp(row["redeemed_at"]), "createdAt": timestamp(row["created_at"])} for row in rows],
+            "total": total, "limit": size, "offset": start}
+
     def generate(self, actor_id: str, product_version_id: Any, count: Any, note: Any = "") -> dict[str, Any]:
         version_id = str(product_version_id or "").strip()
         try:

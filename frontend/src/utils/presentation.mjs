@@ -55,6 +55,7 @@ export function purchaseAction(product, authenticated, state) {
   if (!state || state.loading) return { label: '正在核对会员权益', disabled: true, loading: true }
   if (state.error?.code === 'membership_downgrade_not_allowed') return { label: '当前会员高于此方案', disabled: true }
   if (state.error) return { label: '重新核对权益', disabled: false, retry: true }
+  if (!(product.paymentMethods || []).length && product.redemptionEnabled === false) return { label: '暂未开放购买', disabled: true }
   if (state.preview?.changeType === 'renewal') return { label: `续费${product.shortName || product.name}`, disabled: false }
   if (state.preview?.changeType === 'upgrade') return { label: `升级到${product.shortName || product.name}`, disabled: false }
   return { label: '购买 / 兑换', disabled: false }

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRightOutlined, CheckCircleFilled, CustomerServiceOutlined, LockOutlined, PlayCircleFilled } from '@ant-design/icons'
-import { Alert, Button, Card, Col, Collapse, Empty, Input, Modal, Row, Skeleton, Space, Tag, Typography } from 'antd'
+import { Alert, Button, Card, Col, Collapse, Empty, Input, Modal, QRCode, Row, Skeleton, Space, Tag, Tooltip, Typography } from 'antd'
 
 import { getJson, postJson } from '../api/client'
 import usePurchasePreviews from '../hooks/usePurchasePreviews'
@@ -40,11 +40,11 @@ export function ProductCard({ product, authenticated, onPurchase, featured = fal
       <div className="public-plan-label"><Tag color={featured ? 'green' : 'default'}>{featured ? '推荐方案' : product.family === 'free' ? '免费体验' : '更多学习空间'}</Tag><Text className="public-plan-family">{product.family === 'pro' ? 'PRO' : product.family === 'free' ? 'FREE' : 'ADVANCED'}</Text></div>
       <div><Title level={3}>{product.shortName}</Title><Paragraph>{product.tagline}</Paragraph></div>
       <div className="public-price"><PriceDisplay product={product} /><span>{product.family === 'free' ? '永久免费' : ` / ${product.durationDays} 天`}</span></div>
-      <Text type="secondary">{product.family === 'free' ? '使用邀请码注册，验证邮箱后开始' : '单次购买，不自动续费'}</Text>
+      <Text type="secondary">{product.family === 'free' ? '使用邀请码注册，验证邮箱后开始' : '支持的支付方式按当前开放情况显示'}</Text>
       <PlanHighlights product={product} />
       {product.family === 'free'
         ? <Button block size="large" href={freeHref}>{action.label}</Button>
-        : <div className="public-plan-action"><Button block type={featured ? 'primary' : 'default'} size="large" loading={action.loading} disabled={action.disabled} onClick={() => action.retry ? onRetry() : onPurchase(product)}>{action.label}</Button>{state?.error && action.retry && <Text type="danger">权益暂时未能读取，请重试。</Text>}{!product.purchaseUrl && <Text type="secondary">暂未开放购买，可使用已有兑换码</Text>}</div>}
+        : <div className="public-plan-action"><Button block type={featured ? 'primary' : 'default'} size="large" loading={action.loading} disabled={action.disabled} onClick={() => action.retry ? onRetry() : onPurchase(product)}>{action.label}</Button>{state?.error && action.retry && <Text type="danger">权益暂时未能读取，请重试。</Text>}{!(product.paymentMethods || []).length && product.redemptionEnabled !== false && <Text type="secondary">暂未开放新购，可使用已有兑换码</Text>}</div>}
     </Space>
   </Card>
 }
@@ -90,6 +90,12 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
   const [previewRevision, setPreviewRevision] = useState(0)
   const [departed, setDeparted] = useState(false)
   const [recoveryError, setRecoveryError] = useState('')
+  const methods = product?.paymentMethods || []
+  const [paymentMethod, setPaymentMethod] = useState('')
+  const [alipayOrder, setAlipayOrder] = useState(null)
+  const [creatingPayment, setCreatingPayment] = useState(false)
+  const [paymentError, setPaymentError] = useState('')
+  const [clearingReminder, setClearingReminder] = useState(false)
   const redeemInput = useRef(null)
   const purchaseTracking = useRef(Promise.resolve())
   const trackingSequence = useRef(0)
@@ -115,12 +121,107 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
     return () => { trackingSequence.current += 1 }
   }, [product?.id, open, authenticated])
 
+  useEffect(() => {
+    setPaymentMethod(methods.includes('cloudcat') ? 'cloudcat' : methods[0] || '')
+    setAlipayOrder(null)
+    setPaymentError('')
+  }, [product?.id, open, methods.join(',')])
+
+  useEffect(() => {
+    if (paymentMethod !== 'cloudcat' || !departed || !authenticated || redeemResult) return undefined
+    const timer = setTimeout(() => redeemInput.current?.focus(), 120)
+    return () => clearTimeout(timer)
+  }, [paymentMethod, departed, authenticated, redeemResult])
+
+  useEffect(() => {
+    if (!open || !authenticated || !product?.id || !methods.includes('alipay')) return
+    const storageKey = `shiyue:alipay-order:${product.id}`
+    const orderId = sessionStorage.getItem(storageKey)
+    if (!orderId) return
+    let active = true
+    getJson(`/api/payments/alipay/orders/${encodeURIComponent(orderId)}`).then(order => {
+      if (!active) return
+      if (order.status === 'pending') {
+        setAlipayOrder(order)
+      } else {
+        sessionStorage.removeItem(storageKey)
+      }
+    }).catch(() => {
+      if (active) sessionStorage.removeItem(storageKey)
+    })
+    return () => { active = false }
+  }, [product?.id, open, authenticated, methods.join(',')])
+
+  useEffect(() => {
+    if (!product?.id || !alipayOrder?.orderId) return
+    const storageKey = `shiyue:alipay-order:${product.id}`
+    if (alipayOrder.status === 'pending') sessionStorage.setItem(storageKey, alipayOrder.orderId)
+    else sessionStorage.removeItem(storageKey)
+  }, [product?.id, alipayOrder?.orderId, alipayOrder?.status])
+
+  useEffect(() => {
+    if (!open || !alipayOrder?.orderId || alipayOrder.status !== 'pending') return undefined
+    let active = true
+    const poll = async () => {
+      try {
+        const result = await getJson(`/api/payments/alipay/orders/${encodeURIComponent(alipayOrder.orderId)}`)
+        if (!active) return
+        setAlipayOrder(current => ({ ...current, ...result }))
+        if (result.status === 'paid') {
+          setRedeemResult({ planName: product?.name || '会员', changeOrder: { changeType: 'first_purchase' }, endsAt: result.endsAt })
+          await clearPurchaseReminder()
+          try { await onRedeemed?.(result) } catch { /* Payment is already confirmed by the server. */ }
+        }
+      } catch (failure) { if (active) setPaymentError(failure.message || '订单状态查询失败，请稍后重试。') }
+    }
+    const timer = setInterval(poll, 3000)
+    return () => { active = false; clearInterval(timer) }
+  }, [open, alipayOrder?.orderId, alipayOrder?.status, product?.id])
+
+  const createAlipayOrder = async () => {
+    if (creatingPayment || !product?.id) return
+    setCreatingPayment(true); setPaymentError('')
+    try {
+      const result = await postJson('/api/payments/alipay/orders', { productVersionId: product.id, idempotencyKey: `alipay-${crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`}` })
+      setAlipayOrder(result)
+    } catch (failure) { setPaymentError(failure.message || '暂时无法创建支付宝订单。') }
+    finally { setCreatingPayment(false) }
+  }
+
+  const simulateAlipayPayment = async () => {
+    if (!alipayOrder?.orderId) return
+    setPaymentError('')
+    try {
+      const result = await postJson(`/api/payments/alipay/orders/${encodeURIComponent(alipayOrder.orderId)}/simulate-paid`, {})
+      setAlipayOrder(result)
+      if (result.status === 'paid') {
+        setRedeemResult({ planName: product?.name || '会员', changeOrder: { changeType: 'first_purchase' }, endsAt: result.endsAt })
+        await clearPurchaseReminder()
+        try { await onRedeemed?.(result) } catch { /* Simulated payment already completed locally. */ }
+      }
+    } catch (failure) { setPaymentError(failure.message || '模拟付款失败') }
+  }
+
   const depart = () => {
     const sequence = trackingSequence.current
     setDeparted(true)
     purchaseTracking.current = purchaseTracking.current.then(() => updateJourney({ action: 'purchase_departure', productVersionId: product.id, idempotencyKey: `depart-${crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`}` }))
       .then(() => { if (sequence === trackingSequence.current) setRecoveryError('') })
       .catch(() => { if (sequence === trackingSequence.current) setRecoveryError('暂时无法保存购买入口，请保留此页面，付款后回到这里兑换。') })
+  }
+
+  const clearPurchaseReminder = async () => {
+    if (clearingReminder) return
+    setClearingReminder(true)
+    try {
+      await purchaseTracking.current.catch(() => {})
+      await updateJourney({ action: 'clear_purchase' })
+      setRecoveryError('')
+    } catch (failure) {
+      setRecoveryError(failure.message || '会员已开通，但购买提醒暂未清除。请重试。')
+    } finally {
+      setClearingReminder(false)
+    }
   }
 
   const submitRedeem = async () => {
@@ -144,6 +245,7 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
       const result = await postJson('/api/membership/redeem', { code, idempotencyKey: redeemAttempt.current.key })
       setRedeemResult(result)
       setRedeemCode('')
+      await clearPurchaseReminder()
       void refreshJourney().catch(() => {})
       try { await onRedeemed?.(result) } catch { /* Redemption already succeeded; keep its confirmation visible. */ }
     } catch (error) {
@@ -159,22 +261,44 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
     {product && <div className="public-purchase-modal-content">
       <Title level={3}>{product.name}</Title>
       <div className="public-price"><PriceDisplay product={product} /><span> / {product.durationDays} 天</span></div>
-      <div className="public-purchase-modal-steps"><span>1. 云猫付款并复制自动发放的兑换码</span><span>2. 回到这里粘贴兑换码，立即开通</span></div>
-      {preview && <Alert showIcon type="info" message={preview.changeType === 'upgrade' ? `立即升级到${preview.targetPlan.name}` : preview.changeType === 'renewal' ? `立即续费并延长 ${preview.durationDays} 天` : `立即开通${preview.targetPlan.name} ${preview.durationDays}天`} description={preview.changeType === 'upgrade' ? `按套餐价值折算：当前剩余权益约折算 ${preview.carryDays} 天${preview.targetPlan.name}，有效期预计至 ${displayDate(preview.endsAt)}` : preview.changeType === 'renewal' ? `续费后会员有效期延长至 ${displayDate(preview.endsAt)}` : `立即生效，预计有效至 ${displayDate(preview.endsAt)}`} />}
+      <div className="public-purchase-modal-steps"><span>1. {paymentMethod === 'alipay' ? alipayOrder ? '支付宝订单已创建，等待付款确认' : '创建支付宝订单并付款' : paymentMethod === 'cloudcat' ? '前往云猫完成付款' : '选择一种支付方式'}</span><span>2. {paymentMethod === 'alipay' ? '付款确认后会员权益自动开通' : paymentMethod === 'cloudcat' ? '返回此处输入云猫兑换码' : '付款后按页面提示完成开通'}</span></div>
+      {preview && <div className="purchase-entitlement-preview" role="group" aria-label="权益变更预览">
+        <div className="purchase-entitlement-summary"><Text strong>{preview.changeType === 'upgrade' ? `升级至${preview.targetPlan.name}` : preview.changeType === 'renewal' ? `续费 +${preview.durationDays} 天` : `开通 ${preview.durationDays} 天`}</Text><Text type="secondary">预计到期 {displayDate(preview.endsAt)}</Text></div>
+        {preview.changeType === 'upgrade' && <Text className="purchase-entitlement-detail" type="secondary">当前剩余权益可折算约 {preview.carryDays} 天{preview.targetPlan.name}</Text>}
+      </div>}
       {authenticated && !preview && !previewError && <Skeleton active title={false} paragraph={{ rows: 2 }} />}
       {previewError && <Alert showIcon type={previewCode === 'membership_downgrade_not_allowed' ? 'info' : 'error'} message={previewCode === 'membership_downgrade_not_allowed' ? '当前会员高于此方案' : '暂时无法核对权益'} description={previewError} action={previewCode !== 'membership_downgrade_not_allowed' && <Button onClick={() => setPreviewRevision(value => value + 1)}>重试</Button>} />}
-      {authenticated && departed && !redeemResult && <Alert showIcon type="info" message="已前往云猫，付款后请回来兑换" description="此处无法自动核实外部付款。已付款请复制云猫发放的兑换码，无需再次购买。" />}
-      {recoveryError && <Alert showIcon type="warning" message={recoveryError} />}
-      {authenticated ? <Space direction="vertical" style={{ width: '100%' }}><Button block type={departed ? 'default' : 'primary'} size="large" href={product.purchaseUrl || undefined} target="_blank" rel="noreferrer" onClick={depart} disabled={!product.purchaseUrl || Boolean(previewError) || !preview || Boolean(redeemResult)}>{departed ? '再次前往云猫商品页' : '打开云猫购买'}</Button>{!redeemResult && <Button block type="link" disabled={!preview || Boolean(previewError)} onClick={() => redeemInput.current?.focus()}>已购买，直接输入兑换码 ↓</Button>}</Space> : <Button block type="primary" size="large" href={loginHref}>登录后核对方案</Button>}
-      <Paragraph className="purchase-reassurance">由云猫完成收款并发放兑换码，兑换后在拾页生效；不自动续费。付款前请查看<a href="/refunds" target="_blank" rel="noreferrer">退款规则</a>。{!product.purchaseUrl && '此方案暂未开放新购，已有兑换码仍可开通。'}</Paragraph>
-      <div className="public-purchase-modal-redeem">
-        <Text strong>已有兑换码？</Text>
-        {authenticated
-          ? <><Input ref={redeemInput} aria-label="云猫兑换码" value={redeemCode} status={redeemError ? 'error' : undefined} onChange={event => { setRedeemCode(event.target.value.toUpperCase()); setRedeemError('') }} onPressEnter={submitRedeem} placeholder="SY- 后接 32 位兑换码" maxLength={35} autoComplete="off" disabled={redeeming || Boolean(redeemResult) || !preview || Boolean(previewError)} /><Button block type={departed ? 'primary' : 'default'} onClick={submitRedeem} loading={redeeming} disabled={Boolean(redeemResult) || !preview || Boolean(previewError)}>{redeemResult ? '兑换成功' : '立即兑换'}</Button></>
-          : <><Text type="secondary">登录后即可将权益开通到当前账号。</Text><Button block href={`/login?next=${encodeURIComponent(`${returnTo}${returnTo.includes('?') ? '&' : '?'}purchase=${product.slug}`)}`}>登录后继续</Button></>}
+      {recoveryError && <Alert showIcon type="warning" message={recoveryError} action={<Button loading={clearingReminder} onClick={clearPurchaseReminder}>重试清除提醒</Button>} />}
+      {authenticated && !redeemResult && <Space direction="vertical" style={{ width: '100%' }}>
+        {methods.length > 0 && <div className="purchase-payment-methods">
+          {methods.includes('alipay') && <Button className={`purchase-payment-method alipay ${paymentMethod === 'alipay' ? 'is-active' : ''}`} block disabled={!preview || Boolean(previewError) || creatingPayment} loading={creatingPayment} onClick={() => { setPaymentMethod('alipay'); setPaymentError(''); if (!alipayOrder) void createAlipayOrder() }}>
+            <img src="/assets/payment-alipay.svg" alt="" /><span><b>{alipayOrder ? '支付宝订单' : '支付宝支付'}</b><small>{alipayOrder ? '查看付款状态' : '创建订单，扫码付款'}</small></span>
+          </Button>}
+          {methods.includes('cloudcat') && <Button className={`purchase-payment-method cloudcat ${paymentMethod === 'cloudcat' ? 'is-active' : ''}`} block href={product.purchaseUrl || undefined} target="_blank" rel="noreferrer" disabled={!product.purchaseUrl || Boolean(previewError) || !preview} onClick={() => { setPaymentMethod('cloudcat'); setPaymentError(''); depart() }}>
+            <img src="/assets/payment-cloudcat.svg" alt="" /><span><b>云猫购买</b><small>前往云猫付款，回来兑换</small></span>
+          </Button>}
+        </div>}
+        {paymentMethod === 'alipay' && alipayOrder && <Card className="alipay-order-panel" size="small" title={<Space><span>支付宝订单</span><Tag color={alipayOrder.status === 'paid' ? 'success' : 'processing'}>{alipayOrder.status === 'paid' ? '已完成' : '待付款'}</Tag></Space>}>
+          <div className="alipay-order-meta"><span>订单号</span><b>{alipayOrder.orderId}</b><span>应付金额</span><b>{formatPrice(alipayOrder.amountCents ?? product.amountCents)}</b></div>
+          {alipayOrder.testMode && alipayOrder.status === 'pending' && <Alert showIcon type="warning" message="本地模拟支付，不会扣款" description="此订单不会连接支付宝或产生真实交易。" action={<Button type="primary" onClick={simulateAlipayPayment}>模拟付款成功</Button>} />}
+          {(alipayOrder.qrCode || alipayOrder.testMode) && alipayOrder.status === 'pending' && <Space className="alipay-qr" direction="vertical" align="center"><Text strong>{alipayOrder.testMode ? '本地模拟二维码预览' : '使用支付宝扫描付款'}</Text><QRCode value={alipayOrder.testMode ? `SHIYUE_LOCAL_TEST_PAYMENT:${alipayOrder.orderId}` : alipayOrder.qrCode} size={192} /><Text type="secondary">{alipayOrder.testMode ? '仅用于查看界面，不可用支付宝扫码付款。请使用“模拟付款成功”继续。' : '付款结果自动查询，请勿重复付款。'}</Text></Space>}
+          {alipayOrder.status === 'pending' && <Text className="alipay-pending-note" type="secondary">保持此页面打开，系统会自动查询订单状态。</Text>}
+        </Card>}
+        {paymentMethod === 'alipay' && alipayOrder?.status === 'paid' && <Alert showIcon type="success" message="支付宝付款成功，会员权益已开通。" />}
+        {paymentMethod === 'alipay' && paymentError && <Alert showIcon type="error" message={paymentError} action={alipayOrder?.orderId ? <Button onClick={() => getJson(`/api/payments/alipay/orders/${encodeURIComponent(alipayOrder.orderId)}`).then(setAlipayOrder).catch(failure => setPaymentError(failure.message || '订单查询失败'))}>重试查询</Button> : undefined} />}
+        {paymentMethod === 'cloudcat' && product.redemptionEnabled !== false && <Button block type="link" disabled={!preview || Boolean(previewError)} onClick={() => redeemInput.current?.focus()}>已有兑换码，直接开通 ↓</Button>}
+      </Space>}
+      {!authenticated && <Button block type="primary" size="large" href={loginHref}>登录后核对方案</Button>}
+      {paymentMethod === 'alipay' && <Paragraph className="purchase-reassurance">支付宝付款由拾页服务端确认后开通；不自动续费。付款前请查看<a href="/refunds" target="_blank" rel="noreferrer">退款规则</a>。</Paragraph>}
+      {paymentMethod === 'cloudcat' && <Paragraph className="purchase-reassurance">云猫付款后取得兑换码，在拾页兑换开通；不自动续费。付款前请查看<a href="/refunds" target="_blank" rel="noreferrer">退款规则</a>。</Paragraph>}
+      {(paymentMethod === 'cloudcat' || !methods.length) && !redeemResult && <div className="public-purchase-modal-redeem">
+        {product.redemptionEnabled !== false && <Text strong>已有兑换码？</Text>}
+        {product.redemptionEnabled !== false && authenticated
+          ? <><Tooltip title="付款后请从云猫订单复制兑换码。兑换码格式为 SY- 加 32 位字母或数字。"><Input ref={redeemInput} aria-label="云猫兑换码" value={redeemCode} status={redeemError ? 'error' : undefined} onChange={event => { setRedeemCode(event.target.value.toUpperCase()); setRedeemError('') }} onPressEnter={submitRedeem} placeholder="粘贴兑换码（SY- 开头）" maxLength={35} autoComplete="off" disabled={redeeming || Boolean(redeemResult) || !preview || Boolean(previewError)} /></Tooltip><Button block type={departed ? 'primary' : 'default'} onClick={submitRedeem} loading={redeeming} disabled={Boolean(redeemResult) || !preview || Boolean(previewError)}>{redeemResult ? '兑换成功' : '立即兑换'}</Button></>
+          : product.redemptionEnabled !== false ? <><Text type="secondary">登录后即可将权益开通到当前账号。</Text><Button block href={`/login?next=${encodeURIComponent(`${returnTo}${returnTo.includes('?') ? '&' : '?'}purchase=${product.slug}`)}`}>登录后继续</Button></> : null}
         {redeemError && <Alert showIcon type="error" message={redeemError} description={<span>核对兑换码和登录账号后重试。仍无法开通时，请保留云猫订单号、购买时间和注册邮箱，<a href="/support#payment" target="_blank" rel="noreferrer">联系支持</a>。</span>} />}
-        {redeemResult && <Alert showIcon type="success" message={`${redeemResult.planName}已处理`} description={`${redeemResult.changeOrder?.changeType === 'renewal' ? '已完成同级续费' : redeemResult.changeOrder?.changeType === 'upgrade' ? `已立即升级，折算约 ${redeemResult.changeOrder?.carryDays || 0} 天` : '已开通'}；预计有效至 ${displayDate(redeemResult.endsAt)}`} action={<Button type="link" href="/app?screen=membership">查看会员</Button>} />}
-      </div>
+      </div>}
+      {redeemResult && <Alert showIcon type="success" message={`${redeemResult.planName}已处理`} description={`${redeemResult.changeOrder?.changeType === 'renewal' ? '已完成同级续费' : redeemResult.changeOrder?.changeType === 'upgrade' ? `已立即升级，折算约 ${redeemResult.changeOrder?.carryDays || 0} 天` : '已开通'}；预计有效至 ${displayDate(redeemResult.endsAt)}`} action={<Button type="primary" icon={<ArrowRightOutlined />} href="/app?screen=membership">前往会员中心</Button>} />}
     </div>}
   </Modal>
 }

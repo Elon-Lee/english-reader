@@ -52,7 +52,7 @@ def main() -> int:
     check("/api/word-tts" in entry and "controlsList" in entry, "reader pronunciation or protected media controls missing")
     check("/api/admin/catalog/sources" in entry and "/api/deployment/config" in entry, "platform operations migration missing")
     check("/api/commerce/products" in entry and "/api/membership/redeem" in entry and "purchaseUrl" in entry, "CloudCat commerce redemption integration missing")
-    check("购买 / 兑换" in entry and "打开云猫购买" in entry and "已有兑换码？" in entry, "CloudCat purchase flow must open an in-place purchase and redemption dialog")
+    check("购买 / 兑换" in entry and "云猫购买" in entry and "purchaseUrl" in entry and "已有兑换码？" in entry, "CloudCat purchase flow must open an in-place purchase and redemption dialog")
     check("public-purchase-modal" in entry and "云猫兑换码" in entry, "in-place CloudCat redemption dialog missing")
     public_site = PUBLIC_SITE.read_text(encoding="utf-8")
     check(re.search(r"import\s*\{[^}]*\bInput\b[^}]*\}\s*from\s*['\"]antd['\"]", public_site, re.S), "purchase redemption input must be imported from Ant Design")

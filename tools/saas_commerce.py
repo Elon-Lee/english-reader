@@ -12,8 +12,9 @@ from saas_membership import FEATURE_DEFINITIONS, FEATURES, as_json, timestamp
 
 
 class CommerceService:
-    def __init__(self, accounts: SaaSService):
+    def __init__(self, accounts: SaaSService, payments: Any | None = None):
         self.accounts = accounts
+        self.payments = payments
 
     @staticmethod
     def _benefits(value: Any) -> list[str]:
@@ -140,15 +141,15 @@ class CommerceService:
                     ORDER BY cp.display_order,cpv.amount_cents"""
                 )
                 products = [self._version(row) for row in self.accounts._many(cursor)]
+        payment = self.payments.public_config() if self.payments else {"methods": ["cloudcat"], "redemptionEnabled": True, "automaticRenewal": False}
+        for product in products:
+            product["paymentMethods"] = [method for method in payment["methods"] if method != "cloudcat" or bool(product.get("purchaseUrl"))]
+            product["redemptionEnabled"] = payment["redemptionEnabled"]
         return {
             "products": products,
             "support": {"type": "QQ", "value": "289614546", "response": "1 个工作日内响应"},
-            "payment": {
-                "configured": any(item["purchaseUrl"] for item in products),
-                "methods": ["cloudcat"],
-                "automaticRenewal": False,
-                "notice": "通过云猫寄售单次购买，获得兑换码后在拾页开通固定期限权益；不自动续费。",
-            },
+            "payment": {**payment, "configured": bool(payment["methods"]),
+                "notice": "支付宝付款成功后由拾页确认开通；云猫购买后使用兑换码开通。均为单次购买，不自动续费。"},
         }
 
     def product(self, slug: str) -> dict[str, Any]:

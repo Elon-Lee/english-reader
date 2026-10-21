@@ -48,6 +48,7 @@ from saas_billing import PaddleBillingService
 from saas_cache import SaaSCache
 from saas_commerce import CommerceService
 from saas_redemptions import RedemptionService
+from saas_payments import AlipayService
 from youtube_subtitles import has_translated_english_track,select_chinese_track,select_native_english_track
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -95,7 +96,8 @@ WORKSPACE_IMPORTS=WorkspaceImportService(SAAS,MEMBERSHIPS,MEDIA)
 OFFICIAL_IMPORTS=WorkspaceImportService(SAAS,MEMBERSHIPS,MEDIA,official=True)
 WORKSPACE_AI=WorkspaceAIService(SAAS,MEMBERSHIPS)
 BILLING=PaddleBillingService(SAAS,MEMBERSHIPS)
-COMMERCE=CommerceService(SAAS)
+PAYMENTS=AlipayService(SAAS,MEMBERSHIPS)
+COMMERCE=CommerceService(SAAS,PAYMENTS)
 REDEMPTIONS=RedemptionService(SAAS,MEMBERSHIPS)
 CACHE_SERVICE=SaaSCache()
 RATE_LIMIT_LOCK=threading.Lock()
@@ -232,6 +234,12 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         route=urlsplit(self.path)
+        if SAAS.enabled and route.path.startswith("/api/payments/alipay/orders/"):
+            if not self.require_saas_user(verified=True):return
+            try:self.reply(PAYMENTS.order_status(str(self._saas_session["id"]),unquote(route.path.rsplit("/",1)[1])))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"alipay_unavailable","error":str(exc)},503)
+            return
         if route.path in {"/terms","/privacy","/content-policy","/refunds","/copyright"}:
             if SAAS.enabled:self.reply({"code":"backend_only","error":"该端口仅提供后台 API。"},404)
             else:self.serve_legal_page(route.path)
@@ -441,6 +449,21 @@ class Handler(SimpleHTTPRequestHandler):
     def do_POST(self):
         route=urlsplit(self.path)
         if not self.rate_limit(route.path):return
+        if SAAS.enabled and route.path=="/api/payments/alipay/orders":
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                item=self.json_body();self.reply(PAYMENTS.create_order(str(self._saas_session["id"]),item.get("productVersionId"),item.get("idempotencyKey")),201)
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"alipay_unavailable","error":str(exc)},503)
+            return
+        if SAAS.enabled and route.path.startswith("/api/payments/alipay/orders/") and route.path.endswith("/simulate-paid"):
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                order_id=unquote(route.path[len("/api/payments/alipay/orders/"):-len("/simulate-paid")].rstrip("/"))
+                self.reply(PAYMENTS.simulate_paid(str(self._saas_session["id"]),order_id))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"alipay_unavailable","error":str(exc)},503)
+            return
         if SAAS.enabled and route.path=="/api/commerce/webhooks/mbdpay":
             self.reply({"code":"payment_provider_retired","error":"该支付通知接口已停用。"},410);return
         if SAAS.enabled and route.path=="/api/billing/webhooks/paddle":
@@ -452,6 +475,18 @@ class Handler(SimpleHTTPRequestHandler):
             except SaaSError as exc:self.reply(exc.payload(),exc.status)
             except SaaSConfigurationError as exc:self.reply({"code":"billing_unavailable","error":str(exc)},503)
             except Exception:self.reply({"code":"billing_webhook_failed","error":"支付通知处理失败，Paddle 将自动重试。"},500)
+            return
+        if SAAS.enabled and route.path=="/api/payments/alipay/notify":
+            length=int(self.headers.get("Content-Length","0") or 0)
+            if length<=0 or length>64*1024:
+                self.reply({"code":"invalid_alipay_notify","error":"支付宝通知请求无效。"},400);return
+            try:
+                values=parse_qs(self.rfile.read(length).decode("utf-8"),keep_blank_values=True)
+                PAYMENTS.notify({key:items[-1] for key,items in values.items()})
+                self.reply_text("success")
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"alipay_unavailable","error":str(exc)},503)
+            except Exception:self.reply({"code":"alipay_notify_failed","error":"支付通知处理失败，请稍后重试。"},500)
             return
         if route.path.startswith("/api/auth/"):
             self.auth_post(route.path); return
@@ -495,6 +530,8 @@ class Handler(SimpleHTTPRequestHandler):
         if SAAS.enabled and route.path=="/api/membership/redeem":
             if not self.require_saas_user(verified=True) or not self.require_csrf():return
             try:
+                if not PAYMENTS.public_config()["redemptionEnabled"]:
+                    raise SaaSError("redemption_disabled", "兑换码开通当前暂未开放。", 503)
                 item=self.json_body()
                 self.reply(REDEMPTIONS.redeem(str(self._saas_session["id"]),item.get("code"),item.get("idempotencyKey")))
             except SaaSError as exc:self.reply(exc.payload(),exc.status)
@@ -838,6 +875,11 @@ class Handler(SimpleHTTPRequestHandler):
             if path.startswith("/api/admin/invitation-batches/"):self.reply(ADMIN.invitation_batch_detail(unquote(path.rsplit("/",1)[1])));return
             if path=="/api/admin/plan-versions":self.reply(ADMIN.plan_versions());return
             if path=="/api/admin/commerce/products":self.reply(COMMERCE.admin_catalog());return
+            if path=="/api/admin/payment-config":self.reply(PAYMENTS.admin_config());return
+            if path=="/api/admin/payment-orders":self.reply(PAYMENTS.list_orders((query.get("q")or[""])[0],(query.get("status")or[""])[0],(query.get("limit")or[20])[0],(query.get("offset")or[0])[0]));return
+            if path.startswith("/api/admin/payment-orders/"):
+                self.reply(PAYMENTS.admin_order_detail(unquote(path.rsplit("/",1)[1])));return
+            if path=="/api/admin/commerce/redemption-records":self.reply(REDEMPTIONS.admin_records((query.get("q")or[""])[0],(query.get("status")or[""])[0],(query.get("limit")or[20])[0],(query.get("offset")or[0])[0]));return
             if path=="/api/admin/commerce/entitlements":self.reply(COMMERCE.entitlement_catalog());return
             if path=="/api/admin/catalog/sources":self.reply(CATALOG.review_sources());return
             if path=="/api/admin/audit":self.reply(ADMIN.audit((query.get("limit")or[20])[0],(query.get("q")or[""])[0],(query.get("action")or[""])[0],(query.get("offset")or[0])[0]));return
@@ -865,6 +907,12 @@ class Handler(SimpleHTTPRequestHandler):
                 self.reply(ADMIN.create_invitations(actor_id,str(item.get("code","")).strip(),item.get("maxUses",1),item.get("count",1),item.get("expiresAt"),str(item.get("note","")or""),str(item.get("channel","")or"")),201);return
             if path=="/api/admin/platform-config":
                 self.reply(ADMIN.update_platform_config(actor_id,item));return
+            if path=="/api/admin/payment-config":
+                self.reply(PAYMENTS.update_config(actor_id,item));return
+            if path.startswith("/api/admin/payment-orders/") and path.endswith("/refund"):
+                order_id=unquote(path[len("/api/admin/payment-orders/"):-len("/refund")].rstrip("/"));self.reply(PAYMENTS.refund(actor_id,order_id,str(item.get("reason", ""))));return
+            if path.startswith("/api/admin/payment-orders/") and path.endswith("/sync-refund"):
+                order_id=unquote(path[len("/api/admin/payment-orders/"):-len("/sync-refund")].rstrip("/"));self.reply(PAYMENTS.sync_refund(actor_id,order_id));return
             if path=="/api/admin/quotas/adjust":
                 key=str(item.get("idempotencyKey","")).strip() or hashlib.sha256(json.dumps(item,sort_keys=True).encode()).hexdigest()
                 self.reply(ADMIN.adjust_quota(actor_id,str(item.get("userId","")).strip(),str(item.get("feature","")).strip(),item.get("quantity"),str(item.get("reason","")or""),key));return
@@ -1507,6 +1555,10 @@ class Handler(SimpleHTTPRequestHandler):
         if encoded:self.send_header("Content-Encoding","gzip");self.send_header("Vary","Accept-Encoding")
         for key,value in extra_headers:self.send_header(key,value)
         self.send_header("Content-Length",str(len(body))); self.end_headers(); self.wfile.write(body)
+    def reply_text(self,value,status=200):
+        body=str(value).encode("utf-8")
+        self.send_response(status);self.send_header("Content-Type","text/plain; charset=utf-8");self.send_header("Cache-Control","no-store")
+        self.send_header("Content-Length",str(len(body)));self.end_headers();self.wfile.write(body)
     def can_manage_platform(self):
         return DEPLOYMENT_MODE=="local" and RUNTIME_MODE!="reader" and SAAS.enabled and self.client_address[0] in {"127.0.0.1","::1"} and bool(getattr(self,"_saas_session",{}).get("is_admin"))
 

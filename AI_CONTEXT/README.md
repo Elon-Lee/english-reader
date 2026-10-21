@@ -19,6 +19,8 @@
 
 ## 全局完成状态
 
+- 2026-10-21 本地支付改造：购买方式由运营后台动态配置；新增支付宝当面付扫码、服务端异步通知验签/查单、幂等开通、待支付订单恢复、支付宝订单退款与查退款，以及拾页兑换记录管理。正式本地库在备份校验后应用 migration `0041` 并重启 8790；支付 PostgreSQL 集成 4 项、commerce 回归 13 项、HTTP smoke、RSA2/审批/退款单测、构建和前端检查通过。当前 8790 开启仅限本地的模拟支付，运营后台可启用支付宝并走无扣款的下单/开通/退款流程；个人开发者应用已创建但真实支付产品尚未获批，未部署生产。详见 `tasks/payments/HANDOFF.md`。
+
 - 2026-10-21 运营后台本地调整：默认打开概览，转化报表并入概览；内容审核支持批量发布，套餐默认筛选销售中，空版本或全草稿的未上架套餐可删除，待验证账号可标记已验证或删除，邀请码可一键清理过期未用码并删除被清空的批次，审计记录支持操作/关键词筛选与服务端分页。新增回归覆盖删除套餐 404 和空批次清理；21 项隔离 PostgreSQL 回归及前端构建/检查通过；尚未发布生产。详见 platform-operations、backend-saas、pc-workspace。
 
 - 2026-10-21 修复“上传官方内容”跨库系列/标签 ID 不同引发的 slug 唯一键冲突；任务 #25273 已重放成功，6 本内容进入线上待审核、112 个媒体资产同步，SaaS 健康。详见 platform-operations。
@@ -87,6 +89,7 @@
 | 阅读器、媒体、字幕、快捷键、词典 | `tasks/reader/HANDOFF.md` |
 | 账号、会员、数据库、API、安全 | `tasks/backend-saas/HANDOFF.md` |
 | 公开官网、商品版本、折扣、云猫寄售、套餐兑换 | `tasks/public-commerce/HANDOFF.md` |
+| 支付方式配置、支付宝订单/退款、兑换记录管理 | `tasks/payments/HANDOFF.md` |
 | 文件/YouTube 导入、任务进度、媒体处理 | `tasks/import-media/HANDOFF.md` |
 | 运营后台、AI 配置、远程部署 | `tasks/platform-operations/HANDOFF.md` |
 | 移动端适配与触摸交互 | `tasks/mobile/HANDOFF.md` |

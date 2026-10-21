@@ -9,6 +9,7 @@ import CatalogModeration from '../components/CatalogModeration'
 import MediaAssetsAdmin from '../components/MediaAssetsAdmin'
 import CommerceAdmin from '../components/CommerceAdmin'
 import RedemptionAdmin from '../components/RedemptionAdmin'
+import { PaymentMethodSettings, PaymentOrdersAdmin, RedemptionRecordsAdmin } from '../components/PaymentOperations'
 import JourneyReport from '../components/JourneyReport'
 
 const { Paragraph, Text, Title } = Typography
@@ -99,6 +100,9 @@ export default function AdminPage({ messageApi, adminData, onUpdateUserStatus, o
     { key: 'catalog', label: '内容管理', children: activeTab === 'catalog' ? <CatalogModeration messageApi={messageApi} /> : null },
     { key: 'plans', label: '套餐管理', children: <Card><CommerceAdmin products={adminData?.commerceProducts || []} entitlements={adminData?.commerceEntitlements || { builtIn: [], configured: [] }} onCreateProduct={onCreateCommerceProduct} onCreateVersion={onCreateCommerceVersion} onPublishVersion={onPublishCommerceVersion} onSetProductActive={onSetCommerceProductActive} onDeleteProduct={onDeleteCommerceProduct} /></Card> },
     { key: 'redemptions', label: '兑换码库存', children: <RedemptionAdmin products={adminData?.commerceProducts || []} /> },
+    { key: 'redemption-records', label: '兑换记录', children: activeTab === 'redemption-records' ? <RedemptionRecordsAdmin /> : null },
+    { key: 'payment-settings', label: '支付方式', children: activeTab === 'payment-settings' ? <PaymentMethodSettings /> : null },
+    { key: 'payment-orders', label: '支付宝订单', children: activeTab === 'payment-orders' ? <PaymentOrdersAdmin /> : null },
     { key: 'benefits', label: '套餐内容', children: <BenefitAdmin entitlements={adminData?.commerceEntitlements || { builtIn: [], configured: [] }} onCreate={onCreateConfiguredBenefit} onUpdate={onUpdateConfiguredBenefit} /> },
     { key: 'users', label: '用户与订阅', children: <Card title="用户与订阅" extra={<Button onClick={openOrder}>创建人工订阅</Button>}><Table rowKey="id" columns={columns} dataSource={users} pagination={{ pageSize: 8 }} scroll={{ x: 860 }} /></Card> },
     { key: 'invites', label: '邀请码', children: <Card title="邀请码创建记录" extra={<Space wrap><Input.Search allowClear placeholder="搜索批次备注、渠道或邀请码" value={inviteQuery} onChange={event => { setInviteQuery(event.target.value); setInvitePage(1) }} style={{ width: 290 }} /><Button danger onClick={removeExpiredInvitations}>删除过期邀请码</Button><Button type="primary" icon={<PlusOutlined />} onClick={() => setInviteOpen(true)}>创建邀请码</Button></Space>}><Table rowKey="id" columns={invitationColumns} dataSource={inviteData.batches || []} pagination={false} locale={{ emptyText: <Empty description="暂无邀请码创建记录" /> }} />{inviteData.total > invitePageSize && <Pagination className="admin-invite-pagination" current={invitePage} pageSize={invitePageSize} total={inviteData.total} showSizeChanger={false} onChange={setInvitePage} />}</Card> },
