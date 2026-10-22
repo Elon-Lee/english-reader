@@ -99,6 +99,79 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         self.assertEqual(self.workspace.list_books(other)["books"],[])
         repeat=self.imports.complete(owner,task_id);self.assertTrue(repeat["idempotent"])
 
+    def test_document_companion_audio_variant_isolation_idempotency_and_delete(self):
+        owner,other=str(self.owner['id']),str(self.other['id'])
+        task=self.imports.create(owner,'text','Paired','paired.txt','paired-document')['task']['id']
+        self.imports.upload(owner,task,'paired.txt',b'First sentence. Another sentence.','text/plain')
+        with patch.object(self.imports,'audio_duration',return_value=4.2):
+            with self.assertRaises(SaaSError):self.imports.upload_audio(other,task,'paired.mp3',b'audio')
+            with self.assertRaises(SaaSError):self.imports.upload_audio(owner,task,'wrong.mp3',b'audio')
+            self.imports.upload_audio(owner,task,'paired.mp3',b'audio')
+            self.imports.upload_audio(owner,task,'paired.mp3',b'audio')
+            with self.assertRaises(SaaSError):self.imports.upload_audio(owner,task,'paired.mp3',b'different')
+            with patch.object(self.imports,'_align_document_audio',side_effect=lambda data,*args:data) as align:
+                done=self.imports.complete(owner,task)['task']
+                align.assert_called_once()
+        book=self.workspace.reader(owner,done['outputBookId'])['book']
+        self.assertEqual(book['resourceType'],'audio');self.assertEqual(book['duration'],4.2)
+        variants=book['mediaAssets'][0]['variants'];self.assertEqual(len(variants),1)
+        self.assertEqual(variants[0]['contentType'],'audio/mpeg')
+        with self.assertRaises(SaaSError):self.workspace.reader(other,book['id'])
+        with self.assertRaises(SaaSError):self.imports.upload_audio(owner,task,'paired.mp3',b'audio')
+        self.workspace.delete_book(owner,book['id'],book['title'])
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT deleted_at FROM asset_variants WHERE asset_id=%s',(done['sourceAssetId'],))
+                self.assertIsNotNone(cursor.fetchone()[0])
+
+    def test_document_alignment_rechecks_cancellation_before_starting_processor(self):
+        owner=str(self.owner['id'])
+        task=self.imports.create(owner,'text','Cancel','cancel.txt','cancel-alignment')['task']['id']
+        self.imports.cancel(owner,task)
+        model_home=Path(self.temp.name)/'ctc-model';checkpoint=model_home/'hub/checkpoints'/MODEL_FILE
+        checkpoint.parent.mkdir(parents=True,exist_ok=True);checkpoint.write_bytes(b'test model')
+        with patch.dict(os.environ,{'SHIYUE_CTC_PYTHON':sys.executable,'SHIYUE_CTC_MODEL_HOME':str(model_home)}):
+            with patch('saas_imports.subprocess.run') as processor:
+                with self.assertRaises(SaaSError) as error:
+                    self.imports._align_document_audio({'sentences':[]},Path('unused.mp3'),task,owner)
+                self.assertEqual(error.exception.code,'import_task_terminal')
+                processor.assert_not_called()
+
+    def test_document_alignment_requires_installed_acoustic_model(self):
+        with patch.dict(os.environ,{'SHIYUE_CTC_MODEL_HOME':str(Path(self.temp.name)/'missing-ctc')}):
+            with self.assertRaises(SaaSError) as error:
+                self.imports._align_document_audio({'sentences':[]},Path('unused.mp3'),'unused',str(self.owner['id']))
+            self.assertEqual(error.exception.code,'alignment_unavailable')
+
+    def test_document_alignment_submission_is_async_and_worker_failure_is_pollable(self):
+        owner,other=str(self.owner['id']),str(self.other['id'])
+        task=self.imports.create(owner,'text','Async','async.txt','async-document')['task']['id']
+        self.imports.upload(owner,task,'async.txt',b'A real sentence.','text/plain')
+        with patch.object(self.imports,'audio_duration',return_value=4.2):
+            self.imports.upload_audio(owner,task,'async.mp3',b'audio')
+            with self.assertRaises(SaaSError):self.imports.submit_complete(other,task)
+            with patch('saas_imports.threading.Thread') as thread:
+                submitted=self.imports.submit_complete(owner,task)
+                self.assertTrue(submitted['asynchronous'])
+                self.assertEqual(submitted['task']['status'],'queued')
+                thread.return_value.start.assert_called_once()
+                worker=thread.call_args.kwargs['target']
+            with patch.object(self.imports,'_align_document_audio',side_effect=SaaSError('alignment_rejected','Text does not match audio',422)):
+                worker()
+        failed=next(t for t in self.imports.list(owner)['tasks'] if t['id']==task)
+        self.assertEqual(failed['status'],'failed')
+        self.assertIn('Text does not match audio',failed['error'])
+        self.assertEqual(self.workspace.list_books(owner)['books'],[])
+
+    def test_document_cannot_attach_another_users_audio(self):
+        owner,other=str(self.owner['id']),str(self.other['id'])
+        foreign=self.imports.create(other,'mp3','Foreign','book.mp3','foreign-audio')['task']['id']
+        uploaded=self.imports.upload(other,foreign,'book.mp3',b'audio','audio/mpeg')
+        task=self.imports.create(owner,'text','Document','book.txt','foreign-document',metadata={'matchedAudioAssetId':uploaded['sourceAssetId']})['task']['id']
+        self.imports.upload(owner,task,'book.txt',b'This document has text.','text/plain')
+        with self.assertRaises(SaaSError) as denied:self.imports.complete(owner,task)
+        self.assertEqual(denied.exception.code,'matched_audio_missing')
+
     def test_abandoned_running_import_is_reclaimed_and_completed(self):
         owner=str(self.owner["id"])
         created=self.imports.create(owner,"text","中断恢复","resume.txt","resume-stale-task")

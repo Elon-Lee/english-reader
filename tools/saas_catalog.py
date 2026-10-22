@@ -151,7 +151,7 @@ class CatalogService:
                 for item in data.get("sentences",[]) if isinstance(data.get("sentences",[]),list) else []:
                     if not isinstance(item,dict):continue
                     text=str(item.get("text","")).strip()
-                    if text:sentences.append({"id":str(item.get("id",len(sentences))),"text":text,"translation":str(item.get("translation","")).strip(),"start":item.get("start"),"end":item.get("end"),"page":item.get("page"),"section":item.get("section"),"words":item.get("words",[]) if isinstance(item.get("words",[]),list) else []})
+                    if text:sentences.append({"id":str(item.get("id",len(sentences))),"text":text,"translation":str(item.get("translation","")).strip(),"start":item.get("start"),"end":item.get("end"),"timingPolicy":item.get("timingPolicy"),"page":item.get("page"),"section":item.get("section"),"words":item.get("words",[]) if isinstance(item.get("words",[]),list) else []})
                 from saas_media import MediaService
                 MediaService(self.accounts,None).attach_reader_captions(cursor,row["source_content_book_id"],sentences,catalog_book_id)
                 trial_end = float(row["duration"] or 0) * .10

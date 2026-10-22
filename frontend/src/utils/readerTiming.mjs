@@ -7,15 +7,16 @@ export const sentenceEnd = (sentence, next) => mediaSeconds(sentence?.end) ?? se
 export function buildReaderTimeline(sentences) {
   const entries = sentences.flatMap((sentence, index) => {
     const start = sentenceStart(sentence)
-    return start === null ? [] : [{start, index}]
+    return start === null ? [] : [{start, index, acoustic:sentence.timingPolicy==='acoustic-only'}]
   }).sort((a,b) => a.start-b.start || a.index-b.index)
   const words = sentences.map((sentence,index) => {
     const tokens = sentence.words || [], start = sentenceStart(sentence) ?? 0
     const end = sentenceEnd(sentence,sentences[index+1]) ?? start + Math.max(1,tokens.length*.42)
+    const acoustic=sentence.timingPolicy==='acoustic-only'
     return tokens.map((word,wordIndex) => ({
       index:wordIndex,
-      start:mediaSeconds(word.start ?? word.startTime) ?? start + (end-start)*wordIndex/Math.max(1,tokens.length),
-    })).sort((a,b)=>a.start-b.start || a.index-b.index)
+      start:mediaSeconds(word.start ?? word.startTime) ?? (acoustic?null:start + (end-start)*wordIndex/Math.max(1,tokens.length)),
+    })).filter(word=>word.start!==null).sort((a,b)=>a.start-b.start || a.index-b.index)
   })
   return {entries,words}
 }
@@ -27,10 +28,15 @@ function atOrBefore(entries,time) {
 }
 export function timelineSentence(timeline,time) {
   const entries=timeline.entries
-  return entries.length ? entries[Math.max(0,atOrBefore(entries,time))].index : -1
+  if(!entries.length)return -1
+  const position=atOrBefore(entries,time),entry=entries[Math.max(0,position)]
+  if(entry.acoustic&&position<0)return -1
+  return entry.index
 }
 export function timelineWord(timeline,index,time) {
   const words=timeline.words[index]||[],position=atOrBefore(words,time)
+  // A word's acoustic end can precede the next word by a pause. Keep the
+  // highlight until the next measured start without changing stored times.
   return position<0 ? -1 : words[position].index
 }
 

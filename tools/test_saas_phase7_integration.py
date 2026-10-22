@@ -112,6 +112,14 @@ class PrivateWorkspaceTests(unittest.TestCase):
         self.asset=self.media.register(owner_id,owner_id,"private","private/workspace.mp3","audio","audio/mpeg",content_book_id=book_id)
         return book_id
 
+    def test_acoustic_timing_policy_and_unmatched_words_survive_reader_api(self):
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE content_books SET data_json=jsonb_set(data_json,'{sentences,0,timingPolicy}','\"acoustic-only\"'::jsonb) WHERE id=%s",(self.book_id,))
+        book=self.workspace.reader(str(self.owner['id']),self.book_id)['book']
+        self.assertEqual(book['sentences'][0]['timingPolicy'],'acoustic-only')
+        with self.assertRaises(SaaSError):self.workspace.reader(str(self.other['id']),self.book_id)
+
     def test_owner_isolation_reader_vocab_annotation_and_activity(self):
         owner_id,other_id=str(self.owner["id"]),str(self.other["id"])
         books=self.workspace.list_books(owner_id)["books"];self.assertEqual(books[0]["id"],self.book_id);self.assertEqual(books[0]["mediaCount"],1)

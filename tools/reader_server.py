@@ -1055,6 +1055,8 @@ class Handler(SimpleHTTPRequestHandler):
             if path==base:
                 query=parse_qs(route.query)
                 self.reply(service.list(user_id,(query.get("limit")or[100])[0],(query.get("page")or[1])[0]));return
+            if path==base+"/match-audio":
+                query=parse_qs(route.query);self.reply(service.match_audio(user_id,(query.get("filename")or[""])[0]));return
             task_id=unquote(path.rsplit("/",1)[1]);tasks=service.list(user_id,200)["tasks"];task=next((item for item in tasks if item["id"]==task_id),None)
             self.reply({"task":task} if task else {"code":"import_task_not_found","error":"导入任务不存在或你无权访问。"},200 if task else 404);return
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
@@ -1063,6 +1065,10 @@ class Handler(SimpleHTTPRequestHandler):
         service=service or WORKSPACE_IMPORTS
         path,user_id=route.path,str(self._saas_session["id"])
         try:
+            if path.endswith('/upload-audio'):
+                task_id=unquote(path[len(base+'/'):-len('/upload-audio')].rstrip('/'));length=int(self.headers.get('Content-Length','0'))
+                if length<=0 or length>2*1024*1024*1024:raise SaaSError('upload_too_large','MP3 文件大小无效。',413)
+                self.reply({'task':service.upload_audio(user_id,task_id,self.headers.get('X-Upload-Filename',''),self.rfile.read(length))});return
             if path.endswith("/upload"):
                 task_id=unquote(path[len(base+"/"):-len("/upload")].rstrip("/"));length=int(self.headers.get("Content-Length","0"))
                 if length<=0 or length>20*1024*1024*1024:raise SaaSError("upload_too_large","上传文件大小无效。",413)
@@ -1078,7 +1084,7 @@ class Handler(SimpleHTTPRequestHandler):
                 result=service.create(user_id,str(item.get("kind","")).strip(),str(item.get("title","")or""),str(item.get("filename","")or""),str(item.get("idempotencyKey","")).strip(),str(item.get("sourceUrl","")or""),item.get("metadata") if isinstance(item.get("metadata"),dict) else {})
                 self.reply(result,201);return
             if path.endswith("/complete"):
-                task_id=unquote(path[len(base+"/"):-len("/complete")].rstrip("/"));self.reply(service.complete(user_id,task_id));return
+                task_id=unquote(path[len(base+"/"):-len("/complete")].rstrip("/"));result=service.submit_complete(user_id,task_id);self.reply(result,202 if result.get('asynchronous') else 200);return
             if path.endswith("/retry"):
                 task_id=unquote(path[len(base+"/"):-len("/retry")].rstrip("/"));self.reply(service.retry(user_id,task_id));return
             if path.endswith("/cancel"):

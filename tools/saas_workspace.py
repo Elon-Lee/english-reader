@@ -85,7 +85,7 @@ class WorkspaceService:
                 for item in data.get("sentences",[]) if isinstance(data.get("sentences",[]),list) else []:
                     if not isinstance(item,dict):continue
                     text=str(item.get("text","")).strip()
-                    if text:sentences.append({"id":str(item.get("id",len(sentences))),"text":text,"translation":str(item.get("translation","")).strip(),"start":item.get("start"),"end":item.get("end"),"page":item.get("page"),"section":item.get("section"),"words":item.get("words",[]) if isinstance(item.get("words",[]),list) else []})
+                    if text:sentences.append({"id":str(item.get("id",len(sentences))),"text":text,"translation":str(item.get("translation","")).strip(),"start":item.get("start"),"end":item.get("end"),"timingPolicy":item.get("timingPolicy"),"page":item.get("page"),"section":item.get("section"),"words":item.get("words",[]) if isinstance(item.get("words",[]),list) else []})
                 from saas_media import MediaService
                 MediaService(self.accounts,None).attach_reader_captions(cursor,book_id,sentences)
                 cursor.execute("SELECT last_sentence_id,reading_seconds,completed_at FROM workspace_progress WHERE user_id=%s AND content_book_id=%s",(user_id,book_id));progress=self.accounts._one(cursor)or{}

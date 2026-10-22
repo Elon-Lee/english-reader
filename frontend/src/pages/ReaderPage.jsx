@@ -128,7 +128,7 @@ export default function ReaderPage({preferences:stored,onPreferencesChange,messa
    if(i!==activeRef.current){activeRef.current=i;setActive(i);scrollSentence(i)}
    const word=timelineWord(timeline,i,time)
    setActiveWord(current=>current===word?current:word)
-  }
+  }else setActiveWord(-1)
  }
  useLayoutEffect(()=>{syncRef.current=syncMedia})
  const sync=e=>syncMedia(e.currentTarget,true)

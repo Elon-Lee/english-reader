@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import mimetypes
 import os
 import queue
 import re
@@ -16,6 +17,9 @@ import subprocess
 import tempfile
 import threading
 import time
+import zipfile
+from xml.etree.ElementTree import ParseError
+from epub_document import read_epub
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -28,6 +32,7 @@ from timed_segmentation import segment_timed_words
 from saas_media import MediaService
 from saas_membership import MembershipService, as_json, timestamp
 from youtube_subtitles import has_translated_english_track, select_chinese_track, select_native_english_track
+from text_segmentation import WORD_RE, split_sentences
 
 
 IMPORT_FEATURES={}
@@ -144,6 +149,41 @@ class WorkspaceImportService:
             raise SaaSError("import_task_terminal","任务在上传期间已取消或结束。",409)
         return uploaded
 
+    def upload_audio(self,user_id:str,task_id:str,filename:str,data:bytes)->dict[str,Any]:
+        if not data or len(data)>UPLOAD_LIMITS['mp3']:
+            raise SaaSError('invalid_audio_upload','MP3 文件为空或超过大小限制。',413)
+        with self.accounts.transaction() as lock:
+            with lock.cursor() as guard:
+                guard.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',(f'import-complete:{user_id}:{task_id}',))
+                with self.accounts.transaction() as connection:
+                    with connection.cursor() as cursor:
+                        task=self._task(cursor,user_id,task_id)
+                        if task['status']!='queued' or task['kind'] not in {'text','document'}:
+                            raise SaaSError('audio_upload_not_allowed','请先上传文档，完成处理后不能替换原音。',409)
+                        source=self._source_path(cursor,user_id,task)
+                        safe_name=re.sub(r'[^A-Za-z0-9._-]+','-',Path(filename).name).strip('-')
+                        if Path(safe_name).suffix.lower()!='.mp3' or Path(safe_name).stem.casefold()!=source.stem.casefold():
+                            raise SaaSError('audio_name_mismatch','请选择与文档同名的 MP3。',400)
+                        cursor.execute("SELECT sha256 FROM asset_variants WHERE asset_id=%s AND variant_name='audio' AND deleted_at IS NULL",(task['source_asset_id'],))
+                        existing=self.accounts._one(cursor)
+                        if existing:
+                            if existing['sha256']==hashlib.sha256(data).hexdigest():return self._public(task)
+                            raise SaaSError('audio_source_conflict','该任务已上传不同的配套音频。',409)
+                if not self.official:self.media.ensure_private_capacity(user_id,len(data))
+                target=source.parent/(new_id()+'.mp3');target.write_bytes(data)
+                try:
+                    duration=float(self.audio_duration(target))
+                    if duration<=0:raise ValueError('empty duration')
+                    self.media.add_variants(user_id,task['source_asset_id'],[{'name':'audio','storagePath':target.relative_to(self.media.media_root).as_posix(),'contentType':'audio/mpeg'}])
+                except Exception:
+                    target.unlink(missing_ok=True);raise
+                with self.accounts.transaction() as connection:
+                    with connection.cursor() as cursor:
+                        current=self._task(cursor,user_id,task_id)
+                        if current['status']!='queued':raise SaaSError('import_task_terminal','任务已取消或结束。',409)
+                        cursor.execute("UPDATE workspace_import_tasks SET metadata_json=metadata_json || %s::jsonb,updated_at=NOW() WHERE id=%s",(json.dumps({'matchedAudioFilename':filename}),task_id))
+                return self._public(current)
+
     def _source_path(self,cursor:Any,user_id:str,task:dict[str,Any])->Path:
         asset_id=task.get("source_asset_id")
         if not asset_id:raise SaaSError("import_source_missing","导入任务尚未上传源文件。",409)
@@ -155,13 +195,15 @@ class WorkspaceImportService:
 
     @staticmethod
     def _sentences(text:str)->list[dict[str,Any]]:
-        source=re.sub(r"\r\n?","\n",text);parts=re.split(r"(?<=[.!?。！？])\s+|\n{2,}",source);sentences=[]
-        for part in parts:
+        sentences=[]
+        for part in split_sentences(text,max_words=60):
             value=re.sub(r"\s+"," ",part).strip()
             if not value:continue
-            words=[{"text":word} for word in re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?|\d+",value)]
+            words=[{"text":word} for word in WORD_RE.findall(value)]
             sentences.append({"id":f"s-{len(sentences)+1}","text":value,"translation":"","words":words})
         return sentences
+
+    _epub_text = staticmethod(read_epub)
 
     def _document_text(self,source:Path,kind:str)->tuple[str,dict[str,Any]]:
         suffix=source.suffix.casefold()
@@ -183,7 +225,12 @@ class WorkspaceImportService:
                         value=str(line.get("text","")).strip() if isinstance(line,dict) else ""
                         if value:lines.append(value)
                 return "\n\n".join(lines),{"extractor":"local-pdf-ocr","pages":len(pages_data) if isinstance(pages_data,list) else 0,"lines":len(lines)}
-        raise SaaSError("unsupported_document","当前原生文档处理器仅支持 TXT、Markdown 和 PDF。",422)
+        if suffix==".epub":
+            try:
+                cover=source.with_name('epub-cover.jpg');text,cover_path=self._epub_text(source,cover)
+                return text,{"extractor":"epub-html",**({"coverPath":cover_path} if cover_path else {})}
+            except (OSError,zipfile.BadZipFile,KeyError,ValueError,ParseError) as exc:raise SaaSError("epub_invalid","EPUB 文件无法读取。",422) from exc
+        raise SaaSError("unsupported_document","当前原生文档处理器仅支持 TXT、Markdown、PDF 和 EPUB。",422)
 
     def _whisper_command(self,source:Path,prefix:Path,progress:bool=False)->list[str]:
         # Parallel Whisper leaves token times local to each chunk; flash
@@ -213,7 +260,7 @@ class WorkspaceImportService:
         book={"id":f"private-{task_id}","title":title,"englishTitle":title,"sourceType":"audio","duration":duration,"alignment":f"whisper-{timing['timestampMethod']}-normalized","sentences":sentences,"whisper":{"engine":"whisper.cpp","model":self.whisper_model.name,**timing,"transcribedWords":sum(len(sentence.get("words",[])) for sentence in sentences)},"segmentation":segmentation}
         return book,{"extractor":"whisper.cpp","model":self.whisper_model.name,"sentences":len(sentences),"duration":duration}
 
-    def _run_speech_process(self,command,progress,label):
+    def _run_speech_process(self,command,progress,label,timeout=1800):
         if progress:progress(60,label)
         try:
             process=subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True,bufsize=1)
@@ -223,11 +270,11 @@ class WorkspaceImportService:
                     for line in process.stderr or ():lines.put(line.rstrip())
                 finally:lines.put(None)
             threading.Thread(target=read_stderr,daemon=True).start()
-            deadline=time.monotonic()+1800;last_progress=60;recent=[];closed=False
+            deadline=time.monotonic()+timeout;last_progress=60;recent=[];closed=False
             while process.poll() is None or not closed:
                 remaining=deadline-time.monotonic()
                 if remaining<=0:
-                    process.kill();process.wait();raise SaaSError("whisper_timeout","视频转写超时。",504)
+                    process.kill();process.wait();raise SaaSError("speech_timeout",label+"超时。",504)
                 try:line=lines.get(timeout=min(30,remaining))
                 except queue.Empty:
                     if progress:progress(last_progress,label)
@@ -241,9 +288,34 @@ class WorkspaceImportService:
                     if progress:progress(last_progress,label)
             if process.stderr:process.stderr.close()
             if process.returncode:
-                raise SaaSError("whisper_failed",("视频 Whisper 转写失败："+"\n".join(recent))[-1800:],422)
+                raise SaaSError("speech_failed",(label+"失败："+"\n".join(recent))[-1800:],422)
         except FileNotFoundError as exc:raise SaaSError("whisper_unavailable","本机 Whisper 处理器未安装。",503) from exc
         except OSError as exc:raise SaaSError("whisper_failed","无法启动视频 Whisper 转写。",422) from exc
+        finally:
+            if 'process' in locals() and process.poll() is None:
+                process.kill();process.wait()
+
+    def _align_document_audio(self,data,audio,task_id,user_id):
+        python=Path(os.environ.get('SHIYUE_CTC_PYTHON',str(ROOT/'.local/forced-aligner/venv/bin/python'))).expanduser()
+        models=Path(os.environ.get('SHIYUE_CTC_MODEL_HOME',str(ROOT/'.local/forced-aligner/models'))).expanduser()
+        if not python.is_file() or not (models/'hub/checkpoints'/MODEL_FILE).is_file():
+            raise SaaSError('alignment_unavailable','正文与原音对齐模型未安装，请联系管理员。',503)
+        def progress(value,step):
+            with self.accounts.transaction() as connection:
+                with connection.cursor() as cursor:
+                    task=self._task(cursor,user_id,task_id)
+                    if task['status']!='running':raise SaaSError('import_task_terminal','导入已取消。',409)
+            self._update_progress(task_id,value,step)
+        with tempfile.TemporaryDirectory(prefix='book-alignment-') as folder:
+            root=Path(folder);source=root/'book.json';output=root/'aligned.json';wav=root/'audio.wav'
+            source.write_text(json.dumps(data,ensure_ascii=False))
+            progress(55,'准备原音与正文逐词对齐')
+            try:
+                subprocess.run([str(self.ffmpeg),'-nostdin','-v','error','-y','-i',str(audio),'-ar','16000','-ac','1','-c:a','pcm_s16le',str(wav)],check=True,timeout=600,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            except (OSError,subprocess.SubprocessError) as exc:
+                raise SaaSError('audio_decode_failed','配套音频无法解码，请检查文件是否完整。',422) from exc
+            self._run_speech_process([str(python),str(ROOT/'tools/book_audio_alignment.py'),'--audio',str(wav),'--input',str(source),'--output',str(output),'--model-home',str(models)],progress,'正在对齐原音、句子和单词',timeout=4500)
+            return json.loads(output.read_text())
 
     def _transcribe_video_audio(self,audio,prefix,progress):
         self._run_speech_process(self._whisper_command(audio,prefix,progress=True),progress,"Whisper 正在转写视频音频")
@@ -472,6 +544,22 @@ class WorkspaceImportService:
             with connection.cursor() as cursor:
                 cursor.execute("UPDATE workspace_import_tasks SET progress=%s,step=%s,updated_at=NOW() WHERE id=%s AND status='running'",(progress,step,task_id))
 
+    def submit_complete(self,user_id:str,task_id:str)->dict[str,Any]:
+        """Long document/audio alignment returns immediately; clients poll the task."""
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                task=self._task(cursor,user_id,task_id)
+                cursor.execute("SELECT 1 FROM asset_variants WHERE asset_id=%s AND variant_name='audio' AND deleted_at IS NULL",(task.get('source_asset_id'),))
+                paired=task['kind'] in {'text','document'} and (bool(cursor.fetchone()) or bool(as_json(task['metadata_json']).get('matchedAudioAssetId')))
+        if not paired or task['status'] not in {'queued','running'}:return self.complete(user_id,task_id)
+        def process():
+            try:self.complete(user_id,task_id)
+            except Exception:
+                # _complete_locked persists failures for the polling client.
+                pass
+        threading.Thread(target=process,daemon=True,name=f'book-align-{task_id}').start()
+        return {'task':self._public(task),'asynchronous':True,'idempotent':task['status']=='running'}
+
     def complete(self,user_id:str,task_id:str)->dict[str,Any]:
         """Serialize processing and reclaim tasks abandoned for over 80 minutes."""
         connection=self.accounts._connect()
@@ -562,6 +650,44 @@ class WorkspaceImportService:
                 text,extractor=self._document_text(source,work["kind"]);sentences=self._sentences(text)
                 if not sentences:raise SaaSError("empty_import_text","未从源文件提取到可导入的文本。",400)
                 source_type="document" if work["kind"]=="document" else "text";book_id=f"private-{task_id}";data={"id":book_id,"title":title,"englishTitle":title,"sentences":sentences,"sourceType":source_type,"import":{"kind":work["kind"],"extractor":extractor}}
+                if extractor.get("coverPath"):
+                    cover_path=Path(extractor["coverPath"]);cover_relative=cover_path.relative_to(self.media.media_root).as_posix();data["cover"]=f"/api/media/{work['source_asset_id']}?variant=cover";pending_variant_paths.append(cover_relative)
+                    try:self.media.add_variants(user_id,work["source_asset_id"],[{"name":"cover","storagePath":cover_relative,"contentType":mimetypes.guess_type(cover_path.name)[0] or "image/jpeg"}])
+                    except Exception:
+                        cover_path.unlink(missing_ok=True);raise
+                    pending_variant_paths=[]
+                # Own the audio as a variant of this document, so deletion,
+                # quota accounting and official publication follow the book.
+                with self.accounts.transaction() as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute("SELECT storage_path FROM asset_variants WHERE asset_id=%s AND variant_name='audio' AND deleted_at IS NULL",(work['source_asset_id'],))
+                        audio=self.accounts._one(cursor)
+                        selected=str(as_json(task['metadata_json']).get('matchedAudioAssetId') or '')
+                        if not audio and selected:
+                            cursor.execute("SELECT storage_path FROM media_assets WHERE id=%s AND owner_id=%s AND scope=%s AND status='active' AND content_type='audio/mpeg'",(selected,user_id,'official' if self.official else 'private'))
+                            matched=self.accounts._one(cursor)
+                            if not matched:raise SaaSError('matched_audio_missing','匹配音频不存在或无权访问，请重新选择。',409)
+                            matched_path=self.media._safe_path(matched['storage_path'])[1]
+                            if matched_path.stem.casefold()!=source.stem.casefold():raise SaaSError('audio_name_mismatch','配套音频与文档名称不一致。',400)
+                        else:matched=None
+                if not audio and matched:
+                    target=source.parent/(new_id()+'.mp3')
+                    if not self.official:self.media.ensure_private_capacity(user_id,matched_path.stat().st_size)
+                    shutil.copyfile(matched_path,target)
+                    relative=target.relative_to(self.media.media_root).as_posix()
+                    try:self.media.add_variants(user_id,work['source_asset_id'],[{'name':'audio','storagePath':relative,'contentType':'audio/mpeg'}])
+                    except Exception:
+                        target.unlink(missing_ok=True);raise
+                    audio={'storage_path':relative}
+                if audio:
+                    data['audio']=f"/api/media/{work['source_asset_id']}?variant=audio"
+                    data['duration']=float(self.audio_duration(self.media._safe_path(audio['storage_path'])[1]))
+                    source_type=data['sourceType']='audio'
+                    data=self._align_document_audio(data,self.media._safe_path(audio['storage_path'])[1],task_id,user_id)
+            metadata=as_json(task.get("metadata_json")) if task.get("metadata_json") else {}
+            data["series"]=str(metadata.get("series") or (data.get("youtube") or {}).get("channel") or "私人导入")
+            data["level"]=str(metadata.get("level") or "")
+            if metadata.get("matchedAudioFilename"):data["matchedAudioFilename"]=str(metadata["matchedAudioFilename"])
             data["import"]={"kind":work["kind"],"extractor":extractor}
             with self.accounts.transaction() as connection:
                 with connection.cursor() as cursor:
@@ -574,7 +700,7 @@ class WorkspaceImportService:
                     media_kind="video" if source_type in {"video","youtube"} else "audio" if source_type=="audio" else ""
                     if not self.official:self.memberships.assert_media_capacity(cursor,user_id,context,media_kind)
                     cursor.execute("""INSERT INTO content_books(id,owner_id,title,english_title,series,level,source_type,source_path,status,visibility,cover_url,page_base_url,audio_url,pdf_url,video_url,duration,alignment,data_json,quality_json,created_at,updated_at)
-                    VALUES(%s,%s,%s,%s,%s,'',%s,%s,'ready','private',%s,'',%s,'',%s,%s,%s,%s::jsonb,'{}'::jsonb,NOW(),NOW())""",(book_id,user_id,title,title,str((data.get("youtube") or {}).get("channel") or "私人导入"),source_type,f"workspace/{user_id}/{task_id}",str(data.get("cover","")or""),str(data.get("audio","")or""),str(data.get("video","")or""),float(data.get("duration",0)or 0),str(data.get("alignment","")or""),json.dumps(data,ensure_ascii=False)))
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'ready','private',%s,'',%s,'',%s,%s,%s,%s::jsonb,'{}'::jsonb,NOW(),NOW())""",(book_id,user_id,title,title,str(data.get("series") or (data.get("youtube") or {}).get("channel") or "私人导入"),str(data.get("level") or ""),source_type,f"workspace/{user_id}/{task_id}",str(data.get("cover","")or""),str(data.get("audio","")or""),str(data.get("video","")or""),float(data.get("duration",0)or 0),str(data.get("alignment","")or""),json.dumps(data,ensure_ascii=False)))
                     cursor.execute("UPDATE media_assets SET content_book_id=%s,kind=%s WHERE id=%s",(book_id,source_type,work["source_asset_id"]))
                     if self.official:
                         catalog_id=new_id()
@@ -583,7 +709,9 @@ class WorkspaceImportService:
                         VALUES(%s,%s,%s,%s,%s,'private','draft',%s)""",(catalog_id,book_id,title,title,source_type if source_type in {'audio','video','youtube'} else 'book',user_id))
                         cursor.execute("UPDATE media_assets SET catalog_book_id=%s WHERE id=%s",(catalog_id,work["source_asset_id"]))
                         self.memberships._audit(cursor,user_id,user_id,"catalog_import",{"sourceBookId":book_id,"catalogBookId":catalog_id})
-                    cursor.execute("UPDATE workspace_import_tasks SET status='complete',output_book_id=%s,progress=100,step='导入完成',completed_at=NOW(),updated_at=NOW() WHERE id=%s",(book_id,task_id))
+                    alignment=data.get('audioAlignment') or {}
+                    completed_step=(f"导入完成 · 原音单词对齐 {alignment['coverage']:.1%}" if alignment else '导入完成')
+                    cursor.execute("UPDATE workspace_import_tasks SET status='complete',output_book_id=%s,progress=100,step=%s,completed_at=NOW(),updated_at=NOW() WHERE id=%s",(book_id,completed_step,task_id))
                     cursor.execute("SELECT * FROM workspace_import_tasks WHERE id=%s",(task_id,));completed=self.accounts._one(cursor)or{}
             reservation_id=completed.get("quota_reservation_id")
         except Exception as exc:
@@ -595,6 +723,18 @@ class WorkspaceImportService:
             raise
         if reservation_id:self.memberships.settle(user_id,reservation_id)
         return {"task":self._public(completed),"idempotent":False}
+
+    def match_audio(self,user_id:str,filename:str)->dict[str,Any]:
+        stem=Path(filename or '').stem.strip().casefold()
+        if not stem:return {"matched":None}
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT id,storage_path FROM media_assets WHERE owner_id=%s AND scope=%s AND status='active' AND (kind='mp3' OR content_type='audio/mpeg') ORDER BY created_at DESC",(user_id,'official' if self.official else 'private'))
+                for row in self.accounts._many(cursor):
+                    candidate=Path(str(row['storage_path'] or '')).name
+                    if Path(candidate).stem.casefold()==stem:
+                        return {"matched":{"assetId":row['id'],"filename":candidate}}
+        return {"matched":None}
 
     def retry(self,user_id:str,task_id:str)->dict[str,Any]:
         """Reset a failed task so its existing source can be processed again."""
