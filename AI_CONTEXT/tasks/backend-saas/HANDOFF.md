@@ -1,5 +1,11 @@
 # SaaS 后端交接
 
+## 2026-10-22 登录设备上限处理
+
+- 当前角色体系只有 `admin`，因此平台管理员按超级管理员处理：登录跳过套餐设备上限，`user_sessions` 仅保留最近 5 条；普通用户仍按当前套餐额度限制有效设备。
+- 普通账号超限时，`POST /api/auth/login` 返回设备列表、上限和 `device_limit_exceeded`。登录页提供设备单选和确认说明；`POST /api/auth/login/replace-device` 重新校验账号密码，在同一事务撤销所选本人设备/会话并创建新会话，避免解绑后登录失败。替换接口沿用登录速率限制，不能撤销其他账号或已下线设备。
+- 新增 phase1 隔离 PostgreSQL 测试覆盖普通用户原子换机登录、跨账号设备拒绝、管理员多设备登录及只保留 5 条会话；新增的两项测试通过，临时 `_test` 库已删除。完整 phase1 有 1 项既有 HTTP smoke 仍断言 `/` 返回 200，而当前 API-only 架构返回 404；其余 10 项通过。构建、modern smoke、UI 回归、JS/Python 检查及 diff 检查通过；未发布生产。
+
 ## 2026-10-21 系统设置与设备状态
 
 - 偏好写接口不再接受已移除且无运行时消费者的 `wordTipSeconds`、`reviewPageSize`、`manualRepeatCount`、`manualPauseSeconds`、`reminder`、`heatmapRange` 及旧 `readerMode`；用户已有 JSONB 历史值不会被批量清除。

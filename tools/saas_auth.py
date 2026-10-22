@@ -378,7 +378,7 @@ class SaaSService:
                 cursor.execute("SELECT id,email,display_name,plan_version,email_verified_at FROM users WHERE id=%s", (record["user_id"],))
                 return {"user": self.public_user(self._one(cursor) or {})}
 
-    def login(self, email: Any, password: Any, device_key: Any, user_agent: str = "", ip_address: str = "") -> dict[str, Any]:
+    def login(self, email: Any, password: Any, device_key: Any, user_agent: str = "", ip_address: str = "", replace_device_id: Any = "") -> dict[str, Any]:
         normalized_email = normalize_email(email)
         key = str(device_key or "").strip()
         if not re.fullmatch(r"[A-Za-z0-9._:-]{16,200}", key):
@@ -393,6 +393,12 @@ class SaaSService:
                     raise SaaSError("account_unavailable", "该账号当前不可登录。", 403)
                 if not user.get("email_verified_at"):
                     raise SaaSError("email_unverified", "邮箱尚未激活，请先前往邮箱完成验证。", 403)
+                cursor.execute(
+                    """SELECT EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id
+                    WHERE ur.user_id=%s AND r.name='admin') AS is_admin""",
+                    (user["id"],),
+                )
+                user["is_admin"] = bool((self._one(cursor) or {}).get("is_admin"))
                 # Membership expiry must also take effect for device limits,
                 # even if the member has not opened the membership screen.
                 cursor.execute("UPDATE subscriptions SET status='expired',updated_at=NOW() WHERE user_id=%s AND status IN ('active','grace_period') AND ends_at<=NOW()", (user["id"],))
@@ -417,13 +423,26 @@ class SaaSService:
                 if not device or device["revoked_at"]:
                     cursor.execute("SELECT COUNT(*) AS count FROM devices WHERE user_id=%s AND revoked_at IS NULL", (user["id"],))
                     count = int((self._one(cursor) or {"count": 0})["count"])
-                    if count >= limit:
+                    if count >= limit and not user["is_admin"] and not replace_device_id:
+                        cursor.execute(
+                            """SELECT id,label,user_agent,first_seen_at,last_seen_at FROM devices
+                            WHERE user_id=%s AND revoked_at IS NULL ORDER BY last_seen_at DESC""",
+                            (user["id"],),
+                        )
+                        active_devices = [{"id": row["id"], "label": row["label"], "userAgent": row["user_agent"], "firstSeenAt": iso(row["first_seen_at"]), "lastSeenAt": iso(row["last_seen_at"])} for row in self._many(cursor)]
                         raise SaaSError(
                             "device_limit_exceeded",
                             "已达到当前套餐的同时登录设备上限，请先在已登录设备中移除旧设备。",
                             409,
-                            {"limit": limit, "activeDevices": count},
+                            {"limit": limit, "activeDevices": count, "devices": active_devices},
                         )
+                    if replace_device_id:
+                        cursor.execute("SELECT id FROM devices WHERE id=%s AND user_id=%s AND revoked_at IS NULL FOR UPDATE", (str(replace_device_id), user["id"]))
+                        replaced = self._one(cursor)
+                        if not replaced or str(replaced["id"]) == str(device["id"] if device else ""):
+                            raise SaaSError("device_not_found", "所选设备已下线或不可替换，请重新登录后选择。", 409)
+                        cursor.execute("UPDATE devices SET revoked_at=NOW() WHERE id=%s", (replaced["id"],))
+                        cursor.execute("UPDATE user_sessions SET revoked_at=NOW() WHERE device_id=%s AND revoked_at IS NULL", (replaced["id"],))
                     if device:
                         cursor.execute("UPDATE devices SET revoked_at=NULL,last_seen_at=NOW(),user_agent=%s WHERE id=%s", (user_agent[:1000], device["id"]))
                         device_id = str(device["id"])
@@ -437,19 +456,21 @@ class SaaSService:
                     device_id = str(device["id"])
                     cursor.execute("UPDATE devices SET last_seen_at=NOW(),user_agent=%s WHERE id=%s", (user_agent[:1000], device_id))
                 raw_session, raw_csrf = random_token(), random_token()
+                session_id = new_id()
                 cursor.execute(
                     """INSERT INTO user_sessions(id,user_id,device_id,token_hash,csrf_hash,expires_at,ip_address,user_agent)
                     VALUES(%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (new_id(), user["id"], device_id, token_hash(raw_session), token_hash(raw_csrf), utcnow() + timedelta(days=SESSION_TTL_DAYS), ip_address[:128], user_agent[:1000]),
+                    (session_id, user["id"], device_id, token_hash(raw_session), token_hash(raw_csrf), utcnow() + timedelta(days=SESSION_TTL_DAYS), ip_address[:128], user_agent[:1000]),
                 )
                 cursor.execute("UPDATE users SET last_login_at=NOW(),updated_at=NOW() WHERE id=%s", (user["id"],))
-                cursor.execute(
-                    """SELECT EXISTS(
-                    SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id
-                    WHERE ur.user_id=%s AND r.name='admin') AS is_admin""",
-                    (user["id"],),
-                )
-                user["is_admin"] = bool((self._one(cursor) or {"is_admin": False})["is_admin"])
+                if user["is_admin"]:
+                    cursor.execute(
+                        """DELETE FROM user_sessions WHERE id IN (
+                        SELECT id FROM user_sessions WHERE user_id=%s AND id<>%s
+                        AND id NOT IN (SELECT id FROM user_sessions WHERE user_id=%s AND id<>%s ORDER BY created_at DESC,id DESC LIMIT 4)
+                        )""",
+                        (user["id"], session_id, user["id"], session_id),
+                    )
                 return {"user": self.public_user(user), "sessionToken": raw_session, "csrfToken": raw_csrf}
 
     def authenticate(self, raw_session_token: str | None) -> dict[str, Any] | None:

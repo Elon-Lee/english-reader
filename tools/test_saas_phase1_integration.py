@@ -144,12 +144,48 @@ class PhaseOnePostgresTests(unittest.TestCase):
         with self.assertRaises(SaaSError) as device_error:
             self.service.login("reader@local.test", "valid password for testing", "device-flow-00000002", "Phase1 test")
         self.assertEqual(device_error.exception.code, "device_limit_exceeded")
+        self.assertEqual(device_error.exception.details["limit"], 1)
+        self.assertEqual(device_error.exception.details["devices"][0]["id"], session["device_id"])
         devices = self.service.devices(user_id)
         self.assertEqual(len(devices), 1)
         self.assertFalse(devices[0]["current"])
         self.assertTrue(self.service.devices(user_id, str(session["device_id"]))[0]["current"])
         self.service.logout(session)
         self.assertIsNone(self.service.authenticate(login["sessionToken"]))
+
+    def test_login_can_replace_an_owned_device_and_create_session_atomically(self):
+        self.invitation("REPLACE-DEVICE")
+        registered = self.service.register("replace@local.test", "valid password for testing", "REPLACE-DEVICE")
+        user_id = str(registered["user"]["id"])
+        self.verify(user_id)
+        first = self.service.login("replace@local.test", "valid password for testing", "device-replace-00001", "Phase1 test")
+        active = self.service.devices(user_id)
+        replacement = self.service.login("replace@local.test", "valid password for testing", "device-replace-00002", "Phase1 test", replace_device_id=active[0]["id"])
+        self.assertIsNotNone(self.service.authenticate(replacement["sessionToken"]))
+        self.assertIsNone(self.service.authenticate(first["sessionToken"]))
+        devices = self.service.devices(user_id)
+        self.assertEqual(len(devices), 1)
+        self.assertNotEqual(devices[0]["id"], active[0]["id"])
+
+        self.invitation("OTHER-DEVICE")
+        other = self.service.register("other-device@local.test", "valid password for testing", "OTHER-DEVICE")
+        self.verify(str(other["user"]["id"]))
+        other_login = self.service.login("other-device@local.test", "valid password for testing", "device-other-login-0001", "Phase1 test")
+        other_device = self.service.devices(str(other["user"]["id"]))[0]
+        with self.assertRaises(SaaSError) as foreign:
+            self.service.login("replace@local.test", "valid password for testing", "device-replace-00003", "Phase1 test", replace_device_id=other_device["id"])
+        self.assertEqual(foreign.exception.code, "device_not_found")
+        self.assertIsNotNone(self.service.authenticate(other_login["sessionToken"]))
+
+    def test_admin_login_is_unlimited_and_retains_only_five_sessions(self):
+        logins = [self.service.login("admin@local.test", "phase1 admin password", f"admin-device-login-{index:04d}", "Phase1 test") for index in range(7)]
+        self.assertTrue(all(item["user"]["isAdmin"] for item in logins))
+        with self.service.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) AS count FROM user_sessions WHERE user_id=%s", (self.admin["id"],))
+                self.assertEqual(self.service._one(cursor)["count"], 5)
+                cursor.execute("SELECT COUNT(*) AS count FROM devices WHERE user_id=%s AND revoked_at IS NULL", (self.admin["id"],))
+                self.assertEqual(self.service._one(cursor)["count"], 7)
 
     def test_password_reset_changes_password_and_revokes_sessions(self):
         self.invitation("RESET-ONLY")

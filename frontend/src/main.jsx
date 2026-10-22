@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import {
   Alert, App as AntApp, Avatar, Badge, Button, Card, Col, ConfigProvider, Descriptions,
   Drawer, Dropdown, Empty, Form, Input, InputNumber, Layout, List, Menu, Modal, Progress, Row,
-  Segmented, Select, Skeleton, Space, Statistic, Table, Tag, Tooltip, Typography, message,
+  Radio, Segmented, Select, Skeleton, Space, Statistic, Table, Tag, Tooltip, Typography, message,
 } from 'antd'
 import {
   AppstoreOutlined, BarChartOutlined, BookOutlined, CheckCircleFilled, CloudUploadOutlined,
@@ -239,7 +239,7 @@ function App() {
   const deleteCommerceProduct = async productId => { try { await postJson(`/api/admin/commerce/products/${encodeURIComponent(productId)}/delete`, {}); await reloadWorkspace({ silent: true, targetScreen: 'admin' }); messageApi.success('未上架套餐已删除') } catch (error) { messageApi.error(error.message || '套餐删除失败'); throw error } }
   const createConfiguredBenefit = async payload => { try { await postJson('/api/admin/commerce/configured-benefits', payload); await reloadWorkspace({ silent: true }); messageApi.success('配置权益已创建') } catch (error) { messageApi.error(error.message || '配置权益创建失败'); throw error } }
   const updateConfiguredBenefit = async (benefitId, payload) => { try { await postJson(`/api/admin/commerce/configured-benefits/${encodeURIComponent(benefitId)}`, payload); await reloadWorkspace({ silent: true }); messageApi.success('配置权益已更新') } catch (error) { messageApi.error(error.message || '配置权益更新失败'); throw error } }
-  const login = async values => { const stored = localStorage.getItem('shiyue-modern-device') || `modern-${crypto.randomUUID?.() || Date.now()}-device`; localStorage.setItem('shiyue-modern-device', stored); try { const result = await postJson('/api/auth/login', { ...values, deviceId: stored }); setAuthState('authenticated'); return result } catch (error) { messageApi.error(error.message || '登录失败'); throw error } }
+  const login = async values => { const stored = localStorage.getItem('shiyue-modern-device') || `modern-${crypto.randomUUID?.() || Date.now()}-device`; localStorage.setItem('shiyue-modern-device', stored); const { deviceReplacement, ...payload } = values; try { const result = await postJson(deviceReplacement ? '/api/auth/login/replace-device' : '/api/auth/login', { ...payload, deviceId: stored }); setAuthState('authenticated'); return result } catch (error) { if (error.code === 'device_limit_exceeded') return { deviceLimit: error.payload }; messageApi.error(error.message || '登录失败'); throw error } }
   const register = async values => { try { const result = await postJson('/api/auth/register', values); messageApi.success('账号已创建，请前往邮箱完成验证'); return result } catch (error) { messageApi.error(error.message || '注册失败'); throw error } }
   const forgotPassword = async values => { try { const result = await postJson('/api/auth/forgot-password', values); messageApi.success('如果账号存在，重置邮件已发送'); return result } catch (error) { messageApi.error(error.message || '发送失败'); throw error } }
   const logout = async () => { try { await postJson('/api/auth/logout', {}); setCurrentUser(null); setAuthState('unauthenticated') } catch (error) { messageApi.error(error.message || '退出登录失败') } }
@@ -298,10 +298,17 @@ function AuthPage({ loading, initialMode = 'login', next = '/app', onLogin, onRe
   const [mode, setMode] = useState(initialMode)
   const [submitting, setSubmitting] = useState(false)
   const [registrationEmail, setRegistrationEmail] = useState('')
+  const [deviceConflict, setDeviceConflict] = useState(null)
+  const [selectedDevice, setSelectedDevice] = useState('')
+  const [loginValues, setLoginValues] = useState(null)
   const submit = async values => {
     setSubmitting(true)
     try {
-      if (mode === 'login') { await onLogin(values); location.href = next }
+      if (mode === 'login') {
+        const result = await onLogin(values)
+        if (result?.deviceLimit) { setLoginValues(values); setDeviceConflict(result.deviceLimit); setSelectedDevice(''); return }
+        location.href = next
+      }
       else if (mode === 'register') {
         await onRegister({ invitationCode: values.invitationCode, email: values.email, password: values.password })
         setRegistrationEmail(values.email)
@@ -314,7 +321,21 @@ function AuthPage({ loading, initialMode = 'login', next = '/app', onLogin, onRe
       }
     } finally { setSubmitting(false) }
   }
-  return <main className="modern-auth"><Card className="modern-auth-card"><div className="modern-auth-brand"><div className="brand-mark-modern">拾</div><div><Text className="brand-name auth-brand-name">拾页</Text><Text className="brand-subtitle auth-brand-subtitle">ENGLISH WORKSPACE</Text></div></div><Text className="eyebrow">SHIYUE MEMBERS</Text><Title level={1}>{mode === 'login' ? '登录拾页' : mode === 'register' ? '创建账号' : '找回密码'}</Title><Paragraph>{mode === 'login' ? '登录后进入书城、学习空间和会员中心。未激活邮箱的账号需要先完成邮件验证。' : mode === 'register' ? '使用有效邀请码创建学习账号，完成邮箱激活后才能登录。' : '输入注册邮箱，我们会发送密码重置邮件。'}</Paragraph><Segmented block value={mode} onChange={setMode} options={[{ label: '登录', value: 'login' }, { label: '注册', value: 'register' }, { label: '找回密码', value: 'forgot' }]} />{registrationEmail && <Alert className="auth-action-alert" type="success" showIcon message="账号已创建，请先验证邮箱" description={`验证邮件已发送到 ${registrationEmail}。打开邮件中的链接完成激活，再回来登录；未收到时请检查垃圾邮件。`} />}<Form form={form} layout="vertical" onFinish={submit} disabled={loading} className="modern-auth-form">{mode === 'register' && <Form.Item label="邀请码" name="invitationCode" extra={<a href="/support#invitation" target="_blank" rel="noreferrer">没有邀请码？联系支持咨询</a>} rules={[{ required: true, message: '请输入邀请码' }]}><Input size="large" autoComplete="off" /></Form.Item>}<Form.Item label="邮箱" name="email" rules={[{ required: true, type: 'email', message: '请输入有效邮箱' }]}><Input size="large" autoComplete="email" /></Form.Item>{mode !== 'forgot' && <Form.Item label="密码" name="password" rules={[{ required: true, min: 10, message: '密码至少 10 位' }]}><Input.Password size="large" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></Form.Item>}<Button block type="primary" size="large" htmlType="submit" loading={submitting || loading}>{mode === 'login' ? '登录' : mode === 'register' ? '创建账号' : '发送重置邮件'}</Button></Form><Text type="secondary">继续即表示同意用户协议、隐私政策与内容声明。</Text></Card></main>
+  const replaceDevice = async () => {
+    if (!selectedDevice || !loginValues) return
+    setSubmitting(true)
+    try {
+      const result = await onLogin({ ...loginValues, replaceDeviceId: selectedDevice, deviceReplacement: true })
+      if (result?.deviceLimit) { setDeviceConflict(result.deviceLimit); setSelectedDevice(''); return }
+      location.href = next
+    } finally { setSubmitting(false) }
+  }
+  const confirmDeviceReplacement = () => {
+    const selected = deviceConflict?.devices?.find(device => device.id === selectedDevice)
+    if (!selected) return
+    Modal.confirm({ title: '确认解除这台设备？', content: `${selected.label || '已登录设备'}将立即退出并失去访问权限。解除后会在当前设备自动登录。`, okText: '解除并登录', cancelText: '再想一下', okButtonProps: { danger: true }, onOk: replaceDevice })
+  }
+  return <main className="modern-auth"><Card className="modern-auth-card"><div className="modern-auth-brand"><div className="brand-mark-modern">拾</div><div><Text className="brand-name auth-brand-name">拾页</Text><Text className="brand-subtitle auth-brand-subtitle">ENGLISH WORKSPACE</Text></div></div>{deviceConflict ? <section aria-labelledby="device-limit-title"><Title level={2} id="device-limit-title">选择要解除的设备</Title><Paragraph>此账号已连接 {deviceConflict.activeDevices} 台设备（上限 {deviceConflict.limit} 台）。解除一台旧设备后，会自动在当前设备登录。</Paragraph><Alert type="warning" showIcon message="被解除设备上的登录会立即失效" description="请选择你不再使用的设备。" /><Radio.Group className="device-replacement-list" value={selectedDevice} onChange={event => setSelectedDevice(event.target.value)} aria-label="选择要解除的已登录设备">{(deviceConflict.devices || []).map(device => <Radio key={device.id} value={device.id} className="device-replacement-option"><span className="device-replacement-copy"><strong>{device.label || '已登录设备'}</strong><small>{device.userAgent || '未知浏览器或系统'}</small><small>最近活动：{device.lastSeenAt ? new Date(device.lastSeenAt).toLocaleString('zh-CN') : '未知'}</small></span></Radio>)}</Radio.Group><Space direction="vertical" className="device-replacement-actions" size={10}><Button block type="primary" size="large" disabled={!selectedDevice} loading={submitting} onClick={confirmDeviceReplacement}>解除所选设备并继续登录</Button><Button block size="large" disabled={submitting} onClick={() => { setDeviceConflict(null); setSelectedDevice(''); if (loginValues) form.setFieldsValue(loginValues) }}>返回登录</Button></Space></section> : <><Text className="eyebrow">SHIYUE MEMBERS</Text><Title level={1}>{mode === 'login' ? '登录拾页' : mode === 'register' ? '创建账号' : '找回密码'}</Title><Paragraph>{mode === 'login' ? '登录后进入书城、学习空间和会员中心。未激活邮箱的账号需要先完成邮件验证。' : mode === 'register' ? '使用有效邀请码创建学习账号，完成邮箱激活后才能登录。' : '输入注册邮箱，我们会发送密码重置邮件。'}</Paragraph><Segmented block value={mode} onChange={value => { setMode(value); setDeviceConflict(null) }} options={[{ label: '登录', value: 'login' }, { label: '注册', value: 'register' }, { label: '找回密码', value: 'forgot' }]} />{registrationEmail && <Alert className="auth-action-alert" type="success" showIcon message="账号已创建，请先验证邮箱" description={`验证邮件已发送到 ${registrationEmail}。打开邮件中的链接完成激活，再回来登录；未收到时请检查垃圾邮件。`} />}<Form form={form} layout="vertical" onFinish={submit} disabled={loading || submitting} className="modern-auth-form">{mode === 'register' && <Form.Item label="邀请码" name="invitationCode" extra={<a href="/support#invitation" target="_blank" rel="noreferrer">没有邀请码？联系支持咨询</a>} rules={[{ required: true, message: '请输入邀请码' }]}><Input size="large" autoComplete="off" /></Form.Item>}<Form.Item label="邮箱" name="email" rules={[{ required: true, type: 'email', message: '请输入有效邮箱' }]}><Input size="large" autoComplete="email" /></Form.Item>{mode !== 'forgot' && <Form.Item label="密码" name="password" rules={[{ required: true, min: 10, message: '密码至少 10 位' }]}><Input.Password size="large" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></Form.Item>}<Button block type="primary" size="large" htmlType="submit" loading={submitting || loading}>{mode === 'login' ? '登录' : mode === 'register' ? '创建账号' : '发送重置邮件'}</Button></Form><Text type="secondary">继续即表示同意用户协议、隐私政策与内容声明。</Text></>}</Card></main>
 }
 
 function AuthActionPage({ path }) {

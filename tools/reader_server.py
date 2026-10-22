@@ -104,6 +104,7 @@ RATE_LIMIT_LOCK=threading.Lock()
 RATE_LIMIT_BUCKETS=defaultdict(deque)
 RATE_LIMIT_RULES={
     "/api/auth/login":(10,300),"/api/auth/register":(8,3600),"/api/auth/forgot-password":(5,3600),
+    "/api/auth/login/replace-device":(10,300),
     "/api/auth/reset-password":(8,3600),"/api/checkins":(30,3600),"/api/word-context":(60,3600),"/api/sentence-grammar":(60,3600),
     "/api/word-hover":(300,3600),"/api/word-dictionary":(120,3600),"/api/membership/redeem":(10,300),
 }
@@ -783,6 +784,13 @@ class Handler(SimpleHTTPRequestHandler):
             if path=="/api/auth/login":
                 device_id=self.headers.get("X-Device-Id","") or item.get("deviceId","")
                 result=SAAS.login(item.get("email"),item.get("password"),device_id,self.headers.get("User-Agent",""),self.client_address[0])
+                self.reply({"user":result["user"]},extra_headers=self.session_cookie_headers(result["sessionToken"],result["csrfToken"]));return
+            if path=="/api/auth/login/replace-device":
+                device_id=self.headers.get("X-Device-Id","") or item.get("deviceId","")
+                replace_device_id=str(item.get("replaceDeviceId","")).strip()
+                if not replace_device_id:
+                    raise SaaSError("invalid_device", "请选择要解除的设备。", 400)
+                result=SAAS.login(item.get("email"),item.get("password"),device_id,self.headers.get("User-Agent",""),self.client_address[0],replace_device_id)
                 self.reply({"user":result["user"]},extra_headers=self.session_cookie_headers(result["sessionToken"],result["csrfToken"]));return
             if path=="/api/auth/logout":
                 if not self.require_saas_user() or not self.require_csrf():return
