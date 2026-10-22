@@ -451,6 +451,23 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
 .public-faq .ant-collapse { background: transparent; border-color: var(--study-line); }
 .public-faq .ant-collapse-header { padding: 20px 24px !important; font-size: 16px; }
 .public-faq .ant-collapse-content-box { color: var(--study-muted); line-height: 1.9; }
+.public-loading { width: 100%; pointer-events: none; }
+.public-loading-brand, .public-loading-nav, .public-loading-actions { display: flex; align-items: center; gap: 14px; }
+.public-loading-nav { gap: 30px; }
+.public-loading .ant-skeleton.ant-skeleton-element .ant-skeleton-input { min-width: 0; }
+.public-loading .public-hero-copy { min-width: 0; }
+.public-loading-title { display: grid; gap: 16px; margin: 22px 0 24px; }
+.public-loading-title .ant-skeleton.ant-skeleton-element .ant-skeleton-input { height: clamp(57px, 5vw, 80px); }
+.public-loading-title > :last-child { width: 88%; }
+.public-loading .public-hero-copy > .ant-skeleton { width: 100%; }
+.public-loading .public-hero-copy > .public-loading-actions { margin-top: 30px; }
+.public-loading .public-loading-actions .ant-skeleton-button { min-width: 120px; }
+.public-loading .public-hero-visual { animation: none; }
+.public-loading-preview { aspect-ratio: 16 / 10; }
+.public-loading-preview > .ant-skeleton, .public-loading-preview .ant-skeleton.ant-skeleton-element .ant-skeleton-image { display: block; width: 100%; height: 100%; }
+.public-loading-columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+.public-loading-columns > div { padding: 28px; border: 1px solid #e0e4df; border-radius: 20px; background: #fff; }
+@media (prefers-reduced-motion: reduce) { .public-loading .ant-skeleton-active .ant-skeleton-input, .public-loading .ant-skeleton-active .ant-skeleton-avatar, .public-loading .ant-skeleton-active .ant-skeleton-button, .public-loading .ant-skeleton-active .ant-skeleton-image, .public-loading .ant-skeleton-active .ant-skeleton-title, .public-loading .ant-skeleton-active .ant-skeleton-paragraph > li { animation: none; } }
 .public-hero h1 > span { display: block; }
 .signup-note { display: block; margin-top: 14px; color: var(--study-muted); font-size: 13px; }
 .public-sale-price .ant-tag { margin: 0; color: #596b60; background: #f4f6f1; border-color: #dbe3d8; }

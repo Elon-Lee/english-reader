@@ -29,6 +29,7 @@ import VocabularyPage from './pages/VocabularyPage'
 import WorkspacePage from './pages/WorkspacePage'
 import PageSkeleton from './components/PageSkeleton'
 import AppSkeleton from './components/AppSkeleton'
+import PublicSiteSkeleton from './components/PublicSiteSkeleton'
 import PublicSite, { PurchasePage } from './pages/PublicSite'
 import LegalPage, { isLegalPath, legalPageTitle } from './pages/LegalPage'
 import './styles.css'
@@ -250,7 +251,7 @@ function App() {
   const theme = { token: { colorPrimary: '#2f6f50', colorInfo: '#2f6f50', borderRadius: 12, fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif' }, components: { Layout: { siderBg: '#17392b', headerBg: '#fbfaf7' }, Menu: { darkItemBg: '#17392b', darkItemSelectedBg: '#2b5943', darkItemHoverBg: '#234b38', itemBorderRadius: 10 } } }
   if (['/verify-email', '/reset-password'].includes(location.pathname)) return <ConfigProvider theme={theme}><AntApp>{contextHolder}<AuthActionPage path={location.pathname} /></AntApp></ConfigProvider>
   if (isLegalPath(routePath)) return <ConfigProvider theme={theme}><AntApp><LegalPage path={routePath} authenticated={authState === 'authenticated'} /></AntApp></ConfigProvider>
-  if (authState === 'loading') return <ConfigProvider theme={theme}><AntApp>{contextHolder}{consoleRoute ? <AppSkeleton reader={screen === 'reader'} /> : <main className="modern-auth"><Card className="modern-auth-card"><Skeleton active avatar title paragraph={{ rows: 6 }} /></Card></main>}</AntApp></ConfigProvider>
+  if (authState === 'loading') return <ConfigProvider theme={theme}><AntApp>{contextHolder}{consoleRoute ? <AppSkeleton reader={screen === 'reader'} /> : publicPage ? <PublicSiteSkeleton page={publicPage} /> : <main className="modern-auth"><Card className="modern-auth-card"><Skeleton active avatar title paragraph={{ rows: 6 }} /></Card></main>}</AntApp></ConfigProvider>
   if (publicPage) return <ConfigProvider theme={theme}><AntApp>{contextHolder}<PublicSite authenticated={authState === 'authenticated'} page={publicPage} /></AntApp></ConfigProvider>
   if (purchaseRoute) return <ConfigProvider theme={theme}><AntApp>{contextHolder}<PageErrorBoundary key={routePath}><PurchasePage authenticated={authState === 'authenticated'} /></PageErrorBoundary></AntApp></ConfigProvider>
   if (routePath === '/login' || routePath === '/register') {
