@@ -1,5 +1,26 @@
 # PC 阅读器交接
 
+## 2026-10-22 单词首次发音时序（本地，未发布）
+
+- 用户反馈电脑扬声器/有线耳机首次点击首音节不完整。实测旧实现首次 `play()` 在 `readyState=0` 调用，Time 约 542ms 后开始，重播约 66ms；从悬浮转点击还会让原视频先 play 再 pause。采样未证明音频内容本身缺失，不能把程序事件验收等同于扬声器听感验收。
+- 新增 `utils/wordPronunciation.mjs`：悬浮意图成立且开启自动发音时只预加载当前词；最多缓存 12 个近期音频对象，同词复用。点击等待缓冲就绪，从 0 秒播放；重播回到开头后再次确认就绪。取消旧请求、加载失败、15 秒超时和浏览器播放限制均有处理；停止、换词或离开后旧加载不能晚到播放。
+- `ReaderPage` 把悬浮暂停的恢复意图直接交给单词发音，取消中间恢复视频；单词完整结束后才恢复原音，若仍在查词则交回悬浮暂停。快速换词继承恢复意图，手动播放、练句、录音及离开取消待播发音。仍使用现有鉴权 `/api/word-tts`，未改后端、音频内容或加入人工静音。
+- 验证：新增发音单测 5 项（冷加载、缓存重播、取消、失败/超时、缓存淘汰），既有阅读器 20 项与 UI 22 项、构建、modern smoke、JS 检查、Python 编译、`git diff --check` 通过。真实读物首次展开侧栏点击 ending：`readyState=4`、0 秒起播、完整播放 1.608 秒，无中途 waiting；第二次复用并完整重播。悬浮 just 后点击，视频只在发音结束后恢复。证据 `.local/debug/reader-hover-20261022/pronunciation-{before,buffered,handoff}.json`。
+- 用户进一步确认：前述缓冲修复后，仅刷新页面后的第一个单词仍卡顿，后续不同单词均正常。当前按首次音频输出启动方向修复；尚未通过物理扬声器录音确定唯一根因。
+- 新增 `createWordAudioOutput`，阅读器内所有单词共用一个惰性创建的 AudioContext。点击手势内同步 resume；当前词接入输出通道，首次/中断恢复时等待 `getOutputTimestamp().contextTime` 推进，再与缓冲就绪共同放行，从 0 秒播放。后续词复用已启动通道，同词复用媒体源；换词断开旧源，退出关闭通道。没有 timestamp 时按浏览器报告的输出延迟与渲染时钟等待；不支持 Web Audio 时保留缓冲播放。没有固定追加静音、裁剪原音或页面加载自动发声。结束/失败同时 abort 清理尚未完成的等待。
+- 本轮验证：发音单测扩为 10 项（首播等待设备输出、后续复用、首播取消/切词、启动超时/拒播重试、挂起恢复、兼容路径），既有阅读器 20 项、UI 22 项、构建、modern smoke、JS 检查、Python 编译与 diff 检查通过。Chrome 独立页面首次 been 与后续 with 均从 0 秒、readyState=4 开始，共用一个输出通道；再次完整刷新后的 been 从 0 播到 1.536 秒，未出现 waiting/error，原视频保持暂停。证据 `.local/debug/reader-hover-20261022/pronunciation-output-{first,refresh}.json`。诊断测试页已关闭，未提交学习成果。
+- 待确认：请用户在扬声器/有线耳机上刷新后直接点击首个单词复听；事件记录不等于首音节听感验收。未发布生产，既有构建大包提示仍在。
+
+## 2026-10-22 PC 悬浮简义与暂停修复（本地，未发布）
+
+- 解除右侧单词工具已有 `wordInfo` 时跳过悬浮查词的限制；工具展开/收起均使用真实 `/api/word-hover`，保留 300ms 意图延时、缓存、加载/空/失败状态及过期请求隔离。暂停继续遵循 Aa 的 `wordHoverPause` 偏好；录音/权限申请时不触发。
+- 连续跨词共享最初的播放恢复意图：离词立即隐藏简义，400ms 后才恢复原音；进入下个单词立即取消恢复计时，连同下个词的 300ms 查询等待一起保持暂停。旧单词失焦和过期发音结束回调不干扰新悬浮，手动播放/暂停及卸载取消待恢复状态。原本手动暂停时不误播放。
+- 悬浮触发时停止正在进行的正文自动平滑滚动，避免滚动事件立即清除简义并恢复原音。滚动正文仍按原规则关闭悬浮层。
+- 新增 `frontend/src/components/ReaderHoverCard.jsx`：PC 简义采用现有阅读纸面/护眼语义色、21px 单词、14px 简义、轻边框阴影和次级操作/暂停说明；测量实际尺寸后贴近单词定位，空间不足下翻，限制视口边界。未做移动端视觉优化、未更改后端/API/鉴权。
+- 验证：构建、modern smoke、UI 22 项、readerLearning/readerPresentation/readerTiming 单测 20 项、JS 检查、Python 编译、`git diff --check`。沿用本地 Chrome 已登录阅读器，以真实官方视频验证工具展开且已有词义时悬浮暂停、持续停留时间不前进、移开恢复、原本暂停时查词/移开不恢复及工具收起查词。最终恢复原护眼设置和工具展开，媒体暂停，保留既有学习草稿、未提交学习成果。
+- 截图：`.local/debug/reader-hover-20261022/01-before.png`、`02-tools-open-hover.png`。仍有既有构建大包提示；尚未发布生产。
+- 连续查词复验：真实视频在 This / word / can / be / used 间多次正反移动与短暂离开返回，全程仅一次 pause、时间保持 310.658562 秒；真正离开后 402ms 仅一次 play。手动暂停后换词/移开仍暂停；构建、modern/UI/阅读器单测、JS/Python 编译和差异检查通过。事件记录 `.local/debug/reader-hover-20261022/continuous-hover-playback.json`；临时监听已清理。
+
 ## 2026-10-21 中文字幕显示修复
 
 - 修复 YouTube 中文 SRT 已保存但未匹配阅读句子的问题：新导入匹配后入库，已有书籍由私人/官方阅读 API 在鉴权后按时间读取关联有效字幕，只补充响应、不写回正文或重转写。缺失文件与未匹配段保持无译文。
@@ -180,6 +201,7 @@ npm run test:modern
 npm run test:ui
 npm run check:js
 node --test frontend/src/utils/readerLearning.test.mjs frontend/src/utils/readerPresentation.test.mjs
+node --test frontend/src/utils/wordPronunciation.test.mjs
 python3 -m py_compile tools/reader_server.py tools/saas_auth.py tools/test_saas_phase7_integration.py
 git diff --check
 ```
