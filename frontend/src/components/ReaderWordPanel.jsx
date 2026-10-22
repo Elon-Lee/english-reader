@@ -24,14 +24,14 @@ export default function ReaderWordPanel({ info, sentence, savedWord, meaning, no
     <Text className="reader-light-sentence">{sentence?.text}</Text>
     <section className="reader-light-meaning" aria-busy={info.contextLoading}>
       <Text className="reader-section-label">核心含义</Text>
-      {contextMeaning ? <Paragraph>{contextMeaning}</Paragraph> : groups[0] ? <Paragraph>{groups[0].translations.join('；')}</Paragraph> : info.contextLoading || info.dictionaryLoading ? <div className="reader-section-loading" role="status"><Spin size="small" /> 查询中…</div> : <Text type="secondary">暂无简义，可打开完整释义。</Text>}
+      {contextMeaning ? <Paragraph>{contextMeaning}</Paragraph> : groups[0] ? <Paragraph>{groups[0].translations.join('；')}</Paragraph> : info.contextLoading || info.dictionaryLoading ? <div className="reader-section-loading" role="status"><Spin size="small" /> 查询中…</div> : <Text type="secondary">暂无简义，可查看更多用法。</Text>}
     </section>
     {info.contextError && <div className="reader-light-service"><span>本句分析暂不可用</span><Button type="link" size="small" onClick={() => onRetry('context')}>重试</Button></div>}
     {info.dictionaryError && <div className="reader-light-service"><span>词典暂不可用</span><Button type="link" size="small" onClick={() => onRetry('dictionary')}>重试</Button></div>}
     <Space wrap className="reader-light-actions">
       <Button size="small" type={savedWord ? 'default' : 'primary'} icon={savedWord ? <CheckOutlined /> : <StarOutlined />} loading={saving && !savingDetails} disabled={Boolean(savedWord) || savingDetails || locked} onClick={() => onSave()}>{savedWord ? '已收藏' : '加入生词本'}</Button>
       <Button size="small" onClick={onPractice}>练这一句</Button>
-      <Button size="small" type="link" onClick={onExpand}>完整释义</Button>
+      <Button size="small" type="link" onClick={onExpand}>查看更多用法</Button>
       <Button size="small" type="link" onClick={onLocate}>定位原句</Button>
     </Space>
     {saveError && <Alert type="error" showIcon message="保存失败" description={saveError} />}

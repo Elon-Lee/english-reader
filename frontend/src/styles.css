@@ -803,6 +803,11 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
   .modern-shell[data-study-theme="iris"] .eyebrow{color:#6a5d83!important}
 }
 
+.modern-shell .reader-study-workspace .reader-head-actions .reader-finish-button{border-color:var(--study-primary,#285c45)!important;background:var(--study-primary,#285c45)!important;color:#fff!important}
+.modern-shell .reader-study-workspace .reader-head-actions .reader-finish-button:hover{border-color:var(--study-primary,#285c45)!important;background:color-mix(in srgb,var(--study-primary,#285c45) 88%,#000)!important;color:#fff!important}
+.modern-shell .reader-study-workspace .reader-player-buttons .reader-primary-play{border-color:var(--study-primary,#285c45)!important;background:var(--study-primary,#285c45)!important;box-shadow:0 7px 18px color-mix(in srgb,var(--study-primary,#285c45) 20%,transparent)!important}
+.modern-shell .reader-study-workspace .reader-player-buttons .reader-primary-play:hover{border-color:color-mix(in srgb,var(--study-primary,#285c45) 88%,#000)!important;background:color-mix(in srgb,var(--study-primary,#285c45) 88%,#000)!important;color:#fff!important}
+
 @media (prefers-reduced-motion: reduce) {
   .public-landing .public-screenshot-stage { transition: none; }
 }

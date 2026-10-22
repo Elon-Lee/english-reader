@@ -1,5 +1,15 @@
 # PC 阅读器交接
 
+## 2026-10-22 查词位置统一（本地，未发布）
+
+- 点击正文单词仅按当前侧栏可见性分流：收起时显示轻量词卡，展开时切到“单词”并更新内容；普通/专注一致。词卡“查看更多用法”展开侧栏并关闭词卡，之后连续查词沿用侧栏；手动收起后恢复词卡。悬浮简义仍独立，不展开或切换侧栏。
+- “固定”只持久化下次进入时默认展开的偏好，移除偏好变化直接改写当前展开状态的 effect，并增加用途 Tooltip/无障碍名称。初始偏好由父级加载完成后挂载阅读器；进入专注仍先收起，退出恢复普通模式快照。保留原来的未保存释义/备注保护、请求隔离、发音和原媒体行为。
+- 关键文件：`frontend/src/pages/ReaderPage.jsx`、`frontend/src/components/ReaderWordPanel.jsx`；已重建 `reader/site/`。未改后端/API/数据库，未做移动端视觉优化。
+- 验证：`npm run build:modern`、`test:modern`、`test:ui`（22 项）、`check:js`，readerLearning/readerPresentation/readerTiming/wordPronunciation 共 30 项，`python3 -m py_compile tools/reader_server.py tools/saas_auth.py tools/test_saas_phase7_integration.py`、`git diff --check` 均通过。既有大包及 Ant Modal 弃用警告仍在。
+- 本地 5173 + 8790 的 Chrome 真实官方视频检查：固定后收起→词卡、详情→侧栏→连续换词、句法/跟读标签→查词回单词、未固定但临时展开→侧栏、取消固定不收起、固定开/关刷新默认状态、专注词卡/详情/连续换词/收起、退出恢复普通模式通过。最终恢复原普通模式/固定偏好，侧栏展开、原视频暂停；保留既有学习草稿，未收藏或提交学习成果。截图 `.local/debug/reader-lookup-20261022/{popup,sidebar}.jpg`。
+- 范围：本轮未重验实际扬声器首音节听感、悬浮跨词播放恢复或麦克风录制；相关既有验证与待确认项见下方。未发布生产。
+- 后续主题修复：SaaS 根布局提供 `--study-primary` 当前主题变量；阅读器“保存本次学习”和播放器主播放按钮（含 hover/阴影）读取该变量，避免固定绿色覆盖松林绿/雾蓝/鸢尾紫。构建、modern smoke、UI 回归及差异检查通过；Chrome 当前鸢尾紫主题实测主色 `#71638d` 及按钮计算色同步；未发布生产。
+
 ## 2026-10-22 单词首次发音时序（本地，未发布）
 
 - 用户反馈电脑扬声器/有线耳机首次点击首音节不完整。实测旧实现首次 `play()` 在 `readyState=0` 调用，Time 约 542ms 后开始，重播约 66ms；从悬浮转点击还会让原视频先 play 再 pause。采样未证明音频内容本身缺失，不能把程序事件验收等同于扬声器听感验收。
