@@ -1,5 +1,14 @@
 # PC 工作台交接
 
+## 2026-10-22 首页、学习空间与阅读器视觉更新
+
+- 按“清爽、轻松、可商业落地”的阅读工作室方向调整公开首页、PC 学习空间和阅读器：真实产品截图继续作为官网首屏素材；去除遮挡截图的悬浮卡，改为说明行；首页问题区由深色大色块改为浅灰绿内容带。Ant Design 工作区侧栏切为浅色，计划区、成果数据、工具栏与阅读正文统一纸白/灰绿，珊瑚色只强调当前句；没有改动 API、学习数据、读物播放或复习逻辑。
+- 关键文件：`frontend/src/main.jsx`、`frontend/src/pages/PublicSite.jsx`、`frontend/src/styles.css`；`npm run build:modern` 更新跟踪产物 `reader/site/`。
+- 本地预览：SaaS `http://localhost:8792`、Vite `http://localhost:5174`。Chrome 真实本地会话检查首页、学习空间和阅读器；截图中原产品图片、真实学习数据、原音媒体、正文、工具面板和播放栏均显示正常，未点击保存学习或执行其他业务写入。
+- `npm run build:modern`、`npm run test:modern`、`npm run test:ui`（22 项）、`npm run check:js`、`python3 -m py_compile tools/reader_server.py`、`git diff --check` 通过。构建保留已有分包体积警告。
+- 按要求通过 `BASE_URL_IMAGE` / `GPT_IMAGE2_KEY` 及用户指定内网端点尝试 GPT Image 2；内网模型列表未提供该模型，生图接口返回 503，没有生成新图片，故继续复用现有真实产品截图。本地环境变量中的密钥未写入仓库或交接。
+- 仅本地，未发布生产；只完成 PC 视觉改造，未进行移动端优化。
+
 ## 2026-10-21 刷新认证加载骨架
 
 - 原认证恢复分支复用了最大宽度 460px 的登录卡片，导致刷新工作台只看到居中小骨架。新增 `frontend/src/components/AppSkeleton.jsx`，工作台 `/app` 与兼容 `screen` 路由使用 248px 侧栏、顶栏及共享内容骨架；阅读器使用全宽原布局骨架。登录/注册等其他页面保留原认证卡片，不展示未授权菜单或用户数据。
