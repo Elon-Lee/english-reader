@@ -1,4 +1,5 @@
 export const DEFAULT_PREFERENCES = {
+  theme: 'pine',
   density: 'comfortable',
   readerLayout: 'side',
   eyeComfort: false,

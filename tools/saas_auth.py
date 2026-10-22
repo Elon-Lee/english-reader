@@ -520,6 +520,7 @@ class SaaSService:
         if not isinstance(incoming, dict):
             raise SaaSError("invalid_preferences", "阅读偏好数据无效。", 400)
         enum_fields = {
+            "theme": {"pine", "mist", "iris"},
             "density": {"comfortable", "compact"},
             "readerLayout": {"side", "stack"},
             "shortcutPrevious": {"a", "s", "d", "space", "arrowleft", "arrowright", "enter"},

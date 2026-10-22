@@ -64,9 +64,11 @@ class PrivateWorkspaceTests(unittest.TestCase):
         self.accounts.verify_email(raw)
 
     def test_reader_appearance_preferences_persist_for_owner(self):
-        values={"readerFontSize":24,"readerLineHeight":2.1,"readerContentWidth":920,"readerToolsPinned":True,"wordAutoPronounce":False,"wordHoverPause":True}
+        values={"theme":"mist","readerFontSize":24,"readerLineHeight":2.1,"readerContentWidth":920,"readerToolsPinned":True,"wordAutoPronounce":False,"wordHoverPause":True}
         result=self.accounts.update_preferences(str(self.owner["id"]),values)
         self.assertEqual(result,values)
+        self.assertEqual(self.accounts.preferences(str(self.owner["id"])),values)
+        with self.assertRaises(SaaSError):self.accounts.update_preferences(str(self.owner["id"]),{"theme":"unknown"})
         self.assertEqual(self.accounts.preferences(str(self.owner["id"])),values)
         self.assertEqual(self.accounts.preferences(str(self.other["id"])),{})
         self.accounts.update_preferences(str(self.owner["id"]),{"readerFontSize":20})

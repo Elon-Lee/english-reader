@@ -74,6 +74,13 @@
 
 在开始移动端优化前，保证所有 PC 页面使用 React + Ant Design、真实 API、真实交互，并且刷新和浏览器前进/后退正常。
 
+## 2026-10-22 学习中心主题切换
+
+- 系统设置增加松林绿（默认）、雾蓝、鸢尾紫三套浅色主题，点击立即预览并写入账号 `/api/preferences`；写入失败回退原主题。主题在首次进入学习中心时按需读取并在刷新后恢复，Ant Design 主色、侧栏选中态及 PC 工作区框架色同步变化。
+- 修复刷新时先显示默认主题再切到账号主题：首次认证恢复先读取偏好，再显示已登录工作区；首次数据加载复用同一偏好快照，避免并行状态提交覆盖主题。
+- 主题由 `frontend/src/main.jsx`、`frontend/src/config/preferences.js`、`frontend/src/pages/SettingsPage.jsx`、`frontend/src/styles.css` 实现；服务端 `tools/saas_auth.py` 校验允许值，未知主题拒绝。阅读器护眼模式保持独立。
+- 构建、modern smoke（含首屏主题加载顺序断言）、现有 UI 回归、Python 编译和 `git diff --check` 通过。phase7 PostgreSQL 集成因未配置以 `_test` 结尾的 `SHIYUE_SAAS_TEST_DATABASE_URL` 未运行；本轮修复尚未做真实登录态浏览器刷新验收，未发布生产，未处理移动端优化。
+
 ## 已完成
 
 - 2026-10-19 平台部署任务加入“删除无效任务”确认操作，清理所有节点失败/取消历史并刷新列表。平台菜单和直接页面仅在 `user.isAdmin && user.canManagePlatform` 时开放；远程管理员与本地普通账号均不挂载平台页、不请求部署接口。构建、前端检查及浏览器模拟 API 的三类权限/删除交互验收通过；本地后台已重启，未发布生产。接口与模式配置见 platform-operations。

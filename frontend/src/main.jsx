@@ -82,6 +82,7 @@ function App() {
   const [currentUser, setCurrentUser] = useState(null)
   const [devices, setDevices] = useState([])
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES)
+  const preferencesLoaded = useRef(false)
   const [deletionStatus, setDeletionStatus] = useState({ status: 'none' })
   const [health, setHealth] = useState({ saasEnabled: true })
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -109,15 +110,22 @@ function App() {
     const loadId = silent ? loadSequence.current : ++loadSequence.current
     if (!silent) { setPageLoading(true); setPageError('') }
     let authenticated = false
+    let initialPreferences = null
     try {
       const authResponse = await fetch('/api/auth/me', { credentials: 'include' })
       if (authResponse.status === 401) { setAuthState('unauthenticated'); return }
       if (!authResponse.ok) throw new Error('无法读取登录状态')
       const userData = await authResponse.json()
       authenticated = true
-      setAuthState('authenticated')
       setCurrentUser(userData.user || null)
-    if (!consoleRoute) return
+      if (!consoleRoute) { setAuthState('authenticated'); return }
+      if (!preferencesLoaded.current) {
+        initialPreferences = await getJson('/api/preferences', DEFAULT_PREFERENCES)
+        if (loadId !== loadSequence.current) return
+        setPreferences(current => ({ ...current, ...(initialPreferences || {}) }))
+        preferencesLoaded.current = true
+      }
+      setAuthState('authenticated')
     const needBooks = ['workspace', 'library', 'stats'].includes(targetScreen)
     const [healthData, deviceData, workspaceData, vocabularyData, catalogData, libraryData, daysData, membershipData, membershipOrderData, rewardData, rewardsCatalogData, rewardsLedgerData, importsData, preferencesData, deletionData] = await Promise.all([
       getJson('/api/health', health),
@@ -133,7 +141,7 @@ function App() {
       targetScreen === 'rewards' ? getJson('/api/rewards/catalog', { rewards: [] }) : Promise.resolve({ rewards: rewardsCatalog }),
       targetScreen === 'rewards' ? getJson('/api/rewards/ledger', { items: [] }) : Promise.resolve({ items: rewardsLedger }),
       targetScreen === 'library' ? getJson('/api/workspace/imports', { tasks: [] }) : Promise.resolve({ tasks: importTasks }),
-      ['settings', 'reader'].includes(targetScreen) ? getJson('/api/preferences', preferences) : Promise.resolve(preferences),
+      ['settings', 'reader'].includes(targetScreen) && !initialPreferences ? getJson('/api/preferences', preferences) : Promise.resolve(initialPreferences || preferences),
       targetScreen === 'settings' ? getJson('/api/account/deletion-status', { status: 'none' }) : Promise.resolve(deletionStatus),
     ])
     if (loadId !== loadSequence.current) return
@@ -142,6 +150,7 @@ function App() {
     setDevices(deviceData.devices || [])
     setVocabulary(vocabularyData.items || [])
     setPreferences(current => ({ ...current, ...(preferencesData || {}) }))
+    if (['settings', 'reader'].includes(targetScreen) || !preferencesLoaded.current) preferencesLoaded.current = true
     setDeletionStatus(deletionData || { status: 'none' })
     const workspaceBooks = (workspaceData.books || []).map((book, i) => normalizeBook(book, i, '私人读物'))
     const officialBooks = (catalogData.books || []).map((book, i) => normalizeBook(book, i, '官方读物'))
@@ -164,7 +173,10 @@ function App() {
       setAdminData({ dashboard: adminDashboard, users: adminUsers.users || [], audit: [], planVersions: adminPlanVersions.planVersions || [], commerceProducts: adminCommerce.products || [], commerceEntitlements: adminEntitlements })
     }
     } catch (error) {
-      if (loadId === loadSequence.current && authenticated) setPageError(error.message || '页面数据加载失败，请重试。')
+      if (loadId === loadSequence.current && authenticated) {
+        setAuthState('authenticated')
+        setPageError(error.message || '页面数据加载失败，请重试。')
+      }
       error.afterAuthentication = authenticated
       throw error
     } finally {
@@ -231,7 +243,7 @@ function App() {
   const register = async values => { try { const result = await postJson('/api/auth/register', values); messageApi.success('账号已创建，请前往邮箱完成验证'); return result } catch (error) { messageApi.error(error.message || '注册失败'); throw error } }
   const forgotPassword = async values => { try { const result = await postJson('/api/auth/forgot-password', values); messageApi.success('如果账号存在，重置邮件已发送'); return result } catch (error) { messageApi.error(error.message || '发送失败'); throw error } }
   const logout = async () => { try { await postJson('/api/auth/logout', {}); setCurrentUser(null); setAuthState('unauthenticated') } catch (error) { messageApi.error(error.message || '退出登录失败') } }
-  const savePreferences = async values => { try { const result = await postJson('/api/preferences', values); setPreferences(current => ({ ...current, ...(result.preferences || result || values) })); messageApi.success('阅读偏好已保存') } catch (error) { messageApi.error(error.message || '阅读偏好保存失败'); throw error } }
+  const savePreferences = async values => { const themeOnly = Object.keys(values || {}).length === 1 && 'theme' in values; try { const result = await postJson('/api/preferences', values); setPreferences(current => ({ ...current, ...(result.preferences || result || values) })); messageApi.success(themeOnly ? '界面主题已保存' : '阅读偏好已保存') } catch (error) { messageApi.error(error.message || (themeOnly ? '界面主题保存失败' : '阅读偏好保存失败')); throw error } }
   const mergePreferences = values => setPreferences(current => ({ ...current, ...values }))
   const requestDeletion = () => { Modal.confirm({ title: '确认申请注销账户？', content: '提交后会退出当前设备，并进入 30 天宽限期。期间重新登录可以取消。', okText: '申请注销', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { await postJson('/api/account/deletion', { reason: '用户在新版工作台申请注销' }); setAuthState('unauthenticated'); messageApi.success('注销申请已提交') } catch (error) { messageApi.error(error.message || '注销申请失败'); throw error } } }) }
   const cancelDeletion = async () => { try { await postJson('/api/account/deletion/cancel', {}); await reloadWorkspace({ silent: true }); messageApi.success('注销申请已取消') } catch (error) { messageApi.error(error.message || '取消注销失败') } }
@@ -248,7 +260,13 @@ function App() {
   const selectScreen = (key, tab) => { setMobileOpen(false); if (key === screen) { if (pageLoading) reloadWorkspace({ targetScreen: key }).catch(error => messageApi.error(error.message || '页面刷新失败')); return } setPageLoading(true); history.pushState({}, '', `${modernEntryPath()}?screen=${key}${key === 'admin' && tab === 'catalog' ? '&adminTab=catalog' : key === 'catalog' && tab === 'onboarding' ? '&onboarding=1' : ''}`); setScreen(key) }
   const openReader = (book, options = {}) => { const kind = book.source === '官方读物' || book.trial ? 'official' : 'workspace'; location.href = `${modernEntryPath()}?screen=reader&reader=${kind}&id=${encodeURIComponent(book.id)}${book.trial ? '&trial=1' : ''}${options.guided || new URLSearchParams(location.search).get('onboarding') === '1' ? '&onboarding=1' : ''}` }
 
-  const theme = { token: { colorPrimary: '#285c45', colorInfo: '#285c45', borderRadius: 8, fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif' }, components: { Layout: { siderBg: '#f7f8f4', headerBg: '#fcfcf8' }, Menu: { lightItemBg: '#f7f8f4', lightItemSelectedBg: '#e7efe8', lightItemSelectedColor: '#285c45', lightItemHoverBg: '#eef2ed', itemBorderRadius: 6 } } }
+  const themePalettes = {
+    pine: { primary: '#285c45', info: '#285c45', sider: '#f7f8f4', header: '#fcfcf8', selected: '#e7efe8', hover: '#eef2ed' },
+    mist: { primary: '#426b84', info: '#426b84', sider: '#f2f5f7', header: '#fbfcfd', selected: '#e1ebf1', hover: '#edf3f6' },
+    iris: { primary: '#71638d', info: '#71638d', sider: '#f5f3f8', header: '#fcfbfd', selected: '#ebe6f2', hover: '#f2eff6' },
+  }
+  const activePalette = themePalettes[preferences.theme] || themePalettes.pine
+  const theme = { token: { colorPrimary: activePalette.primary, colorInfo: activePalette.info, borderRadius: 8, fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif' }, components: { Layout: { siderBg: activePalette.sider, headerBg: activePalette.header }, Menu: { lightItemBg: activePalette.sider, lightItemSelectedBg: activePalette.selected, lightItemSelectedColor: activePalette.primary, lightItemHoverBg: activePalette.hover, itemBorderRadius: 6 } } }
   if (['/verify-email', '/reset-password'].includes(location.pathname)) return <ConfigProvider theme={theme}><AntApp>{contextHolder}<AuthActionPage path={location.pathname} /></AntApp></ConfigProvider>
   if (isLegalPath(routePath)) return <ConfigProvider theme={theme}><AntApp><LegalPage path={routePath} authenticated={authState === 'authenticated'} /></AntApp></ConfigProvider>
   if (authState === 'loading') return <ConfigProvider theme={theme}><AntApp>{contextHolder}{consoleRoute ? <AppSkeleton reader={screen === 'reader'} /> : publicPage ? <PublicSiteSkeleton page={publicPage} /> : <main className="modern-auth"><Card className="modern-auth-card"><Skeleton active avatar title paragraph={{ rows: 6 }} /></Card></main>}</AntApp></ConfigProvider>
@@ -261,7 +279,7 @@ function App() {
   }
   if (authState !== 'authenticated') return <ConfigProvider theme={theme}><AntApp>{contextHolder}<AuthPage loading={false} next="/app" onLogin={login} onRegister={register} onForgot={forgotPassword} /></AntApp></ConfigProvider>
   return <ConfigProvider theme={theme}>
-    <AntApp>{contextHolder}<Layout className={`modern-shell ${screen === 'reader' ? 'reader-shell' : ''}`}>
+    <AntApp>{contextHolder}<Layout data-study-theme={preferences.theme || DEFAULT_PREFERENCES.theme} className={`modern-shell ${screen === 'reader' ? 'reader-shell' : ''}`}>
       <Sider className="modern-sider" width={248} breakpoint="lg" collapsedWidth={0} trigger={null} onBreakpoint={broken => { if (broken) setMobileOpen(false) }}>
         <Brand /><SidebarMenu nav={nav} settings={settings} screen={screen} selectScreen={selectScreen} />
         <div className="sider-bottom"><div className="plan-chip"><div><Text className="plan-label">{currentUser?.displayName || '我的学习账号'}</Text><Text className="plan-copy">{currentUser?.email || '正在读取账户'}</Text></div></div><Text className="sider-version">让每次阅读有所积累</Text></div>

@@ -24,7 +24,7 @@ function PageIntro() {
   return <div className="page-intro"><div><Text className="eyebrow">WORKSPACE SETTINGS</Text><Title level={1}>系统设置</Title><Paragraph>阅读偏好、登录设备和账户数据由当前账号管理。</Paragraph></div></div>
 }
 
-export default function SettingsPage({ currentUser, devices, preferences, deletionStatus, onRevokeOwnDevice, onSavePreferences, onLogout, onRequestDeletion, onCancelDeletion, messageApi }) {
+export default function SettingsPage({ currentUser, devices, preferences, deletionStatus, onRevokeOwnDevice, onSavePreferences, onPreferencesChange, onLogout, onRequestDeletion, onCancelDeletion, messageApi }) {
   const [form] = Form.useForm()
   const currentDeviceKnown = (devices || []).some(device => device.current)
   useEffect(() => { form.setFieldsValue({ ...DEFAULT_PREFERENCES, ...(preferences || {}) }) }, [form, preferences])
@@ -38,8 +38,30 @@ export default function SettingsPage({ currentUser, devices, preferences, deleti
     onSavePreferences(values)
   }
 
+  const chooseTheme = async theme => {
+    const previousTheme = preferences?.theme || DEFAULT_PREFERENCES.theme
+    if (previousTheme === theme) return
+    onPreferencesChange?.({ theme })
+    try { await onSavePreferences({ theme }) }
+    catch { onPreferencesChange?.({ theme: previousTheme }) }
+  }
+
   return <div className="page-stack settings-page">
     <PageIntro />
+    <Card className="theme-picker-card" title="界面主题" extra={<Text type="secondary">仅调整学习中心外观</Text>}>
+      <div className="theme-picker-options" role="group" aria-label="选择界面主题">
+        {[
+          { id: 'pine', name: '松林绿', note: '自然沉静', colors: ['#f6f5f1', '#285c45', '#e7efe8'] },
+          { id: 'mist', name: '雾蓝', note: '清晰理性', colors: ['#f2f5f7', '#426b84', '#e1ebf1'] },
+          { id: 'iris', name: '鸢尾紫', note: '柔和知性', colors: ['#f5f3f8', '#71638d', '#ebe6f2'] },
+        ].map(option => <button key={option.id} type="button" className={`theme-choice ${preferences?.theme === option.id ? 'selected' : ''}`} style={{ '--choice-accent': option.colors[1] }} aria-pressed={preferences?.theme === option.id} onClick={() => chooseTheme(option.id)}>
+          <span className="theme-choice-preview" style={{ '--preview-bg': option.colors[0], '--preview-accent': option.colors[1], '--preview-selected': option.colors[2] }}><i /><i /><i /></span>
+          <span className="theme-choice-copy"><strong>{option.name}</strong><small>{option.note}</small></span>
+          {preferences?.theme === option.id && <Tag color="success">当前</Tag>}
+        </button>)}
+      </div>
+      <Text className="theme-picker-note" type="secondary">阅读器的护眼模式仍单独控制正文底色，不受界面主题影响。</Text>
+    </Card>
     <Row gutter={[20, 20]}>
       <Col xs={24} xl={16}>
         <Card title="阅读器偏好">
