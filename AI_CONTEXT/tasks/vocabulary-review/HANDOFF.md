@@ -1,6 +1,11 @@
 # 生词复习学习闭环交接
 
-更新时间：2026-10-20（Asia/Shanghai）
+更新时间：2026-10-23（Asia/Shanghai）
+
+## 2026-10-23 主题背景补齐（本地，未发布）
+
+- `frontend/src/styles.css` 接入根布局当前调色板的 `--study-primary` / `--study-tint` / `--study-tint-soft`：今日复习主卡、导航/词数控件、状态标签、方法说明带、原句提示和复习结算背景随松林绿/雾蓝/鸢尾紫切换；配套文字、图标和分隔线同步适配。评分按钮保留原有语义色，未修改复习业务或 API。
+- 已重建 `reader/site/`。构建、modern smoke、UI 22 项、JS 检查、Python 编译（reader_server/saas_auth/saas_review）及 `git diff --check` 通过；本轮未做浏览器实测，未发布生产。
 
 ## 目标与现状
 

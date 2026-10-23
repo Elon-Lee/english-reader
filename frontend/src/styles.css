@@ -803,6 +803,22 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
   .modern-shell[data-study-theme="iris"] .eyebrow{color:#6a5d83!important}
 }
 
+/* Theme surfaces for membership and the complete vocabulary review flow. */
+.modern-shell :is(.membership-page,.vocabulary-page,.review-practice,.review-summary){--study-ink:color-mix(in srgb,var(--study-primary) 35%,#222);--study-muted:color-mix(in srgb,var(--study-primary) 15%,#5c626b);--study-line:color-mix(in srgb,var(--study-primary) 16%,#fff)}
+.modern-shell :is(.membership-hero,.review-today-hero){background:var(--study-tint)}
+.modern-shell .review-summary-hero{background:var(--study-tint-soft)}
+.modern-shell .membership-icon{background:var(--study-primary)}
+.modern-shell :is(.membership-ai-summary .ant-tag,.review-hero-label .ant-tag,.review-word-list .ant-tag){border-color:var(--study-line);background:var(--study-tint-soft);color:var(--study-primary)}
+.modern-shell .review-nav .ant-segmented{background:var(--study-tint)}
+.modern-shell .review-plan-controls .ant-segmented{background:color-mix(in srgb,var(--study-primary) 18%,#fff)}
+.modern-shell .review-plan-controls .ant-select-selector{border-color:var(--study-line)!important;background:var(--study-tint-soft)!important}
+.modern-shell .review-method-strip{border-color:var(--study-line);background:color-mix(in srgb,var(--study-primary) 16%,#fff);color:var(--study-primary)}
+.modern-shell .review-recall-card blockquote{border-color:color-mix(in srgb,var(--study-primary) 35%,#fff);background:var(--study-tint-soft);color:var(--study-muted)}
+.modern-shell :is(.review-hero-label,.review-due-count,.review-section-label,.review-summary-icon,.review-week-card .ant-btn,.review-hint-area .ant-btn,.review-word-list .ant-list-item-action .ant-btn){color:var(--study-primary)}
+.modern-shell :is(.review-today-hero .ant-card-body>div.ant-typography,.review-plan-controls label,.review-hero-actions>.ant-typography,.review-method-strip>.anticon,.review-summary-footnote){color:var(--study-muted)}
+.modern-shell .review-summary-stats{border-color:var(--study-line)}
+.modern-shell .membership-expiry{color:var(--study-muted)!important}
+
 .modern-shell .reader-study-workspace .reader-head-actions .reader-finish-button{border-color:var(--study-primary,#285c45)!important;background:var(--study-primary,#285c45)!important;color:#fff!important}
 .modern-shell .reader-study-workspace .reader-head-actions .reader-finish-button:hover{border-color:var(--study-primary,#285c45)!important;background:color-mix(in srgb,var(--study-primary,#285c45) 88%,#000)!important;color:#fff!important}
 .modern-shell .reader-study-workspace .reader-player-buttons .reader-primary-play{border-color:var(--study-primary,#285c45)!important;background:var(--study-primary,#285c45)!important;box-shadow:0 7px 18px color-mix(in srgb,var(--study-primary,#285c45) 20%,transparent)!important}

@@ -1,5 +1,11 @@
 # PC 工作台交接
 
+## 2026-10-23 会员中心与生词复习主题背景（本地，未发布）
+
+- 根布局从当前主题调色板输出 `--study-tint` / `--study-tint-soft`；会员权益主卡、图标与 AI 权益标签改用主题主色及浅色背景。会员根容器增加 `membership-page`，文字/分隔线变量限定在本页及复习页，不影响官网或阅读器护眼。
+- 生词今日计划、导航/词数控件、方法说明带、原句提示和复习结算背景同步切换，详见 `../vocabulary-review/HANDOFF.md`。关键文件：`frontend/src/main.jsx`、`frontend/src/pages/MembershipPage.jsx`、`frontend/src/styles.css`；已重建 `reader/site/`。
+- 构建、modern smoke、UI 22 项、JS 检查、Python 编译（reader_server/saas_auth/saas_review）及 `git diff --check` 通过；未做浏览器实测，保留既有构建大包提示，未发布生产。
+
 ## 2026-10-22 登录设备替换交互
 
 - 登录遇到设备上限时显示本人设备选择页；明确提示将使所选设备立即退出，二次确认后通过原登录流程自动完成新设备登录。支持取消返回并保留账号输入；提交有加载态，换机期间失败保留选择并报错。

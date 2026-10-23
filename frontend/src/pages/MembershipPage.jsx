@@ -88,7 +88,7 @@ export default function MembershipPage({ membership, membershipOrders, onRefresh
     { title: '订单编号', dataIndex: 'id', render: value => <Text copyable={{ text: value }} className="order-id">{value}</Text> },
   ]
 
-  return <div className="page-stack">
+  return <div className="page-stack membership-page">
     {contextHolder}
     <PurchaseRecovery />
     <div className="page-intro"><div><Text className="eyebrow">MEMBERSHIP</Text><Title level={1}>会员中心</Title><Paragraph>你的当前权益、使用情况与开通记录。</Paragraph></div><Space><Button onClick={() => { setRedeemOpen(true); setRedeemResult(null); setRedeemError('') }}>兑换码</Button><Button type="primary" onClick={() => setManageOpen(true)}>{plan?.slug === 'free' ? '升级会员' : '续费 / 比较方案'}</Button></Space></div>

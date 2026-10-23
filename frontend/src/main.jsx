@@ -279,7 +279,7 @@ function App() {
   }
   if (authState !== 'authenticated') return <ConfigProvider theme={theme}><AntApp>{contextHolder}<AuthPage loading={false} next="/app" onLogin={login} onRegister={register} onForgot={forgotPassword} /></AntApp></ConfigProvider>
   return <ConfigProvider theme={theme}>
-    <AntApp>{contextHolder}<Layout data-study-theme={preferences.theme || DEFAULT_PREFERENCES.theme} style={{ '--study-primary': activePalette.primary }} className={`modern-shell ${screen === 'reader' ? 'reader-shell' : ''}`}>
+    <AntApp>{contextHolder}<Layout data-study-theme={preferences.theme || DEFAULT_PREFERENCES.theme} style={{ '--study-primary': activePalette.primary, '--study-tint': activePalette.selected, '--study-tint-soft': activePalette.hover }} className={`modern-shell ${screen === 'reader' ? 'reader-shell' : ''}`}>
       <Sider className="modern-sider" width={248} breakpoint="lg" collapsedWidth={0} trigger={null} onBreakpoint={broken => { if (broken) setMobileOpen(false) }}>
         <Brand /><SidebarMenu nav={nav} settings={settings} screen={screen} selectScreen={selectScreen} />
         <div className="sider-bottom"><div className="plan-chip"><div><Text className="plan-label">{currentUser?.displayName || '我的学习账号'}</Text><Text className="plan-copy">{currentUser?.email || '正在读取账户'}</Text></div></div><Text className="sider-version">让每次阅读有所积累</Text></div>
