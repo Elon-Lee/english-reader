@@ -1,5 +1,10 @@
 # PC 阅读器交接
 
+## 2026-10-23 播放条主题色补齐（本地，未发布）
+
+- `frontend/src/styles.css`：句末暂停开启图标的背景/边框、原音进度条已播放轨道及拖动圆点改用现有 `--study-primary`，随松林绿/雾蓝/鸢尾紫切换；进度条 hover 和圆点 hover/active/focus 光环同步取主题色。关闭图标保留中性灰，禁用进度条沿用 Ant Design 禁用样式；普通、护眼、专注共用进度条规则。
+- 已重建 `reader/site/`；构建、modern smoke、UI 22 项、JS 检查、Python 编译（reader_server/saas_auth/test_saas_phase7_integration）及 `git diff --check` 通过。仅样式修复，未操作用户浏览器，本轮未做浏览器实测；既有构建大包提示仍在，未发布生产。
+
 ## 2026-10-22 EPUB 配套原音同步
 
 - 文档原音对齐结果带 `timingPolicy=acoustic-only`，私人/官方阅读 API 都透传；`readerTiming.mjs` 仅为这类正文使用真实词时间，缺失词不估算。2026-10-22 用户实测 `Sunny_and_Rainy-Louise_Spilsbury` 后修复高亮闪断：不再在词 end 或句 end 清空高亮，而是停留到下一个真实词/句 start；首词开始前无高亮，未对齐词继续跳过。与既有视频的停顿显示一致，不修改导入时间、不需重导入。
