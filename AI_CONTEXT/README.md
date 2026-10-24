@@ -90,6 +90,7 @@
 |---|---|
 | 品牌图标、网站图标导出 | `tasks/brand-assets/HANDOFF.md` |
 | PC 页面、路由、分页、工作台视觉 | `tasks/pc-workspace/HANDOFF.md` |
+| 书城搜索、筛选、内容发现方案（待评审，未实现） | `tasks/catalog-discovery/HANDOFF.md` |
 | PC 商业化改版、布局配色、购买流程与验收 | `tasks/commercial-design-audit/HANDOFF.md` |
 | 生词复习、练习会话、学习结算与复访闭环 | `tasks/vocabulary-review/HANDOFF.md` |
 | 阅读器、媒体、字幕、快捷键、词典 | `tasks/reader/HANDOFF.md` |

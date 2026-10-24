@@ -1,4 +1,9 @@
 export const READER_APPEARANCE = { readerFontSize: 20, readerLineHeight: 1.8, readerContentWidth: 760 }
+export function mediaCompletionProgress({ ended, trial = false, sentences = [] } = {}) {
+  const lastSentenceId = sentences.at(-1)?.id
+  return ended === true && !trial && lastSentenceId != null && String(lastSentenceId).trim()
+    ? { lastSentenceId: String(lastSentenceId), completed: true } : null
+}
 export function readerAppearance(values = {}) {
   const bounded = (key, min, max) => {
     const value = Number(values[key])
@@ -43,4 +48,18 @@ export function mediaSentenceIndex(sentences, time) {
     if (Number(start) > time) break
   }
   return active
+}
+
+// Line mode keeps the active sentence near the reading position. Screen mode
+// leaves the reader alone while the sentence is fully visible, then starts the
+// next page from the top when the active sentence crosses the viewport edge.
+export function readerScrollTop({ mode = 'line', scrollTop = 0, viewportHeight = 0, targetTop = 0, targetHeight = 0, padding = 18 } = {}) {
+  const current = Math.max(0, Number(scrollTop) || 0)
+  const height = Math.max(0, Number(viewportHeight) || 0)
+  const top = Number(targetTop) || 0
+  const rowHeight = Math.max(0, Number(targetHeight) || 0)
+  if (mode !== 'screen') return Math.max(0, current + top - Math.max(padding, (height - rowHeight) * 0.3))
+  const visibleBottom = Math.max(padding, height - padding)
+  if (top >= padding && top + rowHeight <= visibleBottom) return null
+  return Math.max(0, current + top - padding)
 }

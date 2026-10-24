@@ -73,6 +73,7 @@ def main() -> int:
     check("/api/workspace/books/" in entry and "confirmTitle" in entry, "private book lifecycle integration missing")
     reader_page = READER_PAGE.read_text(encoding="utf-8")
     modern_styles = MODERN_STYLES.read_text(encoding="utf-8")
+    check("阅读推进方式" in entry and "当前行轮播" in entry and "整屏阅读" in entry, "reader flow preference controls missing")
     check('className="reader-media-float"' in reader_page, "stacked reader media must use a dedicated floating wrapper")
     check("grid-template-rows:auto minmax(0,1fr)" in modern_styles, "stacked reader media must reserve a separate row above sentences")
     check(".reader-media-top .reader-media-float" in modern_styles and "justify-content:center" in modern_styles, "stacked reader media must stay centered")

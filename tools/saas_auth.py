@@ -544,6 +544,7 @@ class SaaSService:
             "theme": {"pine", "mist", "iris"},
             "density": {"comfortable", "compact"},
             "readerLayout": {"side", "stack"},
+            "readerFlowMode": {"line", "screen"},
             "shortcutPrevious": {"a", "s", "d", "space", "arrowleft", "arrowright", "enter"},
             "shortcutRepeat": {"a", "s", "d", "space", "arrowleft", "arrowright", "enter"},
             "shortcutNext": {"a", "s", "d", "space", "arrowleft", "arrowright", "enter"},
@@ -555,6 +556,7 @@ class SaaSService:
             "readerFontSize": (16, 28),
             "readerLineHeight": (1.4, 2.4),
             "readerContentWidth": (560, 1040),
+            "readerMediaPosition": (0, 1),
         }
         current = self.preferences(user_id)
         changed = False

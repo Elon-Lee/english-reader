@@ -178,7 +178,24 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
  .settings-page .danger-card{margin-top:16px}
  .settings-page .ant-list-item{padding:8px 0 0}
  .settings-page .ant-list-item-meta-description{font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.settings-page .reader-preferences-card>.ant-card-body{padding:14px 18px 16px}
+.settings-page .reader-preferences-card .ant-form-item{margin-bottom:8px}
+.settings-page .reader-preferences-card .ant-form-item-label{padding-bottom:2px}
+.settings-page .reader-preferences-card .ant-divider{margin:9px 0 7px}
+.settings-page .reader-preferences-card .settings-behavior-grid{gap:8px}
+.reader-appearance-modal .ant-modal-content{padding:18px 20px 16px;border:1px solid #dce4dc;border-radius:14px;background:#fffdfa}
+.reader-appearance-modal .ant-modal-header{margin-bottom:8px;background:transparent}
+.reader-appearance-form .ant-form-item{margin-bottom:10px}
+.reader-appearance-form .ant-form-item-label{padding-bottom:3px}
 }
+.settings-radio-group.ant-radio-group{display:flex;gap:8px;width:100%}
+.settings-radio-group .ant-radio-wrapper{display:flex;flex:1;align-items:center;min-height:36px;margin:0;padding:6px 10px;border:1px solid transparent;border-radius:6px;color:var(--settings-radio-ink);line-height:1.5;transition:background-color .15s,border-color .15s}
+.settings-radio-group .ant-radio-wrapper:not(.ant-radio-wrapper-disabled):hover{background:color-mix(in srgb,var(--settings-radio-accent) 5%,var(--settings-radio-surface))}
+.settings-radio-group .ant-radio-wrapper-checked{border-color:color-mix(in srgb,var(--settings-radio-accent) 28%,var(--settings-radio-surface));background:color-mix(in srgb,var(--settings-radio-accent) 8%,var(--settings-radio-surface));color:var(--settings-radio-accent);font-weight:600}
+.settings-radio-group .ant-radio-wrapper-disabled{color:var(--settings-radio-disabled)}
+.settings-radio-group .ant-radio-wrapper:has(input:focus-visible){outline:2px solid var(--settings-radio-accent);outline-offset:2px}
+.settings-radio-group .ant-radio-wrapper>span:last-child{padding-inline-end:0;white-space:nowrap}
+.settings-radio-help{margin-top:5px;color:var(--settings-radio-muted);font-size:12px;line-height:1.6}
 @media (min-width: 901px){.reader-layout-side .reader-main{max-height:calc(100vh - 164px);overflow:auto;padding-right:4px}.reader-layout-side .reader-main::-webkit-scrollbar,.reader-inspector::-webkit-scrollbar{width:8px}.reader-layout-side .reader-main::-webkit-scrollbar-thumb,.reader-inspector::-webkit-scrollbar-thumb{border-radius:9px;background:#cad0c8}}
 .catalog-cover-placeholder{position:relative}.catalog-popularity{position:absolute;right:8px;bottom:8px;display:flex;gap:10px;padding:6px 9px;border:1px solid #f2d7d8;border-radius:8px;background:#fff7f5;box-shadow:0 3px 10px #7b403214;font:500 12px/1.2 sans-serif;color:#59635d}.catalog-popularity span{display:flex;align-items:center;gap:4px}.catalog-popularity span:first-child svg{color:#e35d67;fill:#e35d67}
 .catalog-filter-card .ant-select{min-width:130px}.catalog-book-card{height:100%}.catalog-cover-placeholder{display:grid;width:100%;height:150px;place-items:center;margin-bottom:16px;border-radius:12px;color:#17392b;background:linear-gradient(145deg,#dce9d8,#f5dfba);font-family:Georgia,serif;font-size:40px;font-weight:700;letter-spacing:.04em}.catalog-cover-placeholder.large{width:150px;height:196px;flex:0 0 auto;margin:0;font-size:46px}.catalog-detail{display:flex;flex-direction:column;gap:16px}.catalog-detail-heading{display:flex;align-items:flex-start;gap:24px}.catalog-detail-heading h2{margin:10px 0 2px}.catalog-preview{max-height:240px;overflow:auto;background:#f8f7f2}.catalog-detail-actions{justify-content:flex-end}.modal-loading{display:grid;min-height:280px;place-items:center}.import-task-progress{display:flex;min-width:220px;align-items:center;gap:12px}.import-task-progress .ant-progress{min-width:150px}
@@ -610,6 +627,24 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
 }
 
 /* Reader controls stay contextual; video framing and keyboard feedback are consistent across desktop layouts. */
+.reader-media-drag-handle{display:none}
+@media(min-width:901px){
+ .reader-study-workspace.reader-media-side:not(.reader-without-media):not(.focus-mode) .reader-media-panel{top:var(--reader-media-offset,0px)}
+ .reader-study-workspace.reader-media-side:not(.reader-without-media):not(.focus-mode) .reader-media-drag-handle{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;height:26px;padding:2px 8px;border:1px solid var(--reader-border);border-radius:0 0 8px 8px;background:var(--reader-paper);color:var(--reader-muted);font:inherit;font-size:11px;cursor:ns-resize;touch-action:none;user-select:none}
+ .reader-study-workspace .reader-media-drag-handle:hover,.reader-study-workspace .reader-media-drag-handle.is-dragging{color:var(--reader-accent);background:var(--reader-selection)}
+ .reader-media-drag-handle:focus-visible{outline:2px solid var(--reader-accent);outline-offset:-2px}
+ .reader-media-drag-handle:disabled{cursor:default;opacity:.55}
+ .reader-study-workspace.reader-media-side.reader-tools-closed:not(.reader-without-media):not(.focus-mode) .reader-content-row:has(> .reader-media-panel video){grid-template-columns:clamp(260px,22vw,360px) minmax(0,1fr)}
+ .reader-study-workspace.reader-media-side:not(.reader-without-media):not(.focus-mode) .reader-media-panel:has(video){justify-self:start;width:100%}
+ .reader-study-workspace.reader-media-side .reader-media-stage:has(> .reader-media){width:100%}
+}
+@media(min-width:901px) and (max-width:1350px){
+ .reader-study-workspace.reader-media-side.reader-tools-open:not(.focus-mode) .reader-media-drag-handle{display:none}
+ .reader-study-workspace.reader-media-side.reader-tools-open:not(.focus-mode) .reader-media-panel{top:0}
+}
+@media(min-width:1351px){
+ .reader-study-workspace.reader-media-side.reader-tools-open:not(.reader-without-media):not(.focus-mode) .reader-content-row:has(> .reader-media-panel video){grid-template-columns:clamp(260px,22vw,360px) minmax(0,1fr) 350px}
+}
 @media(min-width:901px){
  .reader-study-workspace .reader-content-row{column-gap:12px}
  .reader-study-workspace.reader-media-top .reader-reading-column{gap:6px}
@@ -830,4 +865,48 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
 
 @media (prefers-reduced-motion: reduce) {
   .public-landing .public-screenshot-stage { transition: none; }
+}
+
+/* Reader eye comfort is a page surface, so every workbench layer shares the same paper tone. */
+.reader-shell:has(.reader-study-workspace.eye-comfort),
+.reader-shell:has(.reader-study-workspace.eye-comfort) .modern-content,
+.reader-shell:has(.reader-study-workspace.eye-comfort) .ant-layout-content {
+  background: #e8ecdf !important;
+}
+.reader-study-workspace.eye-comfort {
+  --reader-canvas: #e8ecdf;
+  --reader-paper: #f0f2e6;
+  --reader-ink: #2d3b31;
+  --reader-muted: #52654e;
+  --reader-border: #ccd5c5;
+  --reader-selection: #e0e8d7;
+  background: var(--reader-canvas) !important;
+}
+.reader-study-workspace.eye-comfort .reader-workspace,
+.reader-study-workspace.eye-comfort .reader-content-row,
+.reader-study-workspace.eye-comfort .reader-reading-column {
+  background: transparent !important;
+}
+.reader-study-workspace.eye-comfort .reader-head,
+.reader-study-workspace.eye-comfort .reader-story,
+.reader-study-workspace.eye-comfort .reader-inspector,
+.reader-study-workspace.eye-comfort .reader-player,
+.reader-study-workspace.eye-comfort .reader-player-main {
+  border-color: var(--reader-border) !important;
+  background: var(--reader-paper) !important;
+  color: var(--reader-ink);
+}
+.reader-study-workspace.eye-comfort .reader-sentence {
+  border-bottom-color: #d8dfd2;
+}
+.reader-study-workspace.eye-comfort .reader-sentence.active,
+.reader-study-workspace.eye-comfort .reader-sentence.learning-selected:not(.active),
+.reader-study-workspace.eye-comfort .reader-sentence:hover {
+  background: var(--reader-selection) !important;
+}
+.reader-study-workspace.eye-comfort .reader-hover-card,
+.reader-study-workspace.eye-comfort .reader-lookup-card {
+  border-color: #aebba6;
+  background: var(--reader-paper);
+  color: var(--reader-ink);
 }

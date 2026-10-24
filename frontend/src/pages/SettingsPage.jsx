@@ -8,7 +8,6 @@ import {
   Form,
   List,
   Row,
-  Segmented,
   Select,
   Space,
   Switch,
@@ -17,6 +16,8 @@ import {
 } from 'antd'
 
 import { DEFAULT_PREFERENCES, KEY_OPTIONS } from '../config/preferences'
+import ReaderFlowControl from '../components/ReaderFlowControl'
+import SettingsRadioGroup from '../components/SettingsRadioGroup'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -64,12 +65,13 @@ export default function SettingsPage({ currentUser, devices, preferences, deleti
     </Card>
     <Row gutter={[20, 20]}>
       <Col xs={24} xl={16}>
-        <Card title="阅读器偏好">
+        <Card className="reader-preferences-card" title="阅读器偏好">
           <Form form={form} layout="vertical" onFinish={submit} initialValues={DEFAULT_PREFERENCES}>
-            <Row gutter={[16, 0]} className="settings-option-grid">
-              <Col span={12}><Form.Item label="默认学习空间" name="focusMode" getValueProps={value => ({ value: value ? 'focus' : 'normal' })} normalize={value => value === 'focus'}><Segmented block options={[{ label: '普通模式', value: 'normal' }, { label: '专注模式', value: 'focus' }]} /></Form.Item></Col>
-              <Col span={12}><Form.Item label="正文布局" name="readerLayout"><Segmented block options={[{ label: '左右布局', value: 'side' }, { label: '上下布局', value: 'stack' }]} /></Form.Item></Col>
-              <Col span={12}><Form.Item label="界面密度" name="density"><Segmented block options={[{ label: '舒适', value: 'comfortable' }, { label: '紧凑', value: 'compact' }]} /></Form.Item></Col>
+            <Row gutter={[12, 0]} className="settings-option-grid">
+              <Col span={12}><Form.Item label="默认学习空间" name="focusMode" getValueProps={value => ({ value: value ? 'focus' : 'normal' })} normalize={value => value === 'focus'}><SettingsRadioGroup label="默认学习空间" options={[{ label: '普通模式', value: 'normal' }, { label: '专注模式', value: 'focus' }]} /></Form.Item></Col>
+              <Col span={12}><Form.Item label="正文布局" name="readerLayout"><SettingsRadioGroup label="正文布局" options={[{ label: '左右布局', value: 'side' }, { label: '上下布局', value: 'stack' }]} /></Form.Item></Col>
+              <Col span={12}><Form.Item label="阅读推进方式" name="readerFlowMode"><ReaderFlowControl /></Form.Item></Col>
+              <Col span={12}><Form.Item label="界面密度" name="density"><SettingsRadioGroup label="界面密度" options={[{ label: '舒适', value: 'comfortable' }, { label: '紧凑', value: 'compact' }]} /></Form.Item></Col>
               <Col span={12}><Form.Item label="默认播放速度" name="playbackRate"><Select options={[.5, .75, 1, 1.25, 1.5, 2].map(value => ({ value, label: `${value}×` }))} /></Form.Item></Col>
             </Row>
 
@@ -80,7 +82,7 @@ export default function SettingsPage({ currentUser, devices, preferences, deleti
             </div>
 
             <Divider orientation="left">阅读快捷键</Divider>
-            <Row gutter={16} className="settings-shortcut-grid">
+            <Row gutter={12} className="settings-shortcut-grid">
               <Col span={6}><Form.Item label="上一句" name="shortcutPrevious"><Select options={KEY_OPTIONS} /></Form.Item></Col>
               <Col span={6}><Form.Item label="复读当前句" name="shortcutRepeat"><Select options={KEY_OPTIONS} /></Form.Item></Col>
               <Col span={6}><Form.Item label="下一句" name="shortcutNext"><Select options={KEY_OPTIONS} /></Form.Item></Col>

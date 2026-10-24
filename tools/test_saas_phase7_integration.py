@@ -64,7 +64,7 @@ class PrivateWorkspaceTests(unittest.TestCase):
         self.accounts.verify_email(raw)
 
     def test_reader_appearance_preferences_persist_for_owner(self):
-        values={"theme":"mist","readerFontSize":24,"readerLineHeight":2.1,"readerContentWidth":920,"readerToolsPinned":True,"wordAutoPronounce":False,"wordHoverPause":True}
+        values={"theme":"mist","readerFontSize":24,"readerLineHeight":2.1,"readerContentWidth":920,"readerFlowMode":"screen","readerMediaPosition":0.65,"readerToolsPinned":True,"wordAutoPronounce":False,"wordHoverPause":True}
         result=self.accounts.update_preferences(str(self.owner["id"]),values)
         self.assertEqual(result,values)
         self.assertEqual(self.accounts.preferences(str(self.owner["id"])),values)
@@ -77,7 +77,7 @@ class PrivateWorkspaceTests(unittest.TestCase):
     def test_reader_appearance_preferences_reject_invalid_values_atomically(self):
         user_id=str(self.owner["id"])
         self.accounts.update_preferences(user_id,{"readerFontSize":20})
-        for key,value in (("readerFontSize",29),("readerFontSize",True),("readerLineHeight",float("nan")),("readerContentWidth",float("inf")),("readerToolsPinned","false"),("wordHoverPause",1)):
+        for key,value in (("readerFontSize",29),("readerFontSize",True),("readerLineHeight",float("nan")),("readerContentWidth",float("inf")),("readerFlowMode","book"),("readerMediaPosition",-0.1),("readerMediaPosition",1.1),("readerMediaPosition",True),("readerMediaPosition",float("nan")),("readerToolsPinned","false"),("wordHoverPause",1)):
             with self.subTest(key=key,value=value):
                 with self.assertRaises(SaaSError):
                     self.accounts.update_preferences(user_id,{key:value})
@@ -119,6 +119,41 @@ class PrivateWorkspaceTests(unittest.TestCase):
         book=self.workspace.reader(str(self.owner['id']),self.book_id)['book']
         self.assertEqual(book['sentences'][0]['timingPolicy'],'acoustic-only')
         with self.assertRaises(SaaSError):self.workspace.reader(str(self.other['id']),self.book_id)
+
+    def test_media_completion_is_explicit_idempotent_and_survives_replay(self):
+        owner_id,other_id=str(self.owner['id']),str(self.other['id'])
+        self.workspace.save_progress(owner_id,self.book_id,'s2')
+        self.assertEqual(self.workspace.list_books(owner_id)['books'][0]['progress']['percent'],50)
+        for sentence,completed in (('s1',True),('missing',True),('s2','true')):
+            with self.assertRaises(SaaSError):self.workspace.save_progress(owner_id,self.book_id,sentence,completed)
+        with self.assertRaises(SaaSError):self.workspace.save_progress(other_id,self.book_id,'s2',True)
+        first=self.workspace.save_progress(owner_id,self.book_id,'s2',True)
+        self.assertTrue(first['completedAt'])
+        self.assertEqual(self.workspace.save_progress(owner_id,self.book_id,'s2',True)['completedAt'],first['completedAt'])
+        self.assertEqual(self.workspace.list_books(owner_id)['books'][0]['progress']['percent'],100)
+        self.assertEqual(self.workspace.learning_days(owner_id)['days'],[])
+        self.workspace.save_progress(owner_id,self.book_id,'s1')
+        self.workspace.activity(owner_id,self.book_id,10,1,'s1','replay-after-completion')
+        progress=self.workspace.list_books(owner_id)['books'][0]['progress']
+        self.assertEqual(progress['percent'],100)
+        self.assertEqual(progress['completedAt'],first['completedAt'])
+        self.assertEqual(self.workspace.reader(owner_id,self.book_id)['book']['progress']['completedAt'],first['completedAt'])
+
+    def test_official_completion_requires_current_library_access(self):
+        owner_id,viewer_id=str(self.owner['id']),str(self.other['id']);catalog_id='completion-official'
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("INSERT INTO catalog_books(id,source_content_book_id,title,rights_status,publication_status) VALUES(%s,%s,'Official','licensed','published')",(catalog_id,self.book_id))
+                cursor.execute("INSERT INTO user_library(id,user_id,catalog_book_id) VALUES(%s,%s,%s)",(new_id(),viewer_id,catalog_id))
+        result=self.workspace.save_progress(viewer_id,catalog_id,'s2',True)
+        self.assertEqual(result['bookId'],catalog_id)
+        self.assertTrue(self.catalog.reader(viewer_id,catalog_id)['book']['progress']['completedAt'])
+        self.assertEqual(self.catalog.library(viewer_id)['items'][0]['progress']['percent'],100)
+        with self.assertRaises(SaaSError):self.workspace.save_progress(owner_id,catalog_id,'s2',True)
+        with self.assertRaises(SaaSError):self.workspace.save_progress(viewer_id,self.book_id,'s2',True)
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:cursor.execute('DELETE FROM user_library WHERE user_id=%s AND catalog_book_id=%s',(viewer_id,catalog_id))
+        with self.assertRaises(SaaSError):self.workspace.save_progress(viewer_id,catalog_id,'s2',True)
 
     def test_owner_isolation_reader_vocab_annotation_and_activity(self):
         owner_id,other_id=str(self.owner["id"]),str(self.other["id"])
@@ -307,6 +342,12 @@ class PrivateWorkspaceTests(unittest.TestCase):
                     return data
                 finally:client.close()
             journey_request('/api/workspace/journey',401,request_cookies='',request_csrf='')
+            completion={'bookId':self.book_id,'lastSentenceId':'s2','completed':True}
+            journey_request('/api/workspace/progress',401,'POST',completion,request_cookies='',request_csrf='')
+            journey_request('/api/workspace/progress',403,'POST',completion,request_csrf='')
+            journey_request('/api/workspace/progress',400,'POST',{**completion,'lastSentenceId':'s1'})
+            self.assertTrue(journey_request('/api/workspace/progress',200,'POST',completion)['completedAt'])
+            self.assertEqual(journey_request('/api/workspace/books',200)['books'][0]['progress']['percent'],100)
             journey_request('/api/workspace/journey',403,'POST',{'action':'dismiss_guide'},request_csrf='')
             self.assertFalse(journey_request('/api/workspace/journey',200)['guide']['dismissed'])
             self.assertTrue(journey_request('/api/workspace/journey',200,'POST',{'action':'dismiss_guide'})['guide']['dismissed'])

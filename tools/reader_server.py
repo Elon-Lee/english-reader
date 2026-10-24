@@ -1028,7 +1028,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.reply(result);return
             if path=="/api/workspace/vocabulary":self.reply(WORKSPACE.save_vocabulary(user_id,str(item.get("bookId","")).strip(),str(item.get("sentenceId","")).strip(),item.get("wordIndex"),item.get("payload")),201);return
             if path=="/api/workspace/annotations":self.reply(WORKSPACE.annotate(user_id,str(item.get("bookId","")).strip(),str(item.get("sentenceId","")).strip(),item.get("wordIndex"),item.get("payload")));return
-            if path=="/api/workspace/progress":self.reply(WORKSPACE.save_progress(user_id,str(item.get("bookId","")).strip(),str(item.get("lastSentenceId","")).strip()));return
+            if path=="/api/workspace/progress":self.reply(WORKSPACE.save_progress(user_id,str(item.get("bookId","")).strip(),str(item.get("lastSentenceId","")).strip(),item.get("completed",False)));return
             if path=="/api/workspace/activity":
                 result=WORKSPACE.activity(user_id,str(item.get("bookId","")).strip(),item.get("readingSeconds",0),item.get("sentences",0),str(item.get("lastSentenceId","")or""),str(item.get("idempotencyKey","")).strip(),item.get("lookups",0),item.get("reviews",0),item.get("shadowAttempts",0),item.get("sessions",0))
                 try:result["reward"]=REWARDS.activity(user_id,item.get("readingSeconds",0),item.get("sentences",0),item.get("reviews",0),str(item.get("idempotencyKey","")).strip())

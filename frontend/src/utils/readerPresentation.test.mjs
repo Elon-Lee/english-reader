@@ -1,6 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readerAppearance, dictionaryGroups, sentenceIndex, sentencePlaybackRange, mediaSentenceIndex } from './readerPresentation.mjs'
+import { readerAppearance, dictionaryGroups, sentenceIndex, sentencePlaybackRange, mediaSentenceIndex, readerScrollTop, mediaCompletionProgress } from './readerPresentation.mjs'
+
+test('only full media ending marks the final sentence complete, never trial or a saved position', () => {
+  const sentences = [{ id: 'first' }, { id: 'last' }]
+  assert.deepEqual(mediaCompletionProgress({ ended: true, sentences }), { lastSentenceId: 'last', completed: true })
+  assert.equal(mediaCompletionProgress({ ended: false, sentences }), null)
+  assert.equal(mediaCompletionProgress({ ended: true, trial: true, sentences }), null)
+  assert.equal(mediaCompletionProgress({ ended: true, sentences: [] }), null)
+  assert.equal(mediaCompletionProgress({ ended: true, sentences: [{ text: 'No id' }] }), null)
+})
 
 test('appearance accepts supported values and replaces invalid persisted values', () => {
   assert.deepEqual(readerAppearance({ readerFontSize: 24, readerLineHeight: 2, readerContentWidth: 920 }), { readerFontSize: 24, readerLineHeight: 2, readerContentWidth: 920 })
@@ -32,4 +41,14 @@ test('media seeking resolves the first sentence, timestamp gaps and the final se
   assert.equal(mediaSentenceIndex(sentences,6),1)
   assert.equal(mediaSentenceIndex(sentences,10),1)
   assert.equal(mediaSentenceIndex([{start:null},{text:'No timing'}],0),-1)
+})
+test('line mode keeps the active sentence near the reading position', () => {
+  assert.equal(readerScrollTop({ mode: 'line', scrollTop: 100, viewportHeight: 600, targetTop: 400, targetHeight: 40 }), 332)
+  assert.equal(readerScrollTop({ mode: 'line', scrollTop: 0, viewportHeight: 600, targetTop: 10, targetHeight: 40 }), 0)
+})
+test('screen mode waits while the active sentence is visible and starts the next page at the top', () => {
+  assert.equal(readerScrollTop({ mode: 'screen', scrollTop: 200, viewportHeight: 600, targetTop: 120, targetHeight: 40 }), null)
+  assert.equal(readerScrollTop({ mode: 'screen', scrollTop: 200, viewportHeight: 600, targetTop: 580, targetHeight: 40 }), 762)
+  assert.equal(readerScrollTop({ mode: 'screen', scrollTop: 200, viewportHeight: 600, targetTop: -40, targetHeight: 90 }), 142)
+  assert.equal(readerScrollTop({ mode: 'screen', scrollTop: 0, viewportHeight: 600, targetTop: 6, targetHeight: 40 }), 0)
 })

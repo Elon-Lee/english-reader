@@ -13,6 +13,8 @@ export const DEFAULT_PREFERENCES = {
   readerFontSize: 20,
   readerLineHeight: 1.8,
   readerContentWidth: 760,
+  readerFlowMode: 'line',
+  readerMediaPosition: 0,
   readerToolsPinned: false,
   wordAutoPronounce: false,
   wordHoverPause: false,
