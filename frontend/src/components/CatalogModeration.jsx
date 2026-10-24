@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react'
 import { Alert, Button, Card, Form, Input, InputNumber, Modal, Progress, Select, Space, Table, Tag } from 'antd'
 import { getJson, postJson } from '../api/client'
 import ImportModal from './ImportModal'
+import { bookLevels } from '../utils/levels.mjs'
+import { MAX_TOPICS, bookTopics } from '../utils/topics.mjs'
 
 const publications = [{ value: 'draft', label: '未审核' }, { value: 'published', label: '审核通过并发布' }, { value: 'archived', label: '已下架' }]
 const rights = [{ value: 'private', label: '未确认 / 仅私人' }, { value: 'licensed', label: '已授权' }, { value: 'public_domain', label: '公版' }, { value: 'prohibited', label: '禁止发布' }]
@@ -69,7 +71,7 @@ export default function CatalogModeration({ messageApi }) {
   const edit = (row, nextMode) => {
     setMode(nextMode)
     form.resetFields()
-    form.setFieldsValue({ ...row, tags: (row.tags || []).map(item => item.title), seriesTitle: row.series || '未分组' })
+    form.setFieldsValue({ ...row, topics: row.topics || [], tags: (row.tags || []).map(item => item.title), seriesTitle: row.series || '未分组' })
     setEditing(row)
   }
   const save = async values => {
@@ -93,7 +95,7 @@ export default function CatalogModeration({ messageApi }) {
       try {
         for (const row of eligible) {
           try {
-            await postJson('/api/admin/catalog/books', { ...row, sourceBookId: row.sourceBookId, rightsStatus: row.rightsStatus, publicationStatus: 'published', seriesTitle: row.series || '未分组', tags: (row.tags || []).map(item => item.title) })
+            await postJson('/api/admin/catalog/books', { ...row, sourceBookId: row.sourceBookId, rightsStatus: row.rightsStatus, publicationStatus: 'published', seriesTitle: row.series || '未分组', topics: row.topics || [], tags: (row.tags || []).map(item => item.title) })
             succeeded += 1
           } catch (error) { failed.push(`${row.title}：${error.message}`) }
         }
@@ -107,7 +109,7 @@ export default function CatalogModeration({ messageApi }) {
   const submit = async () => {
     let values
     try { values = await form.validateFields() } catch { return }
-    values = { ...editing, seriesTitle: editing.series || '未分组', tags: (editing.tags || []).map(item => item.title), ...values }
+    values = { ...editing, seriesTitle: editing.series || '未分组', topics: editing.topics || [], tags: (editing.tags || []).map(item => item.title), ...values }
     if (mode === 'edit') { await save(values); return }
     if (values.publicationStatus === 'published') {
       Modal.confirm({ title: `确认发布《${values.title}》？`, content: '请确认已核实版权及内容质量。发布后，首页书城将向用户公开展示该读物。', okText: '审核通过并发布', cancelText: '返回检查', onOk: () => save(values) })
@@ -142,7 +144,8 @@ export default function CatalogModeration({ messageApi }) {
         <Form.Item name="author" label="作者"><Input /></Form.Item>
         <Form.Item name="description" label="简介"><Input.TextArea rows={3} /></Form.Item>
         <Form.Item name="seriesTitle" label="系列"><Input /></Form.Item>
-        <Form.Item name="level" label="等级"><Input /></Form.Item>
+        <Form.Item name="level" label="等级"><Select allowClear placeholder="选择等级" options={bookLevels.map(level => ({ value: level.value, label: `${level.value} · ${level.label}` }))} /></Form.Item>
+        <Form.Item name="topics" label="主题" extra="发布后作为书城标签，用于主题筛选和中文搜索。"><Select mode="multiple" allowClear maxCount={MAX_TOPICS} placeholder="选择主题" options={bookTopics.map(topic => ({ value: topic, label: topic }))} /></Form.Item>
         <Form.Item name="tags" label="标签"><Select mode="tags" /></Form.Item>
         <Form.Item name="featuredRank" label="推荐排序"><InputNumber min={0} /></Form.Item>
         </> : <>

@@ -838,7 +838,8 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             user_id=self.optional_saas_user();query=parse_qs(route.query)
             if route.path=="/api/catalog":
-                self.reply(CATALOG.catalog(user_id,(query.get("q")or[""])[0],(query.get("series")or[""])[0],(query.get("level")or[""])[0],(query.get("resourceType")or[""])[0],(query.get("tag")or[""])[0],(query.get("limit")or[60])[0]));return
+                pick=lambda key:[item for value in query.get(key) or [] for item in value.split(",") if item.strip()]
+                self.reply(CATALOG.catalog(user_id,query=(query.get("q")or[""])[0],series=pick("series"),level=pick("level"),resource_type=pick("resourceType"),tag=pick("tag"),limit=(query.get("limit")or[24])[0],offset=(query.get("offset")or[0])[0],sort=(query.get("sort")or["featured"])[0],duration=pick("duration"),hide_in_library=(query.get("hideInLibrary")or["0"])[0]=="1"));return
             if route.path=="/api/catalog/series":self.reply(CATALOG.series());return
             if route.path=="/api/catalog/tags":self.reply(CATALOG.tags());return
             if route.path.startswith("/api/catalog/books/"):

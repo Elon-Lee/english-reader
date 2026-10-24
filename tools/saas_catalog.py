@@ -17,6 +17,22 @@ from saas_progress import reading_progress
 RIGHTS = {"public_domain", "licensed", "private", "prohibited"}
 PUBLICATION = {"draft", "published", "archived"}
 SHELF_STATES = {"active", "later"}
+UNGRADED = "__ungraded__"
+SORTS = {"featured", "newest", "duration"}
+# Duration buckets stay explicit so "unknown" is never counted as zero minutes.
+DURATION_BUCKETS = (
+    ("lt5", "5 分钟内", "(cb.estimated_minutes > 0 AND cb.estimated_minutes < 5)"),
+    ("5to15", "5–15 分钟", "(cb.estimated_minutes >= 5 AND cb.estimated_minutes < 15)"),
+    ("15to30", "15–30 分钟", "(cb.estimated_minutes >= 15 AND cb.estimated_minutes < 30)"),
+    ("gte30", "30 分钟以上", "(cb.estimated_minutes >= 30)"),
+    ("unknown", "时长未知", "(cb.estimated_minutes <= 0)"),
+)
+
+
+def as_list(value: Any) -> list[str]:
+    if value is None: return []
+    if isinstance(value, str): value = [value]
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def slugify(value: Any) -> str:
@@ -68,27 +84,103 @@ class CatalogService:
         if detail:
             result.update({"description": row["description"], "preview": row["preview_json"] if isinstance(row["preview_json"], list) else json.loads(row["preview_json"] or "[]"),
                            "readerReady": result["inLibrary"], "readerNotice": "加入书架后即可阅读，音视频收藏数量受当前套餐限制。"})
+        else:
+            result["description"] = row.get("description") or ""
         return result
 
-    def catalog(self, user_id: str | None = None, query: str = "", series: str = "", level: str = "", resource_type: str = "", tag: str = "", limit: int = 60) -> dict[str, Any]:
+    def _catalog_terms(self, query: str = "", series: list[str] | None = None, levels: list[str] | None = None, resource_types: list[str] | None = None, tags: list[str] | None = None, durations: list[str] | None = None, hide_in_library: bool = False, user_id: str | None = None) -> tuple[list[str], list[Any]]:
+        """Each dimension is OR within itself and AND across dimensions."""
         terms, values = ["cb.publication_status='published'", "cb.rights_status IN ('public_domain','licensed')"], []
-        if query.strip():
-            terms.append("(cb.title ILIKE %s OR cb.english_title ILIKE %s OR cb.author ILIKE %s OR cs.title ILIKE %s)"); values += [f"%{query.strip()}%"] * 4
-        if series.strip(): terms.append("cs.slug=%s"); values.append(series.strip())
-        if level.strip(): terms.append("cb.level=%s"); values.append(level.strip())
-        if resource_type.strip(): terms.append("cb.resource_type=%s"); values.append(resource_type.strip())
-        if tag.strip(): terms.append("EXISTS(SELECT 1 FROM catalog_book_tags fcbt JOIN catalog_tags fct ON fct.id=fcbt.tag_id WHERE fcbt.catalog_book_id=cb.id AND fct.slug=%s)"); values.append(tag.strip())
-        limit = max(1, min(100, int(limit or 60)))
-        with self.accounts.transaction() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(f"""SELECT cb.*,(SELECT COALESCE(NULLIF(src.cover_url,''),src.data_json->>'cover') FROM content_books src WHERE src.id=cb.source_content_book_id) AS source_cover,cs.slug AS series_slug,cs.title AS series_title,
+        text = str(query or "").strip()
+        if text:
+            pattern = f"%{text}%"
+            terms.append("(cb.title ILIKE %s OR cb.english_title ILIKE %s OR cb.author ILIKE %s OR cs.title ILIKE %s OR cb.description ILIKE %s OR EXISTS(SELECT 1 FROM catalog_book_tags qt JOIN catalog_tags qtag ON qtag.id=qt.tag_id WHERE qt.catalog_book_id=cb.id AND qtag.title ILIKE %s))")
+            values += [pattern] * 6
+        selected_series = as_list(series)
+        if selected_series: terms.append("cs.slug=ANY(%s)"); values.append(selected_series)
+        selected_levels = as_list(levels)
+        if selected_levels:
+            graded = [item for item in selected_levels if item != UNGRADED]
+            parts, params = [], []
+            if graded: parts.append("cb.level=ANY(%s)"); params.append(graded)
+            if UNGRADED in selected_levels: parts.append("COALESCE(TRIM(cb.level),'')=''")
+            terms.append("(" + " OR ".join(parts) + ")"); values += params
+        selected_types = as_list(resource_types)
+        if selected_types: terms.append("cb.resource_type=ANY(%s)"); values.append(selected_types)
+        selected_tags = as_list(tags)
+        if selected_tags:
+            terms.append("EXISTS(SELECT 1 FROM catalog_book_tags fcbt JOIN catalog_tags fct ON fct.id=fcbt.tag_id WHERE fcbt.catalog_book_id=cb.id AND fct.slug=ANY(%s))"); values.append(selected_tags)
+        selected_durations = [item for item in as_list(durations) if item in {bucket[0] for bucket in DURATION_BUCKETS}]
+        if selected_durations:
+            parts = [sql for key, _, sql in DURATION_BUCKETS if key in selected_durations]
+            terms.append("(" + " OR ".join(parts) + ")")
+        if hide_in_library and user_id:
+            terms.append("NOT EXISTS(SELECT 1 FROM user_library hl WHERE hl.user_id=%s AND hl.catalog_book_id=cb.id)"); values.append(user_id)
+        return terms, values
+
+    def _facet(self, cursor: Any, column: str, base_terms: list[str], base_values: list[Any], extra_where: str = "", keep_empty: bool = False) -> list[dict[str, Any]]:
+        """Count one dimension only against the other active filters."""
+        cursor.execute(f"""SELECT {column} AS value,COUNT(DISTINCT cb.id) AS count FROM catalog_books cb
+        LEFT JOIN catalog_series cs ON cs.id=cb.series_id
+        LEFT JOIN catalog_book_tags cbt ON cbt.catalog_book_id=cb.id
+        LEFT JOIN catalog_tags ct ON ct.id=cbt.tag_id
+        WHERE {' AND '.join(base_terms)}{extra_where} GROUP BY {column}""", base_values)
+        return [{"value": row["value"], "count": int(row["count"])} for row in self.accounts._many(cursor)
+                if keep_empty or row["value"] not in (None, "")]
+
+    def catalog(self, user_id: str | None = None, query: str = "", series: Any = None, level: Any = None, resource_type: Any = None, tag: Any = None, limit: int = 24, offset: int = 0, sort: str = "featured", duration: Any = None, hide_in_library: bool = False) -> dict[str, Any]:
+        limit = max(1, min(100, int(limit or 24)))
+        offset = max(0, int(offset or 0))
+        sort = sort if sort in SORTS else "featured"
+        terms, values = self._catalog_terms(query, series, level, resource_type, tag, duration, hide_in_library, user_id)
+        order = {
+            "newest": "cb.published_at DESC NULLS LAST,cb.created_at DESC",
+            "duration": "CASE WHEN cb.estimated_minutes > 0 THEN cb.estimated_minutes ELSE 2147483647 END,cb.featured_rank DESC,cb.published_at DESC NULLS LAST,cb.created_at DESC",
+        }.get(sort, "cb.featured_rank DESC,cb.published_at DESC NULLS LAST,cb.created_at DESC")
+        select_columns = """SELECT cb.*,(SELECT COALESCE(NULLIF(src.cover_url,''),src.data_json->>'cover') FROM content_books src WHERE src.id=cb.source_content_book_id) AS source_cover,cs.slug AS series_slug,cs.title AS series_title,
                 (SELECT COUNT(*) FROM user_library ul WHERE ul.catalog_book_id=cb.id) AS favorite_count,
                 (SELECT COUNT(DISTINCT wp.user_id) FROM workspace_progress wp WHERE wp.content_book_id=cb.source_content_book_id) AS reader_count
                 FROM catalog_books cb
-                LEFT JOIN catalog_series cs ON cs.id=cb.series_id WHERE {' AND '.join(terms)}
-                ORDER BY cb.featured_rank DESC,cb.published_at DESC,cb.created_at DESC LIMIT %s""", (*values, limit))
-                rows = self.accounts._many(cursor); ids=[row["id"] for row in rows];tags_by=self._tags(cursor,ids); states=self._state(cursor,user_id,ids)
-                return {"books":[self._book(row,tags_by.get(row["id"],[]),states.get(row["id"])) for row in rows]}
+                LEFT JOIN catalog_series cs ON cs.id=cb.series_id"""
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT COUNT(DISTINCT cb.id) AS total FROM catalog_books cb LEFT JOIN catalog_series cs ON cs.id=cb.series_id WHERE {' AND '.join(terms)}", values)
+                total = int((self.accounts._one(cursor) or {}).get("total") or 0)
+                cursor.execute(f"""{select_columns} WHERE {' AND '.join(terms)}
+                ORDER BY {order} LIMIT %s OFFSET %s""", (*values, limit, offset))
+                rows = self.accounts._many(cursor); ids=[row["id"] for row in rows]
+                tags_by=self._tags(cursor,ids); states=self._state(cursor,user_id,ids)
+                books=[self._book(row,tags_by.get(row["id"],[]),states.get(row["id"])) for row in rows]
+                return {"books": books, "total": total, "limit": limit, "offset": offset, "sort": sort,
+                        "facets": self._facets(cursor, query, series, level, resource_type, tag, duration, hide_in_library, user_id)}
+
+    def _facets(self, cursor: Any, query: str, series: Any, level: Any, resource_type: Any, tag: Any, duration: Any, hide_in_library: bool, user_id: str | None) -> dict[str, list[dict[str, Any]]]:
+        """Facet counts exclude their own dimension so picking one value never blanks its siblings."""
+        level_terms, level_values = self._catalog_terms(query, series, [], resource_type, tag, duration, hide_in_library, user_id)
+        levels = self._facet(cursor, "cb.level", level_terms, level_values, keep_empty=True)
+        level_rows = sorted([{"value": row["value"] or UNGRADED, "label": row["value"] or "未分级", "count": row["count"]} for row in levels],
+                            key=lambda item: (item["value"] == UNGRADED, item["value"]))
+        terms, values = self._catalog_terms(query, series, level, resource_type, tag, [], hide_in_library, user_id)
+        duration_rows = []
+        for key, label, sql in DURATION_BUCKETS:
+            cursor.execute(f"SELECT COUNT(DISTINCT cb.id) AS count FROM catalog_books cb LEFT JOIN catalog_series cs ON cs.id=cb.series_id WHERE {' AND '.join(terms)} AND {sql}", values)
+            duration_rows.append({"value": key, "label": label, "count": int((self.accounts._one(cursor) or {}).get("count") or 0)})
+        series_terms, series_values = self._catalog_terms(query, [], level, resource_type, tag, duration, hide_in_library, user_id)
+        series_rows = self._facet(cursor, "cs.slug", series_terms, series_values, " AND cs.slug IS NOT NULL")
+        cursor.execute(f"""SELECT cs.slug,cs.title FROM catalog_series cs WHERE cs.slug = ANY(%s) ORDER BY cs.sort_order,cs.title""", ([row["value"] for row in series_rows],))
+        series_titles = {row["slug"]: row["title"] for row in self.accounts._many(cursor)}
+        tag_terms, tag_values = self._catalog_terms(query, series, level, resource_type, [], duration, hide_in_library, user_id)
+        tag_rows = self._facet(cursor, "ct.slug", tag_terms, tag_values, " AND ct.slug IS NOT NULL")
+        cursor.execute("SELECT slug,title FROM catalog_tags WHERE slug = ANY(%s)", ([row["value"] for row in tag_rows],))
+        tag_titles = {row["slug"]: row["title"] for row in self.accounts._many(cursor)}
+        type_terms, type_values = self._catalog_terms(query, series, level, [], tag, duration, hide_in_library, user_id)
+        return {
+            "levels": level_rows,
+            "durations": duration_rows,
+            "series": [{**row, "title": series_titles.get(row["value"], row["value"])} for row in series_rows],
+            "tags": [{**row, "title": tag_titles.get(row["value"], row["value"])} for row in tag_rows],
+            "resourceTypes": self._facet(cursor, "cb.resource_type", type_terms, type_values),
+        }
 
     def series(self) -> dict[str, Any]:
         with self.accounts.transaction() as connection:
@@ -237,8 +329,12 @@ class CatalogService:
                 VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,CASE WHEN %s='published' THEN NOW() ELSE NULL END,%s,%s)
                 ON CONFLICT (source_content_book_id) DO UPDATE SET series_id=EXCLUDED.series_id,title=EXCLUDED.title,english_title=EXCLUDED.english_title,author=EXCLUDED.author,description=EXCLUDED.description,level=EXCLUDED.level,resource_type=EXCLUDED.resource_type,estimated_minutes=EXCLUDED.estimated_minutes,sentence_count=EXCLUDED.sentence_count,word_count=EXCLUDED.word_count,cover_url=EXCLUDED.cover_url,preview_json=EXCLUDED.preview_json,rights_status=EXCLUDED.rights_status,publication_status=EXCLUDED.publication_status,featured_rank=EXCLUDED.featured_rank,published_at=CASE WHEN EXCLUDED.publication_status='published' THEN COALESCE(catalog_books.published_at,NOW()) ELSE NULL END,reviewed_by=EXCLUDED.reviewed_by,updated_at=NOW()""",
                 (book_id,source_book_id,series["id"],title,english,author,description,level,rtype,minutes,len(sentences),words,source.get("cover_url","") or "",json.dumps(preview),rights_status,publication_status,int(updates.get("featuredRank",0)or 0),publication_status,actor_id,actor_id))
-                tags=updates.get("tags",[])
-                if not isinstance(tags,list):raise SaaSError("invalid_catalog_review","标签必须是数组。",400)
+                tags=updates.get("topics") if isinstance(updates.get("topics"),list) else updates.get("tags",[])
+                if not isinstance(tags,list):raise SaaSError("invalid_catalog_review","主题必须是数组。",400)
+                # Topics captured during import seed the tags so review never loses them.
+                if not tags:
+                    source_topics=data.get("topics") if isinstance(data.get("topics"),list) else []
+                    tags=[str(item) for item in source_topics if str(item).strip()]
                 cursor.execute("SELECT id FROM catalog_books WHERE source_content_book_id=%s",(source_book_id,));book=self.accounts._one(cursor);book_id=book["id"]
                 cursor.execute("DELETE FROM catalog_book_tags WHERE catalog_book_id=%s",(book_id,))
                 for tag in sorted({str(item).strip() for item in tags if str(item).strip()}):
@@ -253,7 +349,7 @@ class CatalogService:
     def review_sources(self)->dict[str,Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("""SELECT cb.id AS source_book_id,cb.title,cb.english_title,cb.series,cb.level,cb.source_type,cb.cover_url,
+                cursor.execute("""SELECT cb.id AS source_book_id,cb.title,cb.english_title,cb.series,cb.level,cb.topics,cb.source_type,cb.cover_url,
                 cat.id AS catalog_book_id,cat.rights_status,cat.publication_status,cat.title AS catalog_title,
                 cat.english_title AS catalog_english_title,cat.level AS catalog_level,cat.author,cat.description,cat.featured_rank,
                 cs.title AS catalog_series FROM content_books cb JOIN catalog_books cat ON cat.source_content_book_id=cb.id
@@ -261,7 +357,7 @@ class CatalogService:
                 WHERE NOT EXISTS (SELECT 1 FROM workspace_import_tasks t WHERE t.output_book_id=cb.id AND COALESCE(t.metadata_json->>'officialImport','false')<>'true') ORDER BY cb.updated_at DESC""")
                 sources=self.accounts._many(cursor)
                 tags=self._tags(cursor,[row["catalog_book_id"] for row in sources if row["catalog_book_id"]])
-                return {"sources":[{"sourceBookId":row["source_book_id"],"title":row["catalog_title"] if row["catalog_book_id"] else row["title"],"englishTitle":row["catalog_english_title"] if row["catalog_book_id"] else row["english_title"],"series":row["catalog_series"] or row["series"],"level":row["catalog_level"] if row["catalog_book_id"] else row["level"],"author":row["author"] or "","description":row["description"] or "","featuredRank":int(row["featured_rank"] or 0),"tags":tags.get(row["catalog_book_id"],[]),"resourceType":row["source_type"],"coverUrl":row["cover_url"],"catalogBookId":row["catalog_book_id"],"rightsStatus":row["rights_status"] or "private","publicationStatus":row["publication_status"] or "draft"} for row in sources]}
+                return {"sources":[{"sourceBookId":row["source_book_id"],"title":row["catalog_title"] if row["catalog_book_id"] else row["title"],"englishTitle":row["catalog_english_title"] if row["catalog_book_id"] else row["english_title"],"series":row["catalog_series"] or row["series"],"level":row["catalog_level"] if row["catalog_book_id"] else row["level"],"topics":as_json(row["topics"]) if isinstance(as_json(row["topics"]),list) else [],"author":row["author"] or "","description":row["description"] or "","featuredRank":int(row["featured_rank"] or 0),"tags":tags.get(row["catalog_book_id"],[]),"resourceType":row["source_type"],"coverUrl":row["cover_url"],"catalogBookId":row["catalog_book_id"],"rightsStatus":row["rights_status"] or "private","publicationStatus":row["publication_status"] or "draft"} for row in sources]}
 
     def delete_book(self,actor_id:str,source_book_id:str,confirm_title:str)->dict[str,Any]:
         with self.accounts.transaction() as connection:

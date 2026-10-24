@@ -687,6 +687,8 @@ class WorkspaceImportService:
             metadata=as_json(task.get("metadata_json")) if task.get("metadata_json") else {}
             data["series"]=str(metadata.get("series") or (data.get("youtube") or {}).get("channel") or "私人导入")
             data["level"]=str(metadata.get("level") or "")
+            topics=metadata.get("topics") if isinstance(metadata.get("topics"),list) else []
+            data["topics"]=[str(item).strip() for item in topics if str(item).strip()][:8]
             if metadata.get("matchedAudioFilename"):data["matchedAudioFilename"]=str(metadata["matchedAudioFilename"])
             data["import"]={"kind":work["kind"],"extractor":extractor}
             with self.accounts.transaction() as connection:
@@ -699,8 +701,8 @@ class WorkspaceImportService:
                     context=self.memberships._context(cursor,user_id,lock_user=False)
                     media_kind="video" if source_type in {"video","youtube"} else "audio" if source_type=="audio" else ""
                     if not self.official:self.memberships.assert_media_capacity(cursor,user_id,context,media_kind)
-                    cursor.execute("""INSERT INTO content_books(id,owner_id,title,english_title,series,level,source_type,source_path,status,visibility,cover_url,page_base_url,audio_url,pdf_url,video_url,duration,alignment,data_json,quality_json,created_at,updated_at)
-                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'ready','private',%s,'',%s,'',%s,%s,%s,%s::jsonb,'{}'::jsonb,NOW(),NOW())""",(book_id,user_id,title,title,str(data.get("series") or (data.get("youtube") or {}).get("channel") or "私人导入"),str(data.get("level") or ""),source_type,f"workspace/{user_id}/{task_id}",str(data.get("cover","")or""),str(data.get("audio","")or""),str(data.get("video","")or""),float(data.get("duration",0)or 0),str(data.get("alignment","")or""),json.dumps(data,ensure_ascii=False)))
+                    cursor.execute("""INSERT INTO content_books(id,owner_id,title,english_title,series,level,topics,source_type,source_path,status,visibility,cover_url,page_base_url,audio_url,pdf_url,video_url,duration,alignment,data_json,quality_json,created_at,updated_at)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,'ready','private',%s,'',%s,'',%s,%s,%s,%s::jsonb,'{}'::jsonb,NOW(),NOW())""",(book_id,user_id,title,title,str(data.get("series") or (data.get("youtube") or {}).get("channel") or "私人导入"),str(data.get("level") or ""),json.dumps(data.get("topics") or [],ensure_ascii=False),source_type,f"workspace/{user_id}/{task_id}",str(data.get("cover","")or""),str(data.get("audio","")or""),str(data.get("video","")or""),float(data.get("duration",0)or 0),str(data.get("alignment","")or""),json.dumps(data,ensure_ascii=False)))
                     cursor.execute("UPDATE media_assets SET content_book_id=%s,kind=%s WHERE id=%s",(book_id,source_type,work["source_asset_id"]))
                     if self.official:
                         catalog_id=new_id()
