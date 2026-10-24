@@ -1,110 +1,349 @@
-import Cover from '../components/BookCover'
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Card, Dropdown, Empty, Input, List, Modal, Pagination, Progress, Select, Space, Tag, Typography } from 'antd'
-import { FileTextOutlined, MoreOutlined, PlusOutlined } from '@ant-design/icons'
-
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { Alert, Button, Card, Dropdown, Empty, Input, Modal, Pagination, Progress, Select, Space, Tag, Typography } from 'antd'
+import { AppstoreOutlined, BarsOutlined, CloseOutlined, DeleteOutlined, FileTextOutlined, InboxOutlined, MoreOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import { deleteJson, getJson, postJson } from '../api/client'
+import BookCover from '../components/BookCover'
+import { deriveReadingState, formatLastUpdated, READING_STATES } from '../utils/libraryState.mjs'
+import { bookDescription, resourceNames } from '../utils/presentation.mjs'
 
 const { Paragraph, Text, Title } = Typography
-
-
+const PAGE_SIZE = 18
 
 export default function LibraryPage({ libraryBooks, importTasks, openReader, openImport, onCancelImport, onRetryImport, onRefresh, messageApi, currentUser, selectScreen }) {
-  const books = libraryBooks || []
-  const tasks = (importTasks || []).filter(task => !['complete', 'cancelled'].includes(task.status))
-  const [query, setQuery] = useState('')
-  const [source, setSource] = useState('全部')
-  const [sort, setSort] = useState('recent')
+  const allBooks = libraryBooks || []
+  const activeTasks = (importTasks || []).filter(task => !['complete', 'cancelled'].includes(task.status))
+
+  const [query, setQuery] = useState(() => new URLSearchParams(location.search).get('q') || '')
+  const [draftQuery, setDraftQuery] = useState(query)
+  const [state, setState] = useState(() => new URLSearchParams(location.search).get('state') || 'all')
+  const [sort, setSort] = useState(() => new URLSearchParams(location.search).get('sort') || 'recent')
+  const [view, setView] = useState(() => localStorage.getItem('library-view') || 'grid')
   const [page, setPage] = useState(1)
   const [taskHistoryOpen, setTaskHistoryOpen] = useState(false)
-  const [taskPage, setTaskPage] = useState(1)
   const [taskHistory, setTaskHistory] = useState({ tasks: [], total: 0, invalidCount: 0 })
+  const [taskPage, setTaskPage] = useState(1)
   const [taskLoading, setTaskLoading] = useState(false)
   const [taskError, setTaskError] = useState('')
   const [taskReload, setTaskReload] = useState(0)
   const [deletingInvalid, setDeletingInvalid] = useState(false)
-  const historyRequest = useRef(0)
-  const [retryingTaskId, setRetryingTaskId] = useState('')
-  const [shelfFilter, setShelfFilter] = useState('active')
-  const [archivingBookId, setArchivingBookId] = useState('')
-  const archivePending = useRef(false)
+
+  const persistUrl = useCallback(() => {
+    const params = new URLSearchParams()
+    if (query.trim()) params.set('q', query.trim())
+    if (state !== 'all') params.set('state', state)
+    if (sort !== 'recent') params.set('sort', sort)
+    history.replaceState(null, '', `${location.pathname}?${params.toString()}`)
+  }, [query, state, sort])
+
+  useEffect(() => { persistUrl() }, [persistUrl])
+  useEffect(() => { setDraftQuery(query) }, [query])
+  useEffect(() => { localStorage.setItem('library-view', view) }, [view])
+
+  const stateCounts = useMemo(() => {
+    return READING_STATES.map(item => ({
+      ...item,
+      count: item.key === 'all' ? allBooks.length : allBooks.filter(book => deriveReadingState(book) === item.key).length
+    }))
+  }, [allBooks])
+
+  const filteredBooks = useMemo(() => {
+    let result = allBooks
+    if (state !== 'all') result = result.filter(book => deriveReadingState(book) === state)
+    if (query.trim()) {
+      const pattern = query.trim().toLowerCase()
+      result = result.filter(book =>
+        book.title.toLowerCase().includes(pattern) ||
+        (book.author || '').toLowerCase().includes(pattern) ||
+        (book.series?.title || '').toLowerCase().includes(pattern)
+      )
+    }
+    return result
+  }, [allBooks, state, query])
+
+  const sortedBooks = useMemo(() => {
+    const copy = [...filteredBooks]
+    if (sort === 'recent') copy.sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt))
+    else if (sort === 'title') copy.sort((a, b) => a.title.localeCompare(b.title))
+    else if (sort === 'progress') copy.sort((a, b) => (b.progress || 0) - (a.progress || 0))
+    return copy
+  }, [filteredBooks, sort])
+
+  const paginatedBooks = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE
+    return sortedBooks.slice(start, start + PAGE_SIZE)
+  }, [sortedBooks, page])
+
+  useEffect(() => { setPage(1) }, [state, query, sort])
+
   useEffect(() => {
     if (!taskHistoryOpen) return
-    let disposed = false
-    const load = async (foreground = false) => {
-      const request = ++historyRequest.current
-      if (foreground) setTaskLoading(true)
-      try {
-        const data = await getJson(`/api/workspace/imports?page=${taskPage}&limit=8`)
-        if (disposed || request !== historyRequest.current) return
-        const lastPage = Math.max(1, Math.ceil(data.total / 8))
-        if (taskPage > lastPage) { setTaskPage(lastPage); return }
-        setTaskHistory(data); setTaskError('')
-      } catch (error) { if (!disposed && request === historyRequest.current) setTaskError(error.message) }
-      finally { if (!disposed && request === historyRequest.current) setTaskLoading(false) }
-    }
-    void load(true)
-    const timer = setInterval(() => { void load() }, 3000)
-    return () => { disposed = true; clearInterval(timer) }
+    setTaskLoading(true); setTaskError('')
+    getJson(`/api/workspace/imports?limit=8&offset=${(taskPage - 1) * 8}`)
+      .then(data => setTaskHistory({ tasks: data.tasks || [], total: data.total || 0, invalidCount: data.invalidCount || 0 }))
+      .catch(error => setTaskError(error.message || '加载失败'))
+      .finally(() => setTaskLoading(false))
   }, [taskHistoryOpen, taskPage, taskReload])
 
-  const deleteInvalid = () => Modal.confirm({
-    title: '删除无效任务？',
-    content: '将删除当前账号的全部失败和已取消的任务记录，删除后无法从这些记录重试。已完成和正在处理的任务会保留。',
-    okText: '删除无效任务', okButtonProps: { danger: true },
-    onOk: async () => {
-      setDeletingInvalid(true)
-      ++historyRequest.current
-      try {
-        const result = await postJson('/api/workspace/imports/delete-invalid', {})
-        setTaskReload(value => value + 1)
-        await onRefresh?.()
-        messageApi.success(`已删除 ${result.deletedCount} 条无效任务`)
-      } catch (error) { messageApi.error(error.message); throw error }
-      finally { setDeletingInvalid(false) }
-    },
-  })
-  const visibleBooks = useMemo(() => books.filter(book => `${book.title} ${book.subtitle || ''} ${book.author || ''}`.toLowerCase().includes(query.toLowerCase()) && (source === '全部' || book.source === source)).sort((a, b) => sort === 'title' ? a.title.localeCompare(b.title) : sort === 'progress' ? b.progress - a.progress : String(b.updatedAt || b.addedAt || '').localeCompare(String(a.updatedAt || a.addedAt || ''))), [books, query, sort, source])
-  const pageSize = 8
-  const filteredBooks = visibleBooks.filter(book => shelfFilter === 'all' || (shelfFilter === 'later' ? book.shelfState === 'later' : book.shelfState !== 'later'))
-  const pageBooks = filteredBooks.slice((page - 1) * pageSize, page * pageSize)
-  useEffect(() => { setPage(1) }, [query, sort, source, shelfFilter])
-  useEffect(() => { if ((page - 1) * pageSize >= filteredBooks.length && page > 1) setPage(Math.max(1, Math.ceil(filteredBooks.length / pageSize))) }, [page, filteredBooks.length])
-
-  const removeBook = book => Modal.confirm({
-    title: book.source === '官方读物' ? `将《${book.title}》移出书架？` : `永久删除《${book.title}》？`,
-    content: book.source === '官方读物' ? '移出后将停止该读物的阅读和媒体访问，并释放收藏名额。学习记录会保留，重新加入时需符合当前套餐的收藏上限。' : '该操作会删除私人读物、阅读进度、生词和标注；并清理关联媒体文件，无法恢复。',
-    okText: book.source === '官方读物' ? '移出书架' : '永久删除',
-    okButtonProps: { danger: true },
-    onOk: async () => {
-      try {
-        if (book.source === '官方读物') await deleteJson(`/api/library/items/${encodeURIComponent(book.id)}`)
-        else {
-          const result = await deleteJson(`/api/workspace/books/${encodeURIComponent(book.id)}`, { confirmTitle: book.title })
-          if (result.pendingFiles) messageApi.warning('内容已删除，部分媒体文件待清理')
-        }
-        await onRefresh?.()
-        messageApi.success(book.source === '官方读物' ? '已移出书架' : '私人读物已删除')
-      } catch (error) { messageApi.error(error.message); throw error }
-    },
-  })
-
-  const archiveBook = async book => {
-    if (archivePending.current) return
-    archivePending.current = true
-    setArchivingBookId(book.id)
+  const deleteInvalid = async () => {
+    setDeletingInvalid(true)
     try {
-      await postJson('/api/library/items', { bookId: book.id, shelfState: book.shelfState === 'later' ? 'active' : 'later' })
-      await onRefresh?.()
-      messageApi.success(book.shelfState === 'later' ? '已恢复到书架' : '已归档，可在“已归档”中查看')
-    } catch (error) { messageApi.error(error.message) }
-    finally { archivePending.current = false; setArchivingBookId('') }
+      await deleteJson('/api/workspace/imports/invalid')
+      messageApi.success('已删除无效任务')
+      setTaskReload(value => value + 1)
+    } catch (error) {
+      messageApi.error(error.message || '删除失败')
+    } finally {
+      setDeletingInvalid(false)
+    }
   }
 
-  const taskList = list => <List size="small" dataSource={list} locale={{ emptyText: '暂无导入任务' }} renderItem={task => <List.Item actions={[
-    ...(['queued', 'uploading', 'running', 'processing'].includes(task.status) ? [<Button key="cancel" size="small" danger onClick={() => onCancelImport?.(task)}>取消</Button>] : []),
-    ...(task.status === 'failed' ? [<Button key="retry" size="small" loading={retryingTaskId === task.id} onClick={async () => { setRetryingTaskId(task.id); try { await onRetryImport?.(task) } finally { setRetryingTaskId('') } }}>重试</Button>] : []),
-  ]}><List.Item.Meta title={task.title || task.originalFilename || '未命名导入任务'} description={<><Text type={task.status === 'failed' ? 'danger' : 'secondary'}>{task.error || task.step || task.status}</Text><br /><Text type="secondary">导入时间：{task.createdAt ? new Date(task.createdAt).toLocaleString('zh-CN', { hour12: false }) : '—'}</Text></>} /><div className="import-task-progress"><Progress percent={task.progress} status={task.status === 'failed' ? 'exception' : task.status === 'complete' ? 'success' : 'active'} /><Tag>{task.status}</Tag></div></List.Item>} />
+  const remove = async book => {
+    Modal.confirm({
+      title: book.source === '官方读物' ? '移出书架' : '永久删除',
+      content: book.source === '官方读物' ? '从书架移出后可以重新添加，音视频内容会释放收藏名额。' : '删除后无法恢复，确定要删除吗？',
+      okText: '确定',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          if (book.source === '官方读物') await deleteJson(`/api/library/items/${encodeURIComponent(book.id)}`)
+          else await deleteJson(`/api/workspace/books/${encodeURIComponent(book.id)}`)
+          await onRefresh?.()
+          messageApi.success(book.source === '官方读物' ? '已移出书架' : '已删除')
+        } catch (error) {
+          messageApi.error(error.message || '操作失败')
+        }
+      }
+    })
+  }
 
-  return <div className="page-stack"><div className="page-intro"><div><Text className="eyebrow">YOUR LIBRARY</Text><Title level={1}>我的书架</Title><Paragraph>归档会收起暂时不读的官方收藏，保留学习记录和阅读权限，仍占收藏名额；移出书架才会释放名额。</Paragraph></div><Space>{currentUser?.isAdmin && <Button onClick={() => selectScreen('admin', 'catalog')}>管理书城上架 / 下架</Button>}<Button type="primary" icon={<PlusOutlined />} onClick={openImport}>导入读物</Button><Button onClick={() => setTaskHistoryOpen(true)}>导入记录</Button></Space></div><Card className="filter-card"><Space wrap><Input allowClear prefix={<FileTextOutlined />} placeholder="搜索我的读物" value={query} onChange={event => setQuery(event.target.value)} style={{ width: 280 }} /><Select value={source} onChange={setSource} options={['全部', '官方读物', '私人读物'].map(value => ({ value, label: value }))} /><Select aria-label="书架状态" value={shelfFilter} onChange={setShelfFilter} options={[{ value: 'active', label: '当前书架' }, { value: 'later', label: '已归档' }, { value: 'all', label: '全部状态' }]} /><Select value={sort} onChange={setSort} options={[{ value: 'recent', label: '最近更新' }, { value: 'progress', label: '阅读进度' }, { value: 'title', label: '标题排序' }]} /></Space></Card>{tasks.length > 0 && <Card title="最近导入任务" extra={<Button type="link" onClick={() => setTaskHistoryOpen(true)}>查看全部</Button>}>{taskList(tasks.slice(0, 3))}</Card>}<Card className="table-card"><List itemLayout="horizontal" dataSource={pageBooks} locale={{ emptyText: <Empty description="还没有符合条件的读物" /> }} renderItem={book => <List.Item actions={[<Button key="read" type="primary" ghost onClick={() => openReader(book)}>{book.progress ? '继续阅读' : '开始阅读'}</Button>, <Dropdown disabled={Boolean(archivingBookId)} key="more" trigger={['click']} menu={{ items: [...(book.source === '官方读物' ? [{ key: 'archive', label: book.shelfState === 'later' ? '恢复到书架' : '归档' }] : []), { key: 'remove', label: book.source === '官方读物' ? '移出书架' : '永久删除', danger: true }], onClick: ({ key }) => key === 'archive' ? archiveBook(book) : removeBook(book) }}><Button loading={archivingBookId === book.id} type="text" icon={<MoreOutlined />} /></Dropdown>]}><List.Item.Meta avatar={<Cover book={book} />} title={<Space>{book.title}<Tag color={book.source === '官方读物' ? 'gold' : 'green'}>{book.source}</Tag>{book.shelfState === 'later' && <Tag>已归档</Tag>}</Space>} description={<><Text type="secondary">{book.author || '未知作者'} · {book.level || '未分级'}</Text><Progress percent={book.progress || 0} size="small" strokeColor="#2f6f50" /></>} /></List.Item>} />{filteredBooks.length > pageSize && <div className="list-pagination"><Pagination current={page} pageSize={pageSize} total={filteredBooks.length} showSizeChanger={false} showTotal={total => `共 ${total} 本`} onChange={setPage} /></div>}</Card><Modal width={820} title="全部导入任务" open={taskHistoryOpen} onCancel={() => setTaskHistoryOpen(false)} footer={null}><div className="import-history-toolbar"><Text type="secondary">共 {taskHistory.total} 条任务</Text><Button danger loading={deletingInvalid} disabled={taskLoading || Boolean(taskError) || !taskHistory.invalidCount} onClick={deleteInvalid}>删除无效任务</Button></div>{taskError ? <Empty description={taskError}><Button onClick={() => setTaskReload(value => value + 1)}>重新加载</Button></Empty> : <div aria-busy={taskLoading}>{taskLoading ? <Progress percent={99} status="active" showInfo={false} /> : taskList(taskHistory.tasks)}</div>}<div className="list-pagination"><Pagination current={taskPage} pageSize={8} total={taskHistory.total} showSizeChanger={false} showTotal={total => `共 ${total} 条`} onChange={setTaskPage} disabled={taskLoading} /></div></Modal></div>
+  const taskList = tasks => {
+    if (!tasks.length) return <Empty description="还没有导入任务" />
+    return <div className="import-task-list">{tasks.map(task => (
+      <div key={task.id} className="import-task-item">
+        <FileTextOutlined />
+        <div className="import-task-body">
+          <div><Text strong>{task.title || task.filename || '未命名'}</Text></div>
+          <div><Text type="secondary">{task.status === 'pending' ? '等待中' : task.status === 'processing' ? '处理中' : task.status === 'complete' ? '已完成' : task.status === 'failed' ? '失败' : '已取消'}</Text></div>
+          {task.status === 'processing' && task.progress > 0 && <Progress percent={task.progress} size="small" />}
+          {task.status === 'failed' && <Text type="danger">{task.error || '导入失败'}</Text>}
+        </div>
+        {task.status === 'processing' && <Button size="small" onClick={() => onCancelImport?.(task)}>取消</Button>}
+        {task.status === 'failed' && <Button size="small" onClick={() => onRetryImport?.(task)}>重试</Button>}
+      </div>
+    ))}</div>
+  }
+
+  if (!currentUser) return <Card><Alert type="info" message="请先登录" /></Card>
+
+  return <div className="page-stack library-page">
+    <div className="library-head">
+      <div>
+        <Title level={1}>我的书架</Title>
+        <Paragraph>继续读未读完的内容，整理稍后读的，清理已读完的。</Paragraph>
+      </div>
+      <Space>
+        <Button icon={<SearchOutlined />} onClick={() => selectScreen('catalog')}>去书城</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openImport}>导入读物</Button>
+      </Space>
+    </div>
+
+    {activeTasks.length > 0 && <div className="library-import-banner">
+      <Text strong>正在导入 {activeTasks.length} 个任务</Text>
+      <Button type="link" size="small" onClick={() => setTaskHistoryOpen(true)}>查看详情</Button>
+      {taskList(activeTasks.slice(0, 3))}
+    </div>}
+
+    <div className="library-toolbar">
+      <Input
+        allowClear
+        value={draftQuery}
+        prefix={<SearchOutlined />}
+        placeholder="搜索标题、作者或系列"
+        onChange={e => setDraftQuery(e.target.value)}
+        onPressEnter={() => { setQuery(draftQuery); setPage(1) }}
+        onBlur={() => { if (draftQuery !== query) { setQuery(draftQuery); setPage(1) } }}
+        style={{ width: 280 }}
+      />
+      <div className="library-state-chips">
+        {stateCounts.map(item => (
+          <button
+            key={item.key}
+            type="button"
+            className={`library-state-chip${state === item.key ? ' is-active' : ''}`}
+            onClick={() => setState(item.key)}
+          >
+            {item.label}<span className="count">{item.count}</span>
+          </button>
+        ))}
+      </div>
+      <Space style={{ marginLeft: 'auto' }}>
+        <Select value={sort} onChange={setSort} style={{ width: 120 }} size="small" options={[
+          { value: 'recent', label: '最近更新' },
+          { value: 'title', label: '标题' },
+          { value: 'progress', label: '进度' },
+        ]} />
+        <Button.Group size="small">
+          <Button type={view === 'grid' ? 'primary' : 'default'} icon={<AppstoreOutlined />} onClick={() => setView('grid')} />
+          <Button type={view === 'list' ? 'primary' : 'default'} icon={<BarsOutlined />} onClick={() => setView('list')} />
+        </Button.Group>
+        <Button size="small" onClick={() => setTaskHistoryOpen(true)}>导入记录</Button>
+      </Space>
+    </div>
+
+    <div className="library-result-bar">
+      <Text type="secondary">{sortedBooks.length} 本{state !== 'all' ? ` · ${stateCounts.find(s => s.key === state)?.label}` : ''}</Text>
+    </div>
+
+    {sortedBooks.length === 0 ? (
+      <Card className="library-empty">
+        <Empty
+          image={<InboxOutlined style={{ fontSize: 64, color: '#d0d0d0' }} />}
+          description={
+            allBooks.length === 0 ? (
+              <div>
+                <Paragraph>书架还是空的</Paragraph>
+                <Paragraph type="secondary">从书城挑一篇今天读得完的内容，<br />或导入自己的 PDF、YouTube 视频开始学习。</Paragraph>
+              </div>
+            ) : query.trim() ? (
+              <Paragraph>没有匹配"{query}"的读物</Paragraph>
+            ) : state === 'finished' ? (
+              <Paragraph>还没有已读完的读物<br /><Text type="secondary">把正在读的内容读到 95% 以上，就会出现在这里。</Text></Paragraph>
+            ) : (
+              <Paragraph>没有符合条件的读物</Paragraph>
+            )
+          }
+        >
+          {allBooks.length === 0 && <Space>
+            <Button type="primary" onClick={() => selectScreen('catalog')}>去书城看看</Button>
+            <Button onClick={openImport}>导入读物</Button>
+          </Space>}
+          {allBooks.length > 0 && query.trim() && <Button onClick={() => { setQuery(''); setDraftQuery('') }}>清除搜索</Button>}
+          {allBooks.length > 0 && !query.trim() && state !== 'all' && <Button onClick={() => setState('all')}>查看全部书架</Button>}
+        </Empty>
+      </Card>
+    ) : (
+      <>
+        <div className={`library-results ${view}`}>
+          {paginatedBooks.map(book => (
+            <LibraryBookCard key={book.id} book={book} view={view} openReader={openReader} onRemove={remove} />
+          ))}
+        </div>
+        {sortedBooks.length > PAGE_SIZE && (
+          <div className="library-pagination">
+            <Pagination
+              current={page}
+              pageSize={PAGE_SIZE}
+              total={sortedBooks.length}
+              showSizeChanger={false}
+              showTotal={total => `共 ${total} 本`}
+              onChange={value => { setPage(value); window.scrollTo({ top: 0 }) }}
+            />
+          </div>
+        )}
+      </>
+    )}
+
+    <Modal width={820} title="导入记录" open={taskHistoryOpen} onCancel={() => setTaskHistoryOpen(false)} footer={null}>
+      <div className="import-history-toolbar">
+        <Text type="secondary">共 {taskHistory.total} 条任务</Text>
+        <Button danger loading={deletingInvalid} disabled={taskLoading || Boolean(taskError) || !taskHistory.invalidCount} onClick={deleteInvalid}>
+          删除无效任务
+        </Button>
+      </div>
+      {taskError ? (
+        <Empty description={taskError}><Button onClick={() => setTaskReload(value => value + 1)}>重新加载</Button></Empty>
+      ) : (
+        <div aria-busy={taskLoading}>
+          {taskLoading ? <Progress percent={99} status="active" showInfo={false} /> : taskList(taskHistory.tasks)}
+        </div>
+      )}
+      <div className="list-pagination">
+        <Pagination
+          current={taskPage}
+          pageSize={8}
+          total={taskHistory.total}
+          showSizeChanger={false}
+          showTotal={total => `共 ${total} 条`}
+          onChange={setTaskPage}
+          disabled={taskLoading}
+        />
+      </div>
+    </Modal>
+  </div>
+}
+
+function LibraryBookCard({ book, view, openReader, onRemove }) {
+  const readingState = deriveReadingState(book)
+  const progress = book.progress || 0
+  const showProgress = progress > 0 && progress < 95
+  const isFinished = progress >= 95
+
+  const menuItems = [
+    {
+      key: 'remove',
+      label: book.source === '官方读物' ? '移出书架' : '永久删除',
+      icon: <DeleteOutlined />,
+      danger: true,
+      onClick: () => onRemove(book)
+    }
+  ]
+
+  if (view === 'list') {
+    return <article className="library-row">
+      <div className="library-row-cover">
+        <BookCover book={book} />
+      </div>
+      <div className="library-row-body">
+        <Title level={4} className="library-row-title">{book.title}</Title>
+        <div className="library-row-meta">
+          {book.author && <Text>{book.author}</Text>}
+          {book.level && <Text> · {book.level}</Text>}
+          <Tag>{book.source}</Tag>
+        </div>
+        {showProgress && (
+          <Progress percent={progress} strokeColor="#f4a261" showInfo={false} size="small" style={{ maxWidth: 200 }} />
+        )}
+        {isFinished && <Tag color="success">已读完</Tag>}
+        <Text type="secondary" className="library-row-time">{formatLastUpdated(book.updatedAt)}</Text>
+      </div>
+      <Space className="library-row-actions">
+        <Button type="primary" onClick={() => openReader(book)}>
+          {progress === 0 ? '开始阅读' : '继续阅读'}
+        </Button>
+        <Dropdown menu={{ items: menuItems }} trigger={['click']} placement="bottomRight">
+          <Button icon={<MoreOutlined />} />
+        </Dropdown>
+      </Space>
+    </article>
+  }
+
+  return <article className="library-card">
+    <div className="library-cover-wrapper">
+      <BookCover book={book} />
+      {showProgress && (
+        <div className="library-cover-overlay">
+          <Progress percent={progress} strokeColor="#f4a261" showInfo={false} size="small" />
+        </div>
+      )}
+      {isFinished && <div className="library-cover-badge">✓ 已读完</div>}
+    </div>
+    <div className="library-card-body">
+      <Dropdown menu={{ items: menuItems }} trigger={['click']} placement="bottomRight">
+        <Button type="text" icon={<MoreOutlined />} size="small" className="library-card-menu" />
+      </Dropdown>
+      <Title level={5} className="library-card-title">{book.title}</Title>
+      <div className="library-card-meta">
+        {book.author && <Text>{book.author}</Text>}
+        {book.author && book.level && <Text> · </Text>}
+        {book.level && <Text>{book.level}</Text>}
+        {(book.author || book.level) && book.source && <Text> · </Text>}
+        {book.source && <Tag size="small">{book.source}</Tag>}
+      </div>
+      <Text type="secondary" className="library-card-time">{formatLastUpdated(book.updatedAt)}</Text>
+      <Button type="primary" block onClick={() => openReader(book)}>
+        {progress === 0 ? '开始阅读' : '继续阅读'}
+      </Button>
+    </div>
+  </article>
 }

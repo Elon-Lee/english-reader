@@ -1,6 +1,6 @@
 # 拾页 AI 共享上下文
 
-更新时间：2026-10-22（Asia/Shanghai）
+更新时间：2026-10-24（Asia/Shanghai）
 
 这是后续 AI 的最小全局上下文。只读取与当前任务相关的任务文档。
 
@@ -18,6 +18,8 @@
 - 京东云生产：`117.72.209.44:8765`，Docker 运行 `shiyue-saas`、PostgreSQL 16 和 Redis 7；PostgreSQL/Redis 只监听远程回环地址。
 
 ## 全局完成状态
+
+- 2026-10-24 难度级别 CEFR 标准化：导入、书城筛选与展示全部采用 CEFR 级别（A1/A2/B1/B2/C1/C2），迁移脚本已将历史数据的旧分类（starter/elementary/pre-intermediate/upper-intermediate/advanced/proficiency）转为 CEFR 级别。catalog_books 已全量转换，content_books 保留用户上传内容自带的其他元数据。构建、JS 语法及 Python 编译通过；已提交 cc62163 并在本地库应用迁移 0043，未发布生产。详见 `frontend/src/config/levels.mjs` 和 `tools/saas_migrations/0043_cefr_levels.sql`。
 
 - 2026-10-22 学习中心主题切换：账号可选松林绿、雾蓝、鸢尾紫；主题通过现有偏好 API 校验和持久化，首次进入工作区加载，阅读器护眼仍独立。构建、modern smoke、UI 回归、Python 编译及 diff 检查通过；phase7 PostgreSQL 集成需配置专用 `_test` 数据库，尚未运行。详见 `tasks/pc-workspace/HANDOFF.md`。
 
