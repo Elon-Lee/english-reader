@@ -18,6 +18,7 @@
 - 修复播放结束仍为 99%：完整原视频/音频的 `ended` 事件立即通过 `/api/workspace/progress` 发送 `completed:true` 和最后一句，原防抖位置保存不作为完成依据。后端验证当前访问权限、布尔字段和最后一句，再幂等写现有 `completed_at`，重读或活动保存保留完成状态；不增加时长、奖励或学习事件，试读不标完成。前端有保存中、成功和失败重试提示。35 项阅读器单测、进度 4 项、phase7 隔离 PostgreSQL 15 项、HTTP smoke 29 项通过；另以隔离账号播放完整 4 秒真实 MP4，书架与工作区均显示 100%。截图 `completion-100.png`。
 - 用户明确反馈已播完的私人视频 `private-e60701ec03fe49078b53df94b6af5350` 已单独补记完成；仅更新其所有者现有进度行 `completed_at`，保留当前复习句、学习时长及更新时间。修复前行备份保存在 `.local/debug/reader-flow-radio-20261024/reported-completion-before.json`，未批量推断其他 99% 记录。
 - 本地 8790 已重启加载以上后端改动并通过健康检查；本次浏览器隔离验收误用同一 `127.0.0.1` 主机导致登录 Cookie 被测试账号覆盖，已告知用户需要重新登录，未删除真实服务器会话。以后浏览器隔离测试须使用不同主机名或浏览器隔离上下文，端口不能隔离 Cookie。临时测试服务与数据库已清理，当前未发布生产。
+- 2026-10-24 等级标准改为 CEFR（欧洲共同语言参考标准）六级：A1（入门）、A2（初级）、B1（中级）、B2（中高级）、C1（高级）、C2（精通）。前端导入、书城筛选和内容管理均使用 `frontend/src/utils/levels.mjs` 定义；后端无硬编码校验，只传递字符串。新增数据库迁移 `tools/saas_migrations/0043_cefr_levels.sql` 将现有 starter/elementary/intermediate 等旧值转换为对应 CEFR 级别，尚未应用到数据库。
 
 ## 功能基线
 
