@@ -123,19 +123,29 @@ export default function LibraryPage({ libraryBooks, importTasks, openReader, ope
 
   const taskList = tasks => {
     if (!tasks.length) return <Empty description="还没有导入任务" />
-    return <div className="import-task-list">{tasks.map(task => (
-      <div key={task.id} className="import-task-item">
-        <FileTextOutlined />
-        <div className="import-task-body">
-          <div><Text strong>{task.title || task.filename || '未命名'}</Text></div>
-          <div><Text type="secondary">{task.status === 'pending' ? '等待中' : task.status === 'processing' ? '处理中' : task.status === 'complete' ? '已完成' : task.status === 'failed' ? '失败' : '已取消'}</Text></div>
-          {task.status === 'processing' && task.progress > 0 && <Progress percent={task.progress} size="small" />}
-          {task.status === 'failed' && <Text type="danger">{task.error || '导入失败'}</Text>}
+    return <div className="import-task-list">{tasks.map(task => {
+      const isProcessing = ['pending', 'queued', 'uploading', 'processing', 'running', 'awaiting_processor'].includes(task.status)
+      const statusText = task.status === 'complete' ? '已完成' : task.status === 'failed' ? '失败' : task.status === 'cancelled' ? '已取消' : isProcessing ? '处理中' : '未知状态'
+      return (
+        <div key={task.id} className="import-task-item">
+          <FileTextOutlined />
+          <div className="import-task-body">
+            <div><Text strong>{task.title || task.filename || '未命名'}</Text></div>
+            <div>
+              <Text type={task.status === 'failed' || task.status === 'cancelled' ? 'danger' : 'secondary'}>
+                {statusText}
+              </Text>
+            </div>
+            {isProcessing && task.progress > 0 && <Progress percent={task.progress} size="small" />}
+            {task.status === 'failed' && <Text type="danger">{task.error || '导入失败'}</Text>}
+            {task.status === 'cancelled' && <Text type="secondary">导入过程中断，请重新导入</Text>}
+          </div>
+          {isProcessing && <Button size="small" onClick={() => onCancelImport?.(task)}>取消</Button>}
+          {task.status === 'failed' && <Button size="small" onClick={() => onRetryImport?.(task)}>重试</Button>}
+          {task.status === 'cancelled' && <Button size="small" type="primary" onClick={openImport}>重新导入</Button>}
         </div>
-        {task.status === 'processing' && <Button size="small" onClick={() => onCancelImport?.(task)}>取消</Button>}
-        {task.status === 'failed' && <Button size="small" onClick={() => onRetryImport?.(task)}>重试</Button>}
-      </div>
-    ))}</div>
+      )
+    })}</div>
   }
 
   if (!currentUser) return <Card><Alert type="info" message="请先登录" /></Card>

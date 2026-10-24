@@ -9,7 +9,7 @@
 - 前端：React 18 + Ant Design 5 + Vite，源码在 `frontend/src/`。
 - SaaS 入口：生产根路径 `/` 直接加载 `reader/site/`；`/modern.html` 和 `/modern-assets/*` 只保留 308 兼容跳转。开发入口仍由 Vite 提供。
 - 后端：Python 单体 HTTP 服务 `tools/reader_server.py`，业务拆分在 `tools/saas_*.py`。
-- SaaS 数据：PostgreSQL；正式本地库 `shiyue_saas_local`，隔离测试库 `shiyue_phase1_test`。
+- SaaS 数据：PostgreSQL 端口 55432；正式本地库 `shiyue_saas_local`，隔离测试库 `shiyue_phase1_test`。
 - 旧数据：`.local/library.sqlite3` 和 `books/` 继续保留，不能删除；SaaS 新页面不再使用旧 UI。
 - 媒体访问：SaaS 使用鉴权 `/api/media/{asset_id}` 和媒体变体。
 - 认证：数据库会话 Cookie + CSRF；未登录时 React 渲染登录页。
