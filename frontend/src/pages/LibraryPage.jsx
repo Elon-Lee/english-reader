@@ -28,10 +28,14 @@ export default function LibraryPage({ libraryBooks, importTasks, openReader, ope
   const [deletingInvalid, setDeletingInvalid] = useState(false)
 
   const persistUrl = useCallback(() => {
-    const params = new URLSearchParams()
+    const params = new URLSearchParams(location.search)
+    params.set('screen', 'library')
     if (query.trim()) params.set('q', query.trim())
+    else params.delete('q')
     if (state !== 'all') params.set('state', state)
+    else params.delete('state')
     if (sort !== 'recent') params.set('sort', sort)
+    else params.delete('sort')
     history.replaceState(null, '', `${location.pathname}?${params.toString()}`)
   }, [query, state, sort])
 
