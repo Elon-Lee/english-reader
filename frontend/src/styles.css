@@ -659,7 +659,7 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
   .plan-copy { overflow-wrap: anywhere; }
 }
 /* PC learning workspace: plan, practice, saved results and return. */
-.workspace-loop .workspace-plan-card { background: #e8f0e1; border-color: #d4e3c7; transition: transform 0.2s ease, box-shadow 0.2s ease; }
+.workspace-loop .workspace-plan-card { background: #fbfbf8; border-color: #dce6d7; transition: transform 0.2s ease, box-shadow 0.2s ease; }
 .workspace-loop .workspace-plan-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
 .workspace-plan-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; }
 .workspace-plan-heading .card-kicker { font-size: 14px; letter-spacing: .04em; font-weight: 600; }
@@ -857,7 +857,7 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
   .workspace-loop .page-intro { align-items: center; padding-bottom: 2px; }
   .workspace-loop .page-intro h1 { margin: 8px 0 6px; font-size: 32px; }
   .workspace-loop .learning-guide { border-color: #dce4dc; background: #f8faf7; }
-  .workspace-loop .workspace-plan-card { border-color: #d7e2d7; background: #edf3ed; box-shadow: none; }
+  .workspace-loop .workspace-plan-card { border-color: #e0e6df; background: #fbfbf8; box-shadow: none; }
   .workspace-loop .workspace-plan-card > .ant-card-body { padding: 24px 28px; }
   .workspace-plan-heading h2.ant-typography { color: #263b30; font-size: 23px; letter-spacing: 0; }
   .workspace-plan-heading .card-kicker, .workspace-loop .card-kicker { color: #536b5b; letter-spacing: .04em; }
@@ -933,7 +933,7 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
   .modern-shell[data-study-theme="mist"] .modern-header{border-color:#dce5eb;background:rgba(251,252,253,.94)!important}
   .modern-shell[data-study-theme="mist"] .page-intro h1{color:#263746}
   .modern-shell[data-study-theme="mist"] .eyebrow{color:#526f83!important}
-  .modern-shell[data-study-theme="mist"] .workspace-loop .workspace-plan-card{border-color:#c4d8e5;background:#e0ecf3}
+  .modern-shell[data-study-theme="mist"] .workspace-loop .workspace-plan-card{border-color:#dce5eb;background:#fbfbf8}
   .modern-shell[data-study-theme="mist"] .workspace-plan-heading .card-kicker,.modern-shell[data-study-theme="mist"] .workspace-loop .card-kicker{color:#4d6b82}
   .modern-shell[data-study-theme="mist"] .workspace-plan-heading h2.ant-typography{color:#233847}
   .modern-shell[data-study-theme="mist"] .workspace-plan-heading .ant-typography-secondary{color:#4a6278}
@@ -950,7 +950,7 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
   .modern-shell[data-study-theme="iris"] .modern-header{border-color:#e4deec;background:rgba(252,251,253,.94)!important}
   .modern-shell[data-study-theme="iris"] .page-intro h1{color:#302b3d}
   .modern-shell[data-study-theme="iris"] .eyebrow{color:#6a5d83!important}
-  .modern-shell[data-study-theme="iris"] .workspace-loop .workspace-plan-card{border-color:#d5cae7;background:#e7dff0}
+  .modern-shell[data-study-theme="iris"] .workspace-loop .workspace-plan-card{border-color:#e4deec;background:#fbfbf8}
   .modern-shell[data-study-theme="iris"] .workspace-plan-heading .card-kicker,.modern-shell[data-study-theme="iris"] .workspace-loop .card-kicker{color:#675a82}
   .modern-shell[data-study-theme="iris"] .workspace-plan-heading h2.ant-typography{color:#2d2839}
   .modern-shell[data-study-theme="iris"] .workspace-plan-heading .ant-typography-secondary{color:#5e5170}
