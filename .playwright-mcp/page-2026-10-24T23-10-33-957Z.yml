@@ -1,0 +1,236 @@
+- main [ref=f1e4]:
+  - generic [ref=f1e5]:
+    - link "拾 拾页 ENGLISH WORKSPACE" [ref=f1e6] [cursor=pointer]:
+      - /url: /
+      - generic [ref=f1e7]: 拾
+      - generic [ref=f1e8]:
+        - generic [ref=f1e9]: 拾页
+        - generic [ref=f1e10]: ENGLISH WORKSPACE
+    - navigation "公开站点导航" [ref=f1e11]:
+      - link "产品" [ref=f1e12] [cursor=pointer]:
+        - /url: /#product
+      - link "套餐" [ref=f1e13] [cursor=pointer]:
+        - /url: /pricing
+      - link "支持" [ref=f1e14] [cursor=pointer]:
+        - /url: /support
+    - generic [ref=f1e15]:
+      - link "登 录" [ref=f1e17] [cursor=pointer]:
+        - /url: /login
+      - link "免费注册" [ref=f1e20] [cursor=pointer]:
+        - /url: /register
+  - generic [ref=f1e22]:
+    - generic [ref=f1e23]:
+      - text: 原声听读 · 语境理解 · 生词复习
+      - heading "不是看过。 是终于读懂。" [level=1] [ref=f1e24]:
+        - generic [ref=f1e25]: 不是看过。
+        - generic [ref=f1e26]: 是终于读懂。
+      - generic [ref=f1e27]: 用原声视频、音频和文章逐句学英语。查懂一个词，听清一句话，把每次理解留在自己的学习空间。
+      - generic [ref=f1e28]:
+        - link "免费开始学习 arrow-right" [ref=f1e30] [cursor=pointer]:
+          - /url: /register
+          - generic [ref=f1e31]: 免费开始学习
+          - img "arrow-right" [ref=f1e32]
+        - link "了解学习方式" [ref=f1e36] [cursor=pointer]:
+          - /url: "#product"
+      - generic [ref=f1e38]: 注册需要邀请码 · 验证邮箱后开始 · 无需支付
+      - generic [ref=f1e39]:
+        - generic [ref=f1e40]:
+          - img "check-circle" [ref=f1e41]
+          - text: 使用原始音视频
+        - generic [ref=f1e44]:
+          - img "check-circle" [ref=f1e45]
+          - text: 私人学习空间
+        - generic [ref=f1e48]:
+          - img "check-circle" [ref=f1e49]
+          - text: 自动保存学习进度
+    - generic "拾页逐句阅读器产品画面" [ref=f1e52]:
+      - img "拾页视频逐句学习、单词释义和跟读界面" [ref=f1e54]
+      - generic [ref=f1e55]:
+        - img "play-circle" [ref=f1e56]
+        - generic [ref=f1e59]: 原声、字幕与释义，在同一个阅读现场
+  - generic [ref=f1e60]:
+    - text: 真正的问题，不是缺少材料
+    - heading "而是每次学习都从零开始。" [level=2] [ref=f1e61]
+    - generic [ref=f1e62]:
+      - generic [ref=f1e64]:
+        - text: 读到一半就放弃
+        - paragraph [ref=f1e65]: 长文章和视频没有清晰切分，难点出现时只能来回拖动。
+      - generic [ref=f1e67]:
+        - text: 查完的词又忘了
+        - paragraph [ref=f1e68]: 词典、上下文与复习彼此分离，知道意思却没有形成记忆。
+      - generic [ref=f1e70]:
+        - text: 学了多久没有答案
+        - paragraph [ref=f1e71]: 零散工具不记录你的阅读位置、投入时间和真实进度。
+  - generic [ref=f1e73]:
+    - heading "看一句真实的学习过程" [level=2] [ref=f1e74]
+    - paragraph [ref=f1e77]: The discovery was unexpected, but it transformed our understanding.
+    - paragraph [ref=f1e79]: 这只是一句。在拾页，每篇文章、每个视频都能这样逐句理解。
+  - generic [ref=f1e80]:
+    - generic [ref=f1e81]:
+      - text: READ DEEPLY
+      - heading "一句一句，把模糊变清楚。" [level=2] [ref=f1e82]
+      - generic [ref=f1e83]: 原始视频、字幕、词义、语法和跟读并排工作。遇到难句时停下来理解，理解之后继续听，不需要在多个工具之间切换。
+    - img "真实阅读器中的原声视频、同步字幕与单词语境释义" [ref=f1e85]
+  - generic [ref=f1e86]:
+    - generic [ref=f1e87]:
+      - text: KEEP THE THREAD
+      - heading "今天学到哪里，明天从那里继续。" [level=2] [ref=f1e88]
+      - generic [ref=f1e89]: 私人书架、阅读位置、学习时长和复习任务集中在一个空间。你的每一次投入，都能成为下一次学习的起点。
+    - img "拾页个人英语学习空间：继续阅读、复习生词与每周学习记录" [ref=f1e91]
+  - generic [ref=f1e92]:
+    - generic [ref=f1e93]:
+      - text: SEE THE PROGRESS
+      - heading "看见积累，才更容易坚持。" [level=2] [ref=f1e94]
+      - generic [ref=f1e95]: 学习天数、听读时间、完成句子和热力记录形成可回看的轨迹。不用凭感觉猜测自己有没有进步。
+    - img "拾页英语学习记录与热力图" [ref=f1e276]
+  - generic [ref=f1e97]:
+    - generic [ref=f1e98]:
+      - text: MEMBERSHIP
+      - heading "先开始，再选择适合你的方案" [level=2] [ref=f1e99]
+      - generic [ref=f1e100]: 免费开始，按空间和收藏数量选择。付费方案均含不限次 AI 分析，不自动续费。
+    - generic [ref=f1e101]:
+      - generic [ref=f1e105]:
+        - generic [ref=f1e107]:
+          - generic [ref=f1e108]: 免费体验
+          - generic [ref=f1e109]: FREE
+        - generic [ref=f1e111]:
+          - heading "免费" [level=3] [ref=f1e112]
+          - generic [ref=f1e113]: 从自己的材料开始学习
+        - generic [ref=f1e115]:
+          - generic [ref=f1e116]: ¥0
+          - generic [ref=f1e117]: 永久免费
+        - generic [ref=f1e118]: 使用邀请码注册，验证邮箱后开始
+        - generic [ref=f1e120]:
+          - generic [ref=f1e121]:
+            - term [ref=f1e122]: 私人空间
+            - definition [ref=f1e123]: 1 GB
+          - generic [ref=f1e124]:
+            - term [ref=f1e125]: 视频收藏
+            - definition [ref=f1e126]: 2 个
+          - generic [ref=f1e127]:
+            - term [ref=f1e128]: 音频收藏
+            - definition [ref=f1e129]: 5 个
+          - generic [ref=f1e130]:
+            - term [ref=f1e131]: 词汇语境
+            - definition [ref=f1e132]: 每天最多 50 次
+          - generic [ref=f1e133]:
+            - term [ref=f1e134]: 句法分析
+            - definition [ref=f1e135]: 每天最多 20 次
+          - generic [ref=f1e136]:
+            - term [ref=f1e137]: 视频画质
+            - definition [ref=f1e138]: 流畅
+          - generic [ref=f1e139]:
+            - term [ref=f1e140]: 同时登录
+            - definition [ref=f1e141]: 1 台设备
+        - link "免费注册" [ref=f1e143] [cursor=pointer]:
+          - /url: /register
+      - generic [ref=f1e148]:
+        - generic [ref=f1e150]:
+          - generic [ref=f1e151]: 推荐方案
+          - generic [ref=f1e152]: ADVANCED
+        - generic [ref=f1e154]:
+          - heading "进阶版" [level=3] [ref=f1e155]
+          - generic [ref=f1e156]: 把公版与私人材料放进同一学习空间
+        - generic [ref=f1e158]:
+          - generic [ref=f1e159]:
+            - generic [ref=f1e160]: ¥19
+            - deletion [ref=f1e161]: ¥31.67
+            - generic [ref=f1e162]: 6折
+          - generic [ref=f1e163]: / 30 天
+        - generic [ref=f1e164]: 支持的支付方式按当前开放情况显示
+        - generic [ref=f1e166]:
+          - generic [ref=f1e167]:
+            - term [ref=f1e168]: 私人空间
+            - definition [ref=f1e169]: 5 GB
+          - generic [ref=f1e170]:
+            - term [ref=f1e171]: 视频收藏
+            - definition [ref=f1e172]: 20 个
+          - generic [ref=f1e173]:
+            - term [ref=f1e174]: 音频收藏
+            - definition [ref=f1e175]: 50 个
+          - generic [ref=f1e176]:
+            - term [ref=f1e177]: 词汇语境
+            - definition [ref=f1e178]: 不限次数
+          - generic [ref=f1e179]:
+            - term [ref=f1e180]: 句法分析
+            - definition [ref=f1e181]: 不限次数
+          - generic [ref=f1e182]:
+            - term [ref=f1e183]: 视频画质
+            - definition [ref=f1e184]: 流畅 + 高清
+          - generic [ref=f1e185]:
+            - term [ref=f1e186]: 同时登录
+            - definition [ref=f1e187]: 2 台设备
+        - button "登录后购买 / 兑换" [ref=f1e190] [cursor=pointer]
+      - generic [ref=f1e195]:
+        - generic [ref=f1e197]:
+          - generic [ref=f1e198]: 更多学习空间
+          - generic [ref=f1e199]: PRO
+        - generic [ref=f1e201]:
+          - heading "Pro版" [level=3] [ref=f1e202]
+          - generic [ref=f1e203]: 为高频学习留出更大的材料空间
+        - generic [ref=f1e205]:
+          - generic [ref=f1e206]:
+            - generic [ref=f1e207]: ¥49
+            - deletion [ref=f1e208]: ¥81.67
+            - generic [ref=f1e209]: 6折
+          - generic [ref=f1e210]: / 30 天
+        - generic [ref=f1e211]: 支持的支付方式按当前开放情况显示
+        - generic [ref=f1e213]:
+          - generic [ref=f1e214]:
+            - term [ref=f1e215]: 私人空间
+            - definition [ref=f1e216]: 20 GB
+          - generic [ref=f1e217]:
+            - term [ref=f1e218]: 视频收藏
+            - definition [ref=f1e219]: 100 个
+          - generic [ref=f1e220]:
+            - term [ref=f1e221]: 音频收藏
+            - definition [ref=f1e222]: 200 个
+          - generic [ref=f1e223]:
+            - term [ref=f1e224]: 词汇语境
+            - definition [ref=f1e225]: 不限次数
+          - generic [ref=f1e226]:
+            - term [ref=f1e227]: 句法分析
+            - definition [ref=f1e228]: 不限次数
+          - generic [ref=f1e229]:
+            - term [ref=f1e230]: 视频画质
+            - definition [ref=f1e231]: 流畅 + 高清
+          - generic [ref=f1e232]:
+            - term [ref=f1e233]: 同时登录
+            - definition [ref=f1e234]: 2 台设备
+        - button "登录后购买 / 兑换" [ref=f1e237] [cursor=pointer]
+    - generic [ref=f1e239]:
+      - strong [ref=f1e241]: 所有方案都包含
+      - list [ref=f1e242]:
+        - listitem [ref=f1e243]: 公版及授权学习材料不限次使用
+        - listitem [ref=f1e247]: 音频、视频及在线视频导入，不按导入次数收费
+    - generic [ref=f1e251]:
+      - text: 音视频收藏按官方书架与私人内容合计；移出官方书架或删除私人读物可释放名额。注册需要有效邀请码，
+      - link "没有邀请码？" [ref=f1e252] [cursor=pointer]:
+        - /url: /support#invitation
+  - generic [ref=f1e253]:
+    - text: START WHERE YOU ARE
+    - heading "从你想读懂的那一篇开始。" [level=2] [ref=f1e254]
+    - generic [ref=f1e255]: 挑选官方读物，或导入自己的材料。一次只专注一句。
+    - generic [ref=f1e256]:
+      - link "使用邀请码免费注册" [ref=f1e258] [cursor=pointer]:
+        - /url: /register
+      - link "比较全部套餐" [ref=f1e261] [cursor=pointer]:
+        - /url: /pricing
+  - generic [ref=f1e263]:
+    - generic [ref=f1e264]:
+      - generic [ref=f1e265]: 拾
+      - generic [ref=f1e266]:
+        - generic [ref=f1e267]: 拾页
+        - generic [ref=f1e268]: ENGLISH WORKSPACE
+    - generic [ref=f1e269]:
+      - link "用户协议" [ref=f1e270] [cursor=pointer]:
+        - /url: /terms
+      - link "隐私政策" [ref=f1e271] [cursor=pointer]:
+        - /url: /privacy
+      - link "内容规则" [ref=f1e272] [cursor=pointer]:
+        - /url: /content-policy
+      - link "版权投诉" [ref=f1e273] [cursor=pointer]:
+        - /url: /copyright
+      - link "退款规则" [ref=f1e274] [cursor=pointer]:
+        - /url: /refunds
+    - generic [ref=f1e275]: 客服 QQ：289614546 · 固定期限权益，不自动续费

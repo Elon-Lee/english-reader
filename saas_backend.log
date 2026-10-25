@@ -1,0 +1,91 @@
+拾页已启动：http://localhost:8765
+局域网访问：http://192.168.1.45:8765
+监听地址：0.0.0.0:8765
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /vendor/bootstrap-icons/bootstrap-icons.min.css?v=1.11.3 HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /responsive.css?v=20261011-1 HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /components.css?v=20261011-1 HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /shiyue-mark.svg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /styles.css?v=20261011-1 HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /vendor/bootstrap/bootstrap.min.css?v=5.3.3 HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /vendor/bootstrap/bootstrap.bundle.min.js?v=5.3.3 HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /app.js?v=20261011-1 HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /favicon.svg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /api/settings HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /api/library HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.26.%E6%97%B6%E7%A9%BA%E5%BC%82%E5%AE%A2/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.11.%E7%9B%91%E6%8E%A7%E5%BD%95%E5%83%8F/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /favicon.svg HTTP/1.1" 304 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /books/.reader/survival-game/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.14.%E9%A9%B6%E5%85%A5%E9%99%A9%E5%A2%83/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] code 404, message Not Found
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.07.%E9%9B%BE%E9%83%BD%E7%96%91%E6%A1%88/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] code 404, message Not Found
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.23.%E7%BA%A2%E5%8F%91%E5%A7%91%E5%A8%98/.reader/cover-320.jpg HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 07:59:28] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.17.%E9%9B%AA%E4%B8%AD%E7%9A%84%E6%9F%91%E6%A9%98/.reader/cover-320.jpg HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.02.%E4%BE%A0%E7%9B%97%E7%BD%97%E5%AE%BE%E6%B1%89/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] code 404, message Not Found
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.19.%E7%BB%BF%E7%9C%BC%E5%A5%B3%E5%AD%90/.reader/cover-320.jpg HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.25.%E6%91%A9%E6%89%98%E5%A5%B3%E5%AD%A9/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.05.%E5%90%B8%E8%A1%80%E9%AC%BC%E7%8C%8E%E6%89%8B/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.04.%E7%BA%A2%E9%85%8B%E9%95%BF%E7%9A%84%E8%B5%8E%E9%87%91/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.08.%E4%BA%9A%E7%91%9F%E7%8E%8B%E4%BC%A0%E5%A5%87/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.09.%E4%BA%9A%E7%91%9F%E7%8E%8B%E6%9C%9D%E9%87%8C%E7%9A%84%E7%BE%8E%E5%9B%BD%E4%BA%BA/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] code 404, message Not Found
+127.0.0.1 - - [25/Oct/2026 07:59:29] code 404, message Not Found
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.06.%E9%80%86%E6%88%9F%E9%B2%B8/.reader/cover-320.jpg HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.03.%E7%99%BD%E8%89%B2%E5%B7%A8%E7%9F%B3/.reader/cover-320.jpg HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.10.%E6%8A%8A%E9%92%B1%E6%8B%BF%E5%87%BA%E6%9D%A5%EF%BC%81/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.13.%E7%BA%BD%E7%BA%A6%E7%BD%91%E5%90%A7/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.12.%E7%BA%A2%E7%BA%A2%E7%9A%84%E7%8E%AB%E7%91%B0/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.15.%E8%90%A8%E8%8E%89%E7%9A%84%E6%89%8B%E6%9C%BA/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.21.%E6%B5%B7%E7%9B%97%E7%9A%84%E5%AE%9D%E8%97%8F/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.20.%E6%9C%80%E5%90%8E%E4%B8%80%E6%AC%A1%E6%9C%BA%E4%BC%9A/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.18.%E8%B6%8A%E7%8B%B1/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:29] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.16.%E4%BA%A1%E7%81%B5%E7%9A%84%E9%87%91%E9%92%B1/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 07:59:52] "GET /api/public/stats HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /components.css?v=20261011-1 HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /responsive.css?v=20261011-1 HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /shiyue-mark.svg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /vendor/bootstrap/bootstrap.min.css?v=5.3.3 HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /styles.css?v=20261011-1 HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /vendor/bootstrap-icons/bootstrap-icons.min.css?v=1.11.3 HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /vendor/bootstrap/bootstrap.bundle.min.js?v=5.3.3 HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /app.js?v=20261011-1 HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /favicon.svg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /api/settings HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /api/library HTTP/1.1" 304 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] code 404, message Not Found
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.23.%E7%BA%A2%E5%8F%91%E5%A7%91%E5%A8%98/.reader/cover-320.jpg HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /favicon.svg HTTP/1.1" 304 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] code 404, message Not Found
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.17.%E9%9B%AA%E4%B8%AD%E7%9A%84%E6%9F%91%E6%A9%98/.reader/cover-320.jpg HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] code 404, message Not Found
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.03.%E7%99%BD%E8%89%B2%E5%B7%A8%E7%9F%B3/.reader/cover-320.jpg HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] code 404, message Not Found
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.06.%E9%80%86%E6%88%9F%E9%B2%B8/.reader/cover-320.jpg HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:02:52] code 404, message Not Found
+127.0.0.1 - - [25/Oct/2026 08:02:52] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.19.%E7%BB%BF%E7%9C%BC%E5%A5%B3%E5%AD%90/.reader/cover-320.jpg HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:03:38] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 08:03:38] "GET /api/workspace/journey HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:03:41] "GET /books/%E7%89%9B%E6%B4%A5%E4%B9%A6%E8%99%AB%E5%85%A8%E7%B3%BB%E5%88%977%E7%BA%A7%EF%BC%880%EF%BC%89/0.24.%E7%AC%AC15%E4%B8%AA%E8%A7%92%E8%89%B2/.reader/cover-320.jpg HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:03:48] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:03:49] "GET /api/public/stats HTTP/1.1" 200 -
+127.0.0.1 - - [25/Oct/2026 08:03:49] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 08:03:49] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:03:50] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:03:50] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 08:03:50] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:03:51] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:03:51] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 08:03:51] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:03:52] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:03:52] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 08:03:52] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:37:12] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 08:37:12] "GET /api/public/stats HTTP/1.1" 304 -
+127.0.0.1 - - [25/Oct/2026 08:37:12] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 08:37:12] "GET /api/commerce/products HTTP/1.1" 404 -

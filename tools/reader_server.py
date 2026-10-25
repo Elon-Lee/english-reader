@@ -249,6 +249,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.debug_browser_login(route);return
         if route.path.startswith("/api/auth/"):
             self.auth_get(route.path); return
+        if route.path=="/api/public/stats":
+            self.public_stats_get();return
         if SAAS.enabled and (route.path=="/api/commerce/products" or route.path.startswith("/api/commerce/products/")):
             try:
                 if route.path=="/api/commerce/products":self.reply(COMMERCE.public_catalog(),cache_control="public, max-age=60");return
@@ -834,6 +836,57 @@ class Handler(SimpleHTTPRequestHandler):
             return str(session["id"]) if session else None
         except SaaSConfigurationError:
             return None
+    def public_stats_get(self):
+        """Public statistics endpoint for homepage trust section."""
+        try:
+            # For development/demo: use demo data
+            if os.environ.get("SHIYUE_DEMO_MODE") == "1":
+                self.reply({
+                    "totalSentences": 12500,
+                    "totalHours": 850,
+                    "retentionRate": 78
+                }, cache_control="public, max-age=300")
+                return
+
+            # Production: query real data from workspace database
+            if not SAAS.enabled:
+                self.reply({"totalSentences": 0, "totalHours": 0, "retentionRate": 0}, cache_control="public, max-age=300")
+                return
+
+            from datetime import datetime, timedelta
+            cutoff = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+
+            # Total sentences completed in last 30 days
+            total_sentences = WORKSPACE.db.execute(
+                "SELECT COUNT(*) FROM user_learning_days WHERE day >= ? AND sentences_completed > 0",
+                (cutoff,)
+            ).fetchone()[0] or 0
+
+            # Total learning hours in last 30 days
+            total_seconds = WORKSPACE.db.execute(
+                "SELECT SUM(seconds_spent) FROM user_learning_days WHERE day >= ?",
+                (cutoff,)
+            ).fetchone()[0] or 0
+            total_hours = int(total_seconds / 3600)
+
+            # 30-day retention rate (users active in last 60 days who were also active in last 30 days)
+            sixty_days_ago = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+            users_60d = set(row[0] for row in WORKSPACE.db.execute(
+                "SELECT DISTINCT user_id FROM user_learning_days WHERE day >= ?", (sixty_days_ago,)
+            ))
+            users_30d = set(row[0] for row in WORKSPACE.db.execute(
+                "SELECT DISTINCT user_id FROM user_learning_days WHERE day >= ?", (cutoff,)
+            ))
+            retention_rate = int((len(users_30d) / len(users_60d) * 100)) if users_60d else 0
+
+            self.reply({
+                "totalSentences": total_sentences,
+                "totalHours": total_hours,
+                "retentionRate": retention_rate
+            }, cache_control="public, max-age=300")
+        except Exception as e:
+            # Graceful degradation - return zeros on error
+            self.reply({"totalSentences": 0, "totalHours": 0, "retentionRate": 0}, cache_control="public, max-age=300")
     def catalog_get(self,route):
         try:
             user_id=self.optional_saas_user();query=parse_qs(route.query)

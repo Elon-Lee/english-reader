@@ -7,6 +7,8 @@ import usePurchasePreviews from '../hooks/usePurchasePreviews'
 import { displayDate, featuredProductId, planHighlights, purchaseAction, sharedBenefits } from '../utils/presentation.mjs'
 import { refreshJourney, updateJourney } from '../api/journey'
 import { PurchaseRecovery } from '../components/LearningJourney'
+import InteractiveDemo from '../components/InteractiveDemo'
+import TrustSection from '../components/TrustSection'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -351,6 +353,8 @@ export default function PublicSite({ authenticated, page = 'home' }) {
 
     <section className="public-pain"><Text>真正的问题，不是缺少材料</Text><Title level={2}>而是每次学习都从零开始。</Title><Row gutter={[28, 28]}><Col xs={24} md={8}><div><b>读到一半就放弃</b><p>长文章和视频没有清晰切分，难点出现时只能来回拖动。</p></div></Col><Col xs={24} md={8}><div><b>查完的词又忘了</b><p>词典、上下文与复习彼此分离，知道意思却没有形成记忆。</p></div></Col><Col xs={24} md={8}><div><b>学了多久没有答案</b><p>零散工具不记录你的阅读位置、投入时间和真实进度。</p></div></Col></Row></section>
 
+    <InteractiveDemo />
+
     <section className="public-product-story" id="product">
       <div className="public-story-copy"><Text>READ DEEPLY</Text><Title level={2}>一句一句，把模糊变清楚。</Title><Paragraph>原始视频、字幕、词义、语法和跟读并排工作。遇到难句时停下来理解，理解之后继续听，不需要在多个工具之间切换。</Paragraph></div>
       <div className="public-screenshot-stage"><img src="/product/reader-word-panel.jpg" loading="lazy" alt="真实阅读器中的原声视频、同步字幕与单词语境释义" /></div>
@@ -364,6 +368,7 @@ export default function PublicSite({ authenticated, page = 'home' }) {
       <div className="public-screenshot-stage"><img src="/product/learning-insights.png" loading="lazy" alt="拾页英语学习记录与热力图" /></div>
     </section>
 
+    <TrustSection />
     <PricingSection key={catalogRevision} {...pricingProps} products={monthly} title="先开始，再选择适合你的方案" />
     <section className="public-final-cta"><Text>START WHERE YOU ARE</Text><Title level={2}>从你想读懂的那一篇开始。</Title><Paragraph>挑选官方读物，或导入自己的材料。一次只专注一句。</Paragraph><Space><Button type="primary" size="large" href={authenticated ? '/app?screen=catalog' : '/register'}>{authenticated ? '去书城挑选读物' : '使用邀请码免费注册'}</Button><Button size="large" href="/pricing">比较全部套餐</Button></Space></section>
     {purchaseDialog}

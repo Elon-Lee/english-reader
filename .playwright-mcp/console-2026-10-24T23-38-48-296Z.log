@@ -1,0 +1,3 @@
+[     114ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ http://127.0.0.1:5173/@fs/Users/x/Documents/english/node_modules/.vite/deps/chunk-OY5C42Z6.js?v=f37ca8e8:21608
+[     198ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://127.0.0.1:5173/api/auth/me:0
+[     245ms] [ERROR] Warning: [antd: Modal] `destroyOnClose` is deprecated. Please use `destroyOnHidden` instead. @ http://127.0.0.1:5173/@fs/Users/x/Documents/english/node_modules/.vite/deps/antd.js?v=f37ca8e8:853

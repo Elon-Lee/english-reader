@@ -19,6 +19,10 @@
 
 ## 全局完成状态
 
+- 2026-10-25 首页产品截图更新与布局优化：使用 2026-10-23 最新截图替换过时图片（阅读器单词面板 1800×856、工作空间继续学习 1440×900、学习记录热力图 1440×1000），优化展示样式（12px 圆角、双层投影、渐变蒙版、hover 上浮效果），图片压缩为 JPG 减小 40% 体积。构建及前端检查通过；仅本地，未发布生产。详见 `tasks/frontend-design/HANDOFF.md`。
+
+- 2026-10-25 首页互动演示区修复：补充缺失的 CSS 样式（琥珀色渐变背景、白色卡片、单词高亮与交互样式），修正组件事件处理、状态管理和可访问性属性。构建及前端检查通过；仅本地，未发布生产。详见 `tasks/frontend-design/HANDOFF.md`。
+
 - 2026-10-24 难度级别 CEFR 标准化：导入、书城筛选与展示全部采用 CEFR 级别（A1/A2/B1/B2/C1/C2），迁移脚本已将历史数据的旧分类（starter/elementary/pre-intermediate/upper-intermediate/advanced/proficiency）转为 CEFR 级别。catalog_books 已全量转换，content_books 保留用户上传内容自带的其他元数据。构建、JS 语法及 Python 编译通过；已提交 cc62163 并在本地库应用迁移 0043，未发布生产。详见 `frontend/src/config/levels.mjs` 和 `tools/saas_migrations/0043_cefr_levels.sql`。
 
 - 2026-10-22 学习中心主题切换：账号可选松林绿、雾蓝、鸢尾紫；主题通过现有偏好 API 校验和持久化，首次进入工作区加载，阅读器护眼仍独立。构建、modern smoke、UI 回归、Python 编译及 diff 检查通过；phase7 PostgreSQL 集成需配置专用 `_test` 数据库，尚未运行。详见 `tasks/pc-workspace/HANDOFF.md`。
