@@ -36,7 +36,7 @@ def main() -> int:
     check('/modern-assets/' not in html, "root site must not depend on the legacy modern-assets path")
     check((ASSETS / "index.js").is_file(), "root entry chunk missing")
     entry = (ASSETS / "index.js").read_text(encoding="utf-8")
-    for filename in ("reader-word-panel.jpg", "workspace-current.jpg", "learning-insights.png"):
+    for filename in ("reader-lookup-20261026.webp", "reader-tools-20261026.webp", "workspace-current.jpg", "vocabulary-review-20261026.webp"):
         image = ROOT / "frontend" / "public" / "product" / filename
         version = sha256(image.read_bytes()).hexdigest()[:12]
         check(f"/product/{filename}?v={version}" in entry, f"homepage screenshot URL must change with its content: {filename}")

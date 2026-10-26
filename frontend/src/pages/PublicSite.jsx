@@ -348,24 +348,24 @@ export default function PublicSite({ authenticated, page = 'home' }) {
     <PurchaseRecovery authenticated={authenticated} />
     <section className="public-hero">
       <div className="public-hero-copy"><Text>原声听读 · 语境理解 · 生词复习</Text><Title><span>不是看过。</span><span>是终于读懂。</span></Title><Paragraph>用原声视频、音频和文章逐句学英语。查懂一个词，听清一句话，把每次理解留在自己的学习空间。</Paragraph><Space size={14}><Button type="primary" size="large" href={authenticated ? '/app' : '/register'}>{authenticated ? '继续学习' : '免费开始学习'}<ArrowRightOutlined /></Button><Button size="large" href="#product">了解学习方式</Button></Space>{!authenticated && <Text className="signup-note">注册需要邀请码 · 验证邮箱后开始 · 无需支付</Text>}<div className="public-hero-notes"><span><CheckCircleFilled /> 使用原始音视频</span><span><CheckCircleFilled /> 私人学习空间</span><span><CheckCircleFilled /> 自动保存学习进度</span></div></div>
-      <div className="public-hero-visual" aria-label="拾页逐句阅读器产品画面"><div className="public-device-frame"><img src="/product/reader-word-panel.jpg" alt="拾页视频逐句学习、单词释义和跟读界面" /></div><div className="public-visual-caption"><PlayCircleFilled /><span>原声、字幕与释义，在同一个阅读现场</span></div></div>
+      <div className="public-hero-visual" aria-label="拾页逐句阅读器产品画面"><div className="public-device-frame"><img src="/product/reader-lookup-20261026.webp" width="2560" height="1338" alt="最新拾页阅读器：原声视频、逐句字幕与 confident 本句查词浮窗" fetchPriority="high" /></div><div className="public-visual-caption"><PlayCircleFilled /><span>原声、字幕与释义，在同一个阅读现场</span></div></div>
     </section>
 
     <section className="public-pain"><Text>真正的问题，不是缺少材料</Text><Title level={2}>而是每次学习都从零开始。</Title><Row gutter={[28, 28]}><Col xs={24} md={8}><div><b>读到一半就放弃</b><p>长文章和视频没有清晰切分，难点出现时只能来回拖动。</p></div></Col><Col xs={24} md={8}><div><b>查完的词又忘了</b><p>词典、上下文与复习彼此分离，知道意思却没有形成记忆。</p></div></Col><Col xs={24} md={8}><div><b>学了多久没有答案</b><p>零散工具不记录你的阅读位置、投入时间和真实进度。</p></div></Col></Row></section>
 
-    <InteractiveDemo />
+    <InteractiveDemo authenticated={authenticated} />
 
     <section className="public-product-story" id="product">
       <div className="public-story-copy"><Text>READ DEEPLY</Text><Title level={2}>一句一句，把模糊变清楚。</Title><Paragraph>原始视频、字幕、词义、语法和跟读并排工作。遇到难句时停下来理解，理解之后继续听，不需要在多个工具之间切换。</Paragraph></div>
-      <div className="public-screenshot-stage"><img src="/product/reader-word-panel.jpg" loading="lazy" alt="真实阅读器中的原声视频、同步字幕与单词语境释义" /></div>
+      <div className="public-screenshot-stage"><img src="/product/reader-tools-20261026.webp" width="2560" height="1337" loading="lazy" alt="最新阅读页：左侧原声视频、中间逐句阅读、右侧固定阅读工具与 through 语境释义" /></div>
     </section>
     <section className="public-product-story reverse">
       <div className="public-story-copy"><Text>KEEP THE THREAD</Text><Title level={2}>今天学到哪里，明天从那里继续。</Title><Paragraph>私人书架、阅读位置、学习时长和复习任务集中在一个空间。你的每一次投入，都能成为下一次学习的起点。</Paragraph></div>
       <div className="public-screenshot-stage"><img src="/product/workspace-current.jpg" loading="lazy" alt="拾页个人英语学习空间：继续阅读、复习生词与每周学习记录" /></div>
     </section>
     <section className="public-product-story">
-      <div className="public-story-copy"><Text>SEE THE PROGRESS</Text><Title level={2}>看见积累，才更容易坚持。</Title><Paragraph>学习天数、听读时间、完成句子和热力记录形成可回看的轨迹。不用凭感觉猜测自己有没有进步。</Paragraph></div>
-      <div className="public-screenshot-stage"><img src="/product/learning-insights.png" loading="lazy" alt="拾页英语学习记录与热力图" /></div>
+      <div className="public-story-copy"><Text>REVISIT YOUR WORDS</Text><Title level={2}>读过的生词，在复习中记住。</Title><Paragraph>从原文收藏生词，按自己的节奏回忆、对照释义，再巩固薄弱词。复习记录和下一次安排，让每一点积累都有迹可循。</Paragraph></div>
+      <div className="public-screenshot-stage"><img src="/product/vocabulary-review-20261026.webp" width="2560" height="1403" loading="lazy" alt="最新绿色主题生词复习页：今日复习、每轮词数、复习记录与下一次复习安排" /></div>
     </section>
 
     <TrustSection />

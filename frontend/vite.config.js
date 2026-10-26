@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
-const homepageImages = ['reader-word-panel.jpg', 'workspace-current.jpg', 'learning-insights.png']
+const homepageImages = ['reader-lookup-20261026.webp', 'reader-tools-20261026.webp', 'workspace-current.jpg', 'vocabulary-review-20261026.webp']
 
 export default defineConfig({
   root: resolve(process.cwd(), 'frontend'),
