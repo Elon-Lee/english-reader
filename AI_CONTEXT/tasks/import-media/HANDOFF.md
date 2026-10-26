@@ -57,6 +57,7 @@
 
 ## 已完成
 
+- 2026-10-25 修复书架“导入记录 → 删除无效任务”404：`LibraryPage` 曾调用旧 `DELETE /api/workspace/imports/invalid`，改为后端已实现的 `POST /api/workspace/imports/delete-invalid`，并在 modern frontend smoke 中加入路由契约断言。前端构建（独立临时目录）、modern smoke、JS 检查、Python 编译和 diff 检查通过；phase8 集成测试因未配置专用 `_test` 数据库未运行。仅本地，未发布生产。
 - 2026-10-19 导入历史操作改为“删除无效任务”，范围为当前账号 `failed` + `cancelled` 记录；前端按 `invalidCount` 启用按钮，确认与成功提示同步更新。POST 改为 `/api/workspace/imports/delete-invalid`，保留登录/CSRF/用户隔离与重复删除安全；有效任务和源媒体不删除。构建、modern/UI/JS、Python 编译、diff 检查与 phase8 的 11 项隔离库集成测试通过（含仅取消记录、混合状态、重复删除及 HTTP 鉴权）。本地后台已重启加载，未发布生产。
 
 - 2026-10-18 YouTube 新导入系列默认取 `data.youtube.channel`，无频道信息时才回退“私人导入”；`0036_youtube_channel_series.sql` 回填旧默认系列并同步书城默认分组，保留手工系列。迁移已在隔离库验证，尚未应用本地正式库和生产。任务历史 GET 支持 `page/limit` 并返回 `total/failedCount/invalidCount/page/pageSize`；新增 POST `/api/workspace/imports/delete-invalid`，沿用登录、用户隔离、CSRF 与用户锁，仅删除当前用户失败和已取消任务记录，不清理源媒体。phase3/7/8 共 23 项隔离库回归及追加 phase8 11 项回归通过；本轮尚未发布生产。

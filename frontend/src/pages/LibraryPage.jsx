@@ -91,7 +91,7 @@ export default function LibraryPage({ libraryBooks, importTasks, openReader, ope
   const deleteInvalid = async () => {
     setDeletingInvalid(true)
     try {
-      await deleteJson('/api/workspace/imports/invalid')
+      await postJson('/api/workspace/imports/delete-invalid', {})
       messageApi.success('已删除无效任务')
       setTaskReload(value => value + 1)
     } catch (error) {

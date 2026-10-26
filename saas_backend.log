@@ -89,3 +89,56 @@
 127.0.0.1 - - [25/Oct/2026 08:37:12] "GET /api/public/stats HTTP/1.1" 304 -
 127.0.0.1 - - [25/Oct/2026 08:37:12] code 404, message File not found
 127.0.0.1 - - [25/Oct/2026 08:37:12] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:08:55] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:08:55] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:08:55] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:08:55] "GET /api/public/stats HTTP/1.1" 304 -
+127.0.0.1 - - [25/Oct/2026 09:09:08] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:08] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:08] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:09] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:09] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:09] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:10] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:10] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:10] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:10] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:10] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:10] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:19] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:20] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:20] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:26] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:26] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:27] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:27] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:27] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:27] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:27] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:27] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:27] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:27] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:28] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:28] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:28] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:28] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:28] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:28] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:29] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:29] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:29] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:29] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:29] code 404, message File not found
+127.0.0.1 - - [25/Oct/2026 09:09:29] "GET /api/commerce/products HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:31] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:32] "POST /api/auth/login HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:35] "POST /api/auth/login HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:37] "POST /api/auth/login HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:37] "POST /api/auth/login HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:37] "POST /api/auth/login HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:53] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:54] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:09:59] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:10:38] "GET /api/auth/me%0A HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:11:04] "GET /api/auth/me HTTP/1.1" 404 -
+127.0.0.1 - - [25/Oct/2026 09:11:27] "GET /api/auth/me HTTP/1.1" 404 -

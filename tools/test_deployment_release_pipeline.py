@@ -26,7 +26,9 @@ class DeploymentReleasePipelineTests(unittest.TestCase):
     def test_frontend_build_runs_production_script_and_checks_assets(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);(root/"package.json").write_text("{}")
-            for path in (root/"reader/site/index.html",root/"reader/site/assets/index.js",root/"reader/site/assets/index.css"):
+            required=("reader/site/index.html","reader/site/assets/index.js","reader/site/assets/index.css","reader/site/product/reader-word-panel.jpg","reader/site/product/workspace-current.jpg","reader/site/product/learning-insights.png")
+            for relative in required:
+                path=root/relative
                 path.parent.mkdir(parents=True,exist_ok=True);path.write_text("ok")
             completed=type("Completed",(),{"returncode":0,"stdout":"built\n","stderr":""})()
             with patch.object(manager,"ROOT",root),patch.object(manager.subprocess,"run",return_value=completed) as run:
@@ -34,14 +36,30 @@ class DeploymentReleasePipelineTests(unittest.TestCase):
             self.assertEqual(run.call_args.args[0],["npm","run","build:modern"])
             self.assertEqual(run.call_args.kwargs["cwd"],root)
 
+    def test_frontend_build_rejects_missing_home_screenshot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);(root/"package.json").write_text("{}")
+            required=("reader/site/index.html","reader/site/assets/index.js","reader/site/assets/index.css","reader/site/product/reader-word-panel.jpg","reader/site/product/workspace-current.jpg")
+            for relative in required:
+                path=root/relative
+                path.parent.mkdir(parents=True,exist_ok=True);path.write_text("ok")
+            completed=type("Completed",(),{"returncode":0,"stdout":"built\n","stderr":""})()
+            with patch.object(manager,"ROOT",root),patch.object(manager.subprocess,"run",return_value=completed):
+                with self.assertRaisesRegex(ValueError,"learning-insights.png"):
+                    manager.build_frontend_assets(Job())
+
     def test_release_package_contains_metadata(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp)/"repo";state=Path(temp)/"state";source=root/"reader/site/index.html";source.parent.mkdir(parents=True);source.write_text("ok");legacy=root/"reader/modern-assets/assets/index.js";legacy.parent.mkdir(parents=True);legacy.write_text("legacy")
+            screenshots=("reader-word-panel.jpg","workspace-current.jpg","learning-insights.png")
+            for name in screenshots:
+                image=root/"reader/site/product"/name;image.parent.mkdir(parents=True,exist_ok=True);image.write_bytes(b"image")
             with patch.object(manager,"ROOT",root),patch.object(manager,"STATE",state),patch.object(manager,"build_frontend_assets"),patch.object(manager,"code_files",return_value=[root/"reader"]),patch.object(manager,"release_metadata",return_value={"releaseId":"code-20261012-120000-abcdef12","packageFormat":2}):
                 package,digest=manager.build_code_package(Job(),"code-20261012-120000-abcdef12")
             self.assertEqual(len(digest),64)
             with tarfile.open(package,"r:gz") as archive:
                 self.assertFalse(any(name=="reader/modern-assets" or name.startswith("reader/modern-assets/") for name in archive.getnames()))
+                for name in screenshots:self.assertIn(f"reader/site/product/{name}",archive.getnames())
                 metadata=json.load(archive.extractfile(".shiyue-release.json"))
             self.assertEqual(metadata["packageFormat"],2)
 

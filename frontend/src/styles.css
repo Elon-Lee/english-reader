@@ -737,8 +737,8 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
  .reader-study-workspace .reader-media-drag-handle:hover,.reader-study-workspace .reader-media-drag-handle.is-dragging{color:var(--reader-accent);background:var(--reader-selection)}
  .reader-media-drag-handle:focus-visible{outline:2px solid var(--reader-accent);outline-offset:-2px}
  .reader-media-drag-handle:disabled{cursor:default;opacity:.55}
- .reader-study-workspace.reader-media-side.reader-tools-closed:not(.reader-without-media):not(.focus-mode) .reader-content-row:has(> .reader-media-panel video){grid-template-columns:clamp(260px,22vw,360px) minmax(0,1fr)}
- .reader-study-workspace.reader-media-side:not(.reader-without-media):not(.focus-mode) .reader-media-panel:has(video){justify-self:start;width:100%}
+ .reader-study-workspace.reader-media-side.reader-tools-closed:not(.reader-without-media):not(.focus-mode) .reader-content-row:has(> .reader-media-panel video, > .reader-media-panel .reader-original-image){grid-template-columns:clamp(260px,22vw,360px) minmax(0,1fr)}
+ .reader-study-workspace.reader-media-side:not(.reader-without-media):not(.focus-mode) .reader-media-panel:has(video,.reader-original-image){justify-self:start;width:100%}
  .reader-study-workspace.reader-media-side .reader-media-stage:has(> .reader-media){width:100%}
 }
 @media(min-width:901px) and (max-width:1350px){
@@ -746,7 +746,7 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
  .reader-study-workspace.reader-media-side.reader-tools-open:not(.focus-mode) .reader-media-panel{top:0}
 }
 @media(min-width:1351px){
- .reader-study-workspace.reader-media-side.reader-tools-open:not(.reader-without-media):not(.focus-mode) .reader-content-row:has(> .reader-media-panel video){grid-template-columns:clamp(260px,22vw,360px) minmax(0,1fr) 350px}
+ .reader-study-workspace.reader-media-side.reader-tools-open:not(.reader-without-media):not(.focus-mode) .reader-content-row:has(> .reader-media-panel video, > .reader-media-panel .reader-original-image){grid-template-columns:clamp(260px,22vw,360px) minmax(0,1fr) 350px}
 }
 @media(min-width:901px){
  .reader-study-workspace .reader-content-row{column-gap:12px}

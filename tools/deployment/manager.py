@@ -229,7 +229,7 @@ def build_frontend_assets(job):
     if result.returncode!=0:
         if output:job.write(output[-4000:])
         raise ValueError("React 前端构建失败")
-    required=(ROOT/"reader/site/index.html",ROOT/"reader/site/assets/index.js",ROOT/"reader/site/assets/index.css")
+    required=(ROOT/"reader/site/index.html",ROOT/"reader/site/assets/index.js",ROOT/"reader/site/assets/index.css",ROOT/"reader/site/product/reader-word-panel.jpg",ROOT/"reader/site/product/workspace-current.jpg",ROOT/"reader/site/product/learning-insights.png")
     missing=[str(path.relative_to(ROOT)) for path in required if not path.is_file() or path.stat().st_size==0]
     if missing:raise ValueError("React 前端构建产物不完整："+", ".join(missing))
     summary=next((line for line in reversed(output.splitlines()) if line.strip()),"构建完成")
@@ -973,7 +973,7 @@ def uninstall_saas_for_redeploy(job,remote,target):
     backup_release=new_release_id("code")
     backup=f"/var/backups/shiyue/deployment-target-{target['id']}/pre-redeploy-{backup_release}.dump"
     root=shlex.quote(target["remote_root"])
-    job.update(3,"备份远程 SaaS 数据库",release_id=backup_release)
+    job.update(30,"备份远程 SaaS 数据库",release_id=backup_release)
     backup_script=f"""set -euo pipefail
 umask 077
 backup={shlex.quote(backup)}
@@ -988,7 +988,7 @@ sha256sum "$backup" | awk '{{print "SHIYUE_REDEPLOY_BACKUP_READY " $1}}'
     backup_result=remote.ssh(backup_script)
     if "SHIYUE_REDEPLOY_BACKUP_READY" not in backup_result:raise ValueError("重新部署前的远程数据库备份未完成")
     job.write(f"远程数据库备份已保存到节点目录之外：{backup}")
-    job.update(7,"卸载远程拾页服务")
+    job.update(34,"卸载远程拾页服务")
     uninstall_script=f"""set -euo pipefail
 docker rm -f shiyue-saas shiyue-saas-frontend shiyue-postgres shiyue-redis shiyue-reader >/dev/null 2>&1 || true
 rm -rf -- {root}
@@ -1005,10 +1005,11 @@ echo SHIYUE_UNINSTALLED
 
 def start_saas_deploy(target_id,reinstall=False):
     def worker(job,remote,target):
+        release=new_release_id("code");job.update(2,"准备本机发布包与数据库快照",release_id=release)
+        package,digest=build_code_package(job,release);dump,dump_digest=build_saas_database_dump(job,release)
         if reinstall:uninstall_saas_for_redeploy(job,remote,target)
-        release=new_release_id("code");job.update(4,"检查远程 SaaS 运行环境",release_id=release);_,oci_arch=remote_arch(remote)
+        job.update(36,"检查远程 SaaS 运行环境",release_id=release);_,oci_arch=remote_arch(remote)
         ensure_remote_docker(job,remote);ensure_remote_runtime(job,remote,oci_arch)
-        job.update(24,"生成根路径 SaaS 程序包");package,digest=build_code_package(job,release);dump,dump_digest=build_saas_database_dump(job,release)
         job.update(38,"上传 SaaS 程序版本");remote.scp(package,f"/tmp/{package.name}")
         ensure_remote_saas_config(job,remote,target);prepare_remote_saas_release(remote,target,release,package.name,digest)
         if target["install_recording"]:

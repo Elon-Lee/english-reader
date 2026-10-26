@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Static smoke checks for the React + Ant Design production entrypoint."""
 from pathlib import Path
+from hashlib import sha256
 import re
 import sys
 
@@ -17,6 +18,7 @@ API_CLIENT = ROOT / "frontend" / "src" / "api" / "client.js"
 PUBLIC_SITE = ROOT / "frontend" / "src" / "pages" / "PublicSite.jsx"
 MEMBERSHIP_PAGE = ROOT / "frontend" / "src" / "pages" / "MembershipPage.jsx"
 PAGE_SKELETON = ROOT / "frontend" / "src" / "components" / "PageSkeleton.jsx"
+LIBRARY_PAGE = ROOT / "frontend" / "src" / "pages" / "LibraryPage.jsx"
 
 
 def check(condition: bool, message: str) -> None:
@@ -34,6 +36,10 @@ def main() -> int:
     check('/modern-assets/' not in html, "root site must not depend on the legacy modern-assets path")
     check((ASSETS / "index.js").is_file(), "root entry chunk missing")
     entry = (ASSETS / "index.js").read_text(encoding="utf-8")
+    for filename in ("reader-word-panel.jpg", "workspace-current.jpg", "learning-insights.png"):
+        image = ROOT / "frontend" / "public" / "product" / filename
+        version = sha256(image.read_bytes()).hexdigest()[:12]
+        check(f"/product/{filename}?v={version}" in entry, f"homepage screenshot URL must change with its content: {filename}")
     imports = re.findall(r"(?:from|import\()\s*['\"]([^'\"]+\.js)['\"]", entry)
     check(imports, "modern entry has no vendor chunk imports")
     for relative in imports:
@@ -71,6 +77,8 @@ def main() -> int:
     check("membership.subscription.endsAt" in MEMBERSHIP_PAGE.read_text(encoding="utf-8") and "queuedSubscriptions" not in MEMBERSHIP_PAGE.read_text(encoding="utf-8"), "membership page must show the current expiry without presenting renewal schedules")
     check("不是看过" in entry and "固定期限" in entry and "289614546" in entry, "public product or compliance copy missing")
     check("/api/workspace/books/" in entry and "confirmTitle" in entry, "private book lifecycle integration missing")
+    library_page = LIBRARY_PAGE.read_text(encoding="utf-8")
+    check("postJson('/api/workspace/imports/delete-invalid', {})" in library_page, "invalid import task deletion must use the workspace POST endpoint")
     reader_page = READER_PAGE.read_text(encoding="utf-8")
     modern_styles = MODERN_STYLES.read_text(encoding="utf-8")
     check("阅读推进方式" in entry and "当前行轮播" in entry and "整屏阅读" in entry, "reader flow preference controls missing")
