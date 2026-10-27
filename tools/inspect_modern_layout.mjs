@@ -6,7 +6,7 @@ import { join } from 'node:path'
 const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const profile = await mkdtemp(join(tmpdir(), 'shiyue-layout-'))
 const port = 9333
-const child = spawn(chrome, ['--headless', '--disable-gpu', '--no-sandbox', '--force-device-scale-factor=1', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--window-size=390,844', process.argv[2] || 'http://127.0.0.1:5173/modern-assets/'], { stdio: 'ignore' })
+const child = spawn(chrome, ['--headless', '--disable-gpu', '--no-sandbox', '--force-device-scale-factor=1', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--window-size=390,844', process.argv[2] || 'http://127.0.0.1:4173/'], { stdio: 'ignore' })
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 try {
   let page

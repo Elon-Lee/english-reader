@@ -5,8 +5,10 @@ to the private SaaS API listener. It keeps the Python business server off the
 public interface while avoiding a second runtime dependency such as nginx.
 """
 import http.client
+import ipaddress
 import mimetypes
 import os
+import socket
 import ssl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,6 +18,28 @@ ROOT = Path(os.environ.get("FRONTEND_ROOT", "/app/site")).resolve()
 BACKEND = urlsplit(os.environ.get("SAAS_BACKEND_URL", "http://127.0.0.1:8790"))
 PORT = int(os.environ.get("FRONTEND_PORT", "5173"))
 PROXY_PREFIXES = ("/api/", "/books/")
+
+
+class TLSFrontendServer(ThreadingHTTPServer):
+    """Serve TLS publicly while retaining a local HTTP tunnel origin."""
+
+    def __init__(self, address, handler, context):
+        self.context = context
+        super().__init__(address, handler)
+
+    def get_request(self):
+        connection, address = super().get_request()
+        try:
+            connection.settimeout(5)
+            if connection.recv(1, socket.MSG_PEEK) == b'\x16':
+                connection = self.context.wrap_socket(connection, server_side=True)
+            elif not ipaddress.ip_address(address[0]).is_loopback:
+                raise OSError('Plain HTTP is restricted to loopback tunnel origins')
+            connection.settimeout(None)
+            return connection, address
+        except Exception:
+            connection.close()
+            raise
 
 
 class FrontendHandler(BaseHTTPRequestHandler):
@@ -92,12 +116,14 @@ class FrontendHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    server = ThreadingHTTPServer((os.environ.get("FRONTEND_HOST", "0.0.0.0"), PORT), FrontendHandler)
+    address = (os.environ.get("FRONTEND_HOST", "0.0.0.0"), PORT)
     cert = os.environ.get("FRONTEND_TLS_CERT", "")
     key = os.environ.get("FRONTEND_TLS_KEY", "")
     if cert and key:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(cert, key)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+        server = TLSFrontendServer(address, FrontendHandler, context)
+    else:
+        server = ThreadingHTTPServer(address, FrontendHandler)
     print(f"SaaS frontend listening on 0.0.0.0:{PORT}, backend={BACKEND.geturl()}", flush=True)
     server.serve_forever()

@@ -1,6 +1,6 @@
 # 拾页 AI 共享上下文
 
-更新时间：2026-10-24（Asia/Shanghai）
+更新时间：2026-10-27（Asia/Shanghai）
 
 这是后续 AI 的最小全局上下文。只读取与当前任务相关的任务文档。
 
@@ -14,10 +14,12 @@
 - 媒体访问：SaaS 使用鉴权 `/api/media/{asset_id}` 和媒体变体。
 - 认证：数据库会话 Cookie + CSRF；未登录时 React 渲染登录页。
 - 长任务：导入和部署使用任务 API + 前端轮询，不依赖 WebSocket。
-- 当前服务：后台 `127.0.0.1:8790`；Vite `127.0.0.1:5173`。
-- 京东云生产：`117.72.209.44:8765`，Docker 运行 `shiyue-saas`、PostgreSQL 16 和 Redis 7；PostgreSQL/Redis 只监听远程回环地址。
+- 本地服务：后台 `127.0.0.1:8790`；Vite `http://127.0.0.1:4173`（2026-10-27 从 5173 改为 4173，启用 strictPort；`npm run dev:modern` 启动）。
+- 京东云生产：公网前台 `https://117.72.209.44:5173`，域名 `https://10ye.cc`；后台仅 `127.0.0.1:8790`。Docker 运行 `shiyue-saas`、前台、PostgreSQL 16 和 Redis 7；PostgreSQL/Redis 只监听远程回环地址。IP 直连需信任自建根证书，详见 platform-operations。
 
 ## 全局完成状态
+
+- 2026-10-27 本地前端端口改为 4173 并已启动，后台 8790；京东云程序升级任务 #26157 完成，生产版本 `code-20261027-151445-6f1c16a2`，公网 HTTPS 5173、Cloudflare 域名及数据库/Redis 健康通过。保留现有用户数据；IP 直连需安装并信任根证书。详见 `tasks/platform-operations/HANDOFF.md`。
 
 - 2026-10-26 首页截图按用户顺序更新第 1/2/4 图：查词浮窗、固定阅读工具、生词复习（采用用户补发的绿色主题图）。截图压缩为 WebP 并遮住个人邮箱；互动演示更换 correct/language，复用当前阅读器查词卡，区分悬停简义与点击语境释义。仅本地、未发布；详见 `tasks/frontend-design/HANDOFF.md`。
 
