@@ -84,7 +84,7 @@ class DeploymentHttpsTests(unittest.TestCase):
                     }
                     names = (*results, 'check_remote_saas_upgrade_target', 'prepare_remote_saas_release',
                              'backup_remote_saas_database', 'ensure_remote_saas_config',
-                             'ensure_remote_docker', 'ensure_remote_runtime', 'ensure_remote_saas_services')
+                             'ensure_remote_docker', 'ensure_remote_runtime', 'ensure_remote_saas_services', 'ensure_remote_captcha')
                     mocks = {}
                     for name in names:
                         def invoke(*args, _name=name, **kwargs):

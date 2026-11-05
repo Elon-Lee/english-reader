@@ -1,0 +1,44 @@
+.auth-captcha-dialog {
+  position: fixed;
+  inset: 0;
+  width: 318px;
+  height: 318px;
+  margin: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  overflow: visible;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 24px);
+}
+
+.auth-captcha-dialog::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+
+.auth-captcha-dialog #auth-rotation-captcha,
+.auth-captcha-dialog #tianai-captcha-parent {
+  width: 318px;
+  height: 318px;
+}
+
+.auth-captcha-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px;
+  border-radius: 8px;
+  background: #fff;
+  text-align: center;
+}
+
+.auth-captcha-loading {
+  width: 180px;
+  height: 72px;
+}

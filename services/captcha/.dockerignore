@@ -1,0 +1,4 @@
+*
+!target/
+target/*
+!target/shiyue-captcha-1.0.0.jar

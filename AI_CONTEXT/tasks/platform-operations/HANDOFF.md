@@ -9,6 +9,14 @@
 
 ## 当前实现（2026-11-05 核实）
 
+### 2026-11-05 验证码与 DirectMail 已发布
+
+- 用户授权程序升级及图片恢复任务 #3 complete，当前版本 `code-20261105-173117-956a2f49`；远程数据库备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261105-173117-956a2f49.dump`，保留线上数据。
+- 新增 `shiyue-captcha` Java 内部服务（回环 18080，候选 18081），独立权限 0600 的 `shared/config/captcha.env`；非 root、只读根目录、512 MiB、pids 128。安装/升级自动构建与探测，卸载/重装清理容器和镜像。
+- CLI 新增 `--identity-file` 与可选 `--smtp-config`，配置仅白名单合并；不再执行环境文件，保留字面值与原密钥。
+- 生产验证码已开启，DirectMail 已加载且测试邮件 SMTP 接受。服务器侧标准 HTTPS、原公网 5173 和 Cloudflare 回源/公网 API 均正常；本机公网域名 80/443 出现 JDTP403/超时，待核实外部网络或云侧限制。详见 `../auth-captcha/HANDOFF.md`。
+- 修复版单层居中弹窗、SDK 坐标归一化已发布；按用户最新反馈恢复原动物图片。Cloudflare 公网入口真实 Chrome 旋转校验成功并提交找回密码200（不存在的测试邮箱）。
+
 ### 2026-11-05 标准 HTTPS 入口已上线
 
 - 用户确认现用域名为 `rynenglish.com`，解析到京东云 `117.72.209.44`。已按用户确认实施 Docker Nginx + Certbot，仅调整入口和后台 `APP_BASE_URL`，现有程序版本仍为 `code-20261027-151445-6f1c16a2`，应用镜像 SHA 未变；数据库、Redis、媒体及 Cloudflare Tunnel 保留。

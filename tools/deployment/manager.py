@@ -5,6 +5,7 @@ from datetime import datetime,timedelta
 from pathlib import Path
 from urllib.parse import unquote
 from .https_entry import entry_paths, frontend_url, install_script, normalize_domain
+from .captcha import build_assets as build_captcha_assets, install_script as captcha_install_script
 
 ROOT=Path(__file__).resolve().parents[2]
 DB=ROOT/".local/library.sqlite3"
@@ -116,8 +117,9 @@ class Job:
 class Remote:
     def __init__(self,target,job):
         self.t=target;self.job=job
-        self.explicit_identity=bool(target.get("identity_file"))
-        self.key=Path(target["identity_file"]).expanduser() if self.explicit_identity else KEYS/f"target-{target['id']}-ed25519"
+        identity=target.get("identity_file") or os.environ.get("SHIYUE_DEPLOY_IDENTITY_FILE","")
+        self.explicit_identity=bool(identity)
+        self.key=Path(identity).expanduser() if self.explicit_identity else KEYS/f"target-{target['id']}-ed25519"
         if self.explicit_identity and not self.key.is_file():raise ValueError("SSH 私钥文件不存在")
         self.password="" if self.explicit_identity else load_password(target)
         STATE.mkdir(parents=True,exist_ok=True);KEYS.mkdir(parents=True,exist_ok=True);KNOWN_HOSTS.touch(exist_ok=True)
@@ -254,15 +256,17 @@ def release_metadata(release):
     return {"releaseId":release,"gitCommit":commit,"sourceDirty":dirty,"builtAt":now(),"packageFormat":2}
 
 def code_files():
-    files=[ROOT/"reader",ROOT/"deployment",ROOT/"requirements-saas.txt",ROOT/"start-reader.sh",ROOT/"start-reader-https.sh"]
+    files=[ROOT/"reader",ROOT/"deployment",ROOT/"requirements-saas.txt",ROOT/"start-reader.sh",ROOT/"start-reader-https.sh",ROOT/"services/captcha"]
     files += list((ROOT/"tools").glob("*.py"))+[ROOT/"tools/deployment",ROOT/"tools/saas_migrations",ROOT/"tools/vendor/ECDICT/lemma.en.txt"]
     return files
 def build_code_package(job,release):
     metadata=release_metadata(release)
     build_frontend_assets(job)
+    build_captcha_assets(job,ROOT)
     target=STATE/f"{release}.tar.gz";STATE.mkdir(parents=True,exist_ok=True)
     def archive_filter(info):
         if "__pycache__" in info.name or info.name.endswith((".pyc",".pyo",".DS_Store")):return None
+        if info.name.startswith("services/captcha/target/") and info.name!="services/captcha/target/shiyue-captcha-1.0.0.jar":return None
         if info.name=="reader/modern.html" or info.name=="reader/modern-assets" or info.name.startswith("reader/modern-assets/"):return None
         return info
     with tarfile.open(target,"w:gz") as archive:
@@ -690,7 +694,7 @@ def backup_remote_saas_database(job,remote,target,release):
     root=target["remote_root"];backup=f"{root}/backups/saas/pre-upgrade-{release}.dump"
     script=f"""set -euo pipefail
 umask 077
-set -a; . {shlex.quote(root)}/shared/config/saas.env; set +a
+{saas_shell_environment(root)}
 docker exec shiyue-postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > {shlex.quote(backup)}
 test -s {shlex.quote(backup)}
 chmod 600 {shlex.quote(backup)}
@@ -718,6 +722,19 @@ echo SHIYUE_SAAS_UPGRADE_READY
 """)
     if "SHIYUE_SAAS_UPGRADE_READY" not in output:raise ValueError("远程 SaaS 服务未通过升级前检查")
 
+def saas_shell_environment(root):
+    # Docker env files are literal data, not shell programs. Only read the four
+    # service credentials needed by deployment, preserving spaces and '$'.
+    code="import os; print('\\n'.join(key+'='+os.environ[key] for key in ('POSTGRES_DB','POSTGRES_USER','POSTGRES_PASSWORD','REDIS_PASSWORD')))"
+    return f"""config_reader={shlex.quote(SAAS_IMAGE)}
+docker image inspect "$config_reader" >/dev/null 2>&1 || config_reader={shlex.quote(RUNTIME_IMAGE)}
+unset POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD REDIS_PASSWORD
+while IFS='=' read -r config_key config_value; do
+  case "$config_key" in POSTGRES_DB|POSTGRES_USER|POSTGRES_PASSWORD|REDIS_PASSWORD) export "$config_key=$config_value" ;; esac
+done < <(docker run --rm --network none --env-file {shlex.quote(root+'/shared/config/saas.env')} "$config_reader" python3 -c {shlex.quote(code)})
+: "${{POSTGRES_DB:?Missing PostgreSQL database}}" "${{POSTGRES_USER:?Missing PostgreSQL user}}" "${{POSTGRES_PASSWORD:?Missing PostgreSQL password}}" "${{REDIS_PASSWORD:?Missing Redis password}}"
+"""
+
 def ensure_remote_saas_services(job,remote,target,release):
     root=target["remote_root"];release_path=f"{root}/releases/{release}";env=f"{root}/shared/config/saas.env"
     job.update(50,"安装并启动 PostgreSQL 与 Redis")
@@ -737,7 +754,7 @@ pull_official_image() {{
 }}
 pull_official_image {POSTGRES_IMAGE} m.daocloud.io/docker.io/library/{POSTGRES_IMAGE}
 pull_official_image {REDIS_IMAGE} m.daocloud.io/docker.io/library/{REDIS_IMAGE}
-set -a; . {shlex.quote(env)}; set +a
+{saas_shell_environment(root)}
 if docker container inspect shiyue-postgres >/dev/null 2>&1; then
   docker start shiyue-postgres >/dev/null 2>&1 || true
   sleep 2
@@ -768,13 +785,52 @@ docker exec shiyue-redis redis-cli -a "$REDIS_PASSWORD" ping 2>/dev/null | grep 
     job.update(57,"构建 SaaS 运行镜像")
     remote.ssh(f"set -e; docker build -f {shlex.quote(release_path)}/deployment/docker/Dockerfile.saas -t {shlex.quote(SAAS_IMAGE)} {shlex.quote(release_path)}; docker image inspect {shlex.quote(SAAS_IMAGE)} >/dev/null")
 
+def ensure_remote_captcha(job,remote,target,release):
+    job.write("安装内网旋转验证码服务")
+    output=remote.ssh(captcha_install_script(target,release,SAAS_IMAGE))
+    if "SHIYUE_CAPTCHA_READY" not in output:raise ValueError("验证码服务未通过健康检查")
+
+def sync_remote_smtp_config(job,remote,target):
+    source=os.environ.get("SHIYUE_DEPLOY_SMTP_CONFIG","")
+    if not source:return
+    path=Path(source).expanduser()
+    if not path.is_file() or path.stat().st_mode&0o077:raise ValueError("SMTP 配置必须是仅当前用户可读的文件（0600）")
+    allowed={"SMTP_HOST","SMTP_PORT","SMTP_USER","SMTP_PASSWORD","SMTP_FROM","SMTP_FROM_NAME"}
+    values={}
+    for line in path.read_text().splitlines():
+        if line and not line.startswith("#"):
+            key,separator,value=line.partition("=")
+            if not separator or key not in allowed:raise ValueError("SMTP 配置包含无效字段")
+            values[key]=value
+    if any(not values.get(key) for key in allowed-{"SMTP_FROM_NAME"}):raise ValueError("SMTP 配置缺少必需参数")
+    if values["SMTP_PORT"] not in {"465","587"}:raise ValueError("远程 SMTP 必须使用 465 SSL 或 587 STARTTLS")
+    temporary=f"/tmp/shiyue-smtp-{secrets.token_hex(12)}.env"
+    root=shlex.quote(target["remote_root"])
+    code="""from pathlib import Path
+import os
+incoming=Path('/smtp.env').read_text().splitlines()
+keys={line.split('=',1)[0] for line in incoming}
+path=Path('/config/saas.env')
+lines=[line for line in path.read_text().splitlines() if line.split('=',1)[0] not in keys]
+temporary=path.with_suffix('.smtp-tmp')
+fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+with os.fdopen(fd,'w') as stream:stream.write('\\n'.join(lines+incoming)+'\\n')
+os.replace(temporary,path)
+os.chmod(path,0o600)
+"""
+    try:
+        remote.scp(path,temporary)
+        remote.ssh(f"set -e; docker run --rm --network none -v {root}/shared/config:/config:rw,z -v {shlex.quote(temporary)}:/smtp.env:ro,z {shlex.quote(SAAS_IMAGE)} python3 -c {shlex.quote(code)}")
+    finally:remote.ssh(f"rm -f {shlex.quote(temporary)}")
+    job.write("SMTP 配置已安全合并，未输出凭据；新容器启动时生效")
+
 def restore_remote_saas_database(job,remote,target,dump,digest):
     root=target["remote_root"];remote_dump=f"/tmp/{dump.name}";job.update(63,"上传并初始化 SaaS PostgreSQL 数据")
     remote.scp(dump,remote_dump)
     script=f"""set -euo pipefail
 actual=$(sha256sum {shlex.quote(remote_dump)} | awk '{{print $1}}')
 [ "$actual" = "{digest}" ] || {{ echo '数据库快照 SHA-256 校验失败' >&2; exit 3; }}
-set -a; . {shlex.quote(root)}/shared/config/saas.env; set +a
+{saas_shell_environment(root)}
 existing=$(docker exec shiyue-postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atqc "SELECT COALESCE(to_regclass('public.schema_migrations')::text,'')")
 if [ -z "$existing" ]; then
   docker cp {shlex.quote(remote_dump)} shiyue-postgres:/tmp/shiyue-initial.dump
@@ -800,7 +856,7 @@ DELETE FROM content_books WHERE id NOT IN (SELECT source_content_book_id FROM sh
 UPDATE catalog_books SET publication_status='draft',reviewed_by=NULL,published_at=NULL,updated_at=NOW();
 COMMIT;"""
     job.update(67,"移除首次快照中的非公开书籍数据")
-    command=f"set -e; set -a; . {shlex.quote(root)}/shared/config/saas.env; set +a; docker exec shiyue-postgres psql -v ON_ERROR_STOP=1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -c {shlex.quote(sql)}"
+    command=f"set -e\n{saas_shell_environment(root)}\ndocker exec shiyue-postgres psql -v ON_ERROR_STOP=1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -c {shlex.quote(sql)}"
     remote.ssh(command);job.write("远程初始数据库仅保留已登记书目及关联内容，统一设为未审核；需在线上运营后台审核后发布。账号、订阅和平台配置已保留")
 
 def local_dioco_config():
@@ -1112,6 +1168,8 @@ def start_saas_upgrade(target_id):
         job.update(64,"准备 5173 HTTPS 证书与入口配置")
         certificate=ensure_remote_tls(job,remote,target)
         ensure_remote_saas_config(job,remote,target)
+        sync_remote_smtp_config(job,remote,target)
+        ensure_remote_captcha(job,remote,target,release)
         job.update(70,"启动候选版本并执行 SaaS 健康检查")
         activation=activate_saas_release(job,remote,target,release)
         ensure_remote_https_entry(job,remote,target)
@@ -1144,7 +1202,7 @@ umask 077
 backup={shlex.quote(backup)}
 mkdir -p "$(dirname "$backup")"
 chmod 700 "$(dirname "$backup")"
-set -a; . {root}/shared/config/saas.env; set +a
+{saas_shell_environment(target['remote_root'])}
 docker exec shiyue-postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > "$backup"
 test -s "$backup"
 chmod 600 "$backup"
@@ -1155,10 +1213,10 @@ sha256sum "$backup" | awk '{{print "SHIYUE_REDEPLOY_BACKUP_READY " $1}}'
     job.write(f"远程数据库备份已保存到节点目录之外：{backup}")
     job.update(34,"卸载远程拾页服务")
     uninstall_script=f"""set -euo pipefail
-docker rm -f shiyue-saas shiyue-saas-frontend shiyue-postgres shiyue-redis shiyue-reader >/dev/null 2>&1 || true
+docker rm -f shiyue-saas shiyue-saas-frontend shiyue-postgres shiyue-redis shiyue-reader shiyue-captcha shiyue-captcha-candidate shiyue-captcha-previous >/dev/null 2>&1 || true
 rm -rf -- {root}
 docker images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' 2>/dev/null | while read image; do
-  case "$image" in shiyue-saas:*|shiyue-reader:*|shiyue-reader-runtime:*) docker image rm "$image" >/dev/null 2>&1 || true ;; esac
+  case "$image" in shiyue-saas:*|shiyue-captcha:*|shiyue-reader:*|shiyue-reader-runtime:*) docker image rm "$image" >/dev/null 2>&1 || true ;; esac
 done
 test ! -e {root}
 echo SHIYUE_UNINSTALLED
@@ -1185,7 +1243,8 @@ def start_saas_deploy(target_id,reinstall=False):
             output=remote.ssh(f"test -f {shlex.quote(remote_model)} && sha256sum {shlex.quote(remote_model)} | cut -d' ' -f1 || true").strip().splitlines();remote_hash=output[-1] if output else ""
             if remote_hash!=local_hash:job.update(45,"上传 SaaS 录音模型");remote.scp(model,remote_model)
         certificate=ensure_remote_tls(job,remote,target)
-        ensure_remote_saas_services(job,remote,target,release);restored=restore_remote_saas_database(job,remote,target,dump,dump_digest)
+        ensure_remote_saas_services(job,remote,target,release);sync_remote_smtp_config(job,remote,target);ensure_remote_captcha(job,remote,target,release)
+        restored=restore_remote_saas_database(job,remote,target,dump,dump_digest)
         if restored:prune_initial_database_to_published_content(job,remote,target)
         public=sync_saas_public_content(job,remote,target,f"{target['remote_root']}/releases/{release}",{"scan":70,"prepare":73,"package":76,"upload":79,"apply":82,"database":85,"merge":88},False)
         activation=activate_saas_release(job,remote,target,release)
@@ -1273,12 +1332,12 @@ def start_uninstall(target_id,confirmation):
         quoted=shlex.quote(root)
         script=f"""set -e
 if command -v systemctl >/dev/null 2>&1; then systemctl disable --now shiyue-reader >/dev/null 2>&1 || true; fi
-docker rm -f shiyue-saas shiyue-saas-frontend >/dev/null 2>&1 || true
+docker rm -f shiyue-saas shiyue-saas-frontend shiyue-captcha shiyue-captcha-candidate shiyue-captcha-previous >/dev/null 2>&1 || true
 docker rm -f shiyue-reader >/dev/null 2>&1 || true
 if [ -d {quoted} ]; then rm -rf -- {quoted}; fi
 docker images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' 2>/dev/null | while read image; do
   case "$image" in
-    shiyue-saas:*|shiyue-reader:*|shiyue-reader-runtime:*) docker image rm "$image" >/dev/null 2>&1 || true ;;
+    shiyue-saas:*|shiyue-captcha:*|shiyue-reader:*|shiyue-reader-runtime:*) docker image rm "$image" >/dev/null 2>&1 || true ;;
   esac
 done
 test ! -e {quoted}

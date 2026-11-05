@@ -1,0 +1,31 @@
+server:
+  address: 127.0.0.1
+  port: 18080
+  error:
+    include-message: never
+    include-stacktrace: never
+  tomcat:
+    max-swallow-size: 64KB
+    connection-timeout: 10s
+    threads:
+      max: 8
+      min-spare: 1
+    max-connections: 32
+    accept-count: 16
+spring:
+  main:
+    banner-mode: off
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+captcha:
+  init-default-resource: true
+  local-cache-enabled: false
+  expire:
+    default: 120000
+    ROTATE: 120000
+  secondary:
+    enabled: false
+shiyue:
+  captcha:
+    secret: ${SHIYUE_CAPTCHA_SECRET:}

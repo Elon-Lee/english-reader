@@ -12,9 +12,11 @@
 | 容器引擎 | Docker 26.1.4 |
 | 服务管理 | Docker 容器 + 宿主机 systemd 219 |
 | 应用安装目录 | `/srv/shiyue/` |
-| 当前代码版本 | `code-20261027-151445-6f1c16a2` |
+| 当前代码版本 | `code-20261105-173117-956a2f49` |
 
-2026-11-05 的变更只增加标准 HTTPS 入口并更新 `APP_BASE_URL=https://rynenglish.com`，保留原业务版本、数据库、媒体、5173 入口及 Cloudflare Tunnel。
+2026-11-05 已增加标准 HTTPS 入口，随后发布旋转验证码开关与 DirectMail 发信；保留数据库、媒体、5173 入口及 Cloudflare Tunnel。生产验证码已开启，运营后台 → 认证安全可切换。
+
+服务器侧标准域名访问正常；本机公网域名 80/443 核验出现 JDTP403/超时，外部访问原因待确认。原公网 5173 与 Cloudflare 公网 API 返回 200，不能仅凭服务器自访问判断公网 80/443 已通过验收。
 
 ## 访问链路
 
@@ -30,6 +32,8 @@ flowchart TD
     H --> I[PostgreSQL :5432]
     H --> J[Redis :6379]
     H --> K[持久化媒体与文件]
+    H --> L[天爱旋转验证码<br/>127.0.0.1:18080]
+    H --> M[阿里云 DirectMail<br/>smtpdm.aliyun.com:465 TLS]
 ```
 
 - 公网 80 普通请求以 308 跳转到 `https://rynenglish.com`，保留路径和查询参数；通过公网 IP 访问 HTTP 也跳转到该域名。
@@ -49,9 +53,10 @@ flowchart TD
 | `shiyue-saas` | `127.0.0.1:8790` | Python 业务 API，处理认证、阅读、导入、运营等功能 |
 | `shiyue-postgres` | `127.0.0.1:5432` | PostgreSQL 16，保存业务数据 |
 | `shiyue-redis` | `127.0.0.1:6379` | Redis 7，提供缓存等能力 |
+| `shiyue-captcha` | `127.0.0.1:18080` | Java 天爱 ROTATE 生成/轨迹校验，内部密钥鉴权 |
 | `cloudflared.service` | 回源本机 5173 | 宿主机 systemd 服务，运行 Cloudflare Tunnel |
 
-Nginx、前台、后台容器使用 host 网络；PostgreSQL、Redis 使用 bridge 网络并将端口绑定到宿主机回环地址。前台 5173 是生产入口服务，不是本地开发用的 Vite；本地 Vite 端口为 4173。
+Nginx、前台、后台和验证码容器使用 host 网络；PostgreSQL、Redis 使用 bridge 网络并将端口绑定到宿主机回环地址。验证码服务强制绑定回环，仅部署候选阶段临时使用 18081；以非 root、只读根目录、512 MiB 内存和 pids 128 限制运行。前台 5173 是生产入口服务，不是本地开发用的 Vite；本地 Vite 端口为 4173。
 
 Nginx 镜像为 `nginx:1.28-alpine`，核实时版本为 1.28.3。Certbot 使用 `certbot/certbot:v5.4.0`，由安装或续期脚本按需运行。
 
@@ -63,7 +68,9 @@ Nginx 镜像为 `nginx:1.28-alpine`，核实时版本为 1.28.3。Certbot 使用
 | `/srv/shiyue/releases/` | 各次发布的代码目录 |
 | `/srv/shiyue/current/reader/site/` | React 前端构建文件 |
 | `/srv/shiyue/current/tools/` | Python 后端、前台服务及工具代码 |
+| `/srv/shiyue/current/services/captcha/` | 天爱 Java 源码、Dockerfile 与发布 JAR |
 | `/srv/shiyue/shared/config/saas.env` | 后端环境配置，包含数据库连接、应用地址及密钥等敏感配置 |
+| `/srv/shiyue/shared/config/captcha.env` | 仅验证码内部共享密钥，权限 0600；saas.env 同为 0600 |
 | `/srv/shiyue/shared/config/redis.conf` | Redis 配置 |
 | `/srv/shiyue/shared/config/https-entry.json` | 标准 HTTPS 入口配置清单 |
 | `/srv/shiyue/shared/config/dioco.local.json` | 词典相关配置 |
@@ -81,10 +88,12 @@ Nginx 镜像为 `nginx:1.28-alpine`，核实时版本为 1.28.3。Certbot 使用
 核实时，`current` 指向：
 
 ```text
-/srv/shiyue/releases/code-20261027-151445-6f1c16a2
+/srv/shiyue/releases/code-20261105-173117-956a2f49
 ```
 
 代码目录和共享数据目录分离。后台挂载当前版本的 `reader/`、`tools/`，以及共享数据、缓存、书籍、模型和备份目录；前台挂载 `reader/site/`、`tools/` 和原 5173 证书目录。
+
+验证码开关存于 PostgreSQL `platform_settings` 的 `auth.captcha`，不写入前端或环境开关；Redis 保存短期绑定与一次性业务票据。SMTP 参数只存 `saas.env`，杭州 DirectMail 使用 `smtpdm.aliyun.com:465`、发件地址 `noreply@rynenglish.com`、显示名 `RynEnglish`；秘密不在本文记录。发信走出站 TLS，不新增邮件服务器或入站邮件端口。
 
 ## 标准 HTTPS 配置与证书
 
@@ -187,6 +196,7 @@ journalctl -u cloudflared -n 100 --no-pager
 | 仓库文件 | 职责 |
 |---|---|
 | `tools/deployment/https_entry.py` | 生成标准入口、证书安装、自动续期和回滚逻辑 |
+| `tools/deployment/captcha.py` | 构建/安装 Java 验证码服务、内部密钥、候选健康检查与切换 |
 | `tools/deployment/manager.py` | 安装、升级、候选版本和部署任务管理 |
 | `tools/deploy_remote.py` | 命令行部署入口 |
 | `tools/saas_frontend_server.py` | 前台静态页面服务和 API 代理 |

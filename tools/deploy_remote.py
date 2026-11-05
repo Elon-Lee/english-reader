@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build and deploy a release through the configured deployment target."""
-import argparse,json,sys,time
+import argparse,json,os,sys,time
 
 from deployment import manager
 
@@ -60,7 +60,8 @@ def main():
     mode.add_argument("--https-entry",action="store_true",help="仅安装/更新标准 HTTPS 入口及域名，不发布业务代码或替换数据库")
     parser.add_argument("--domain",help="标准 HTTPS 域名，例如 rynenglish.com（不带协议或路径）")
     parser.add_argument("--host",help="仅入口模式的 SSH 地址，可替代 --target")
-    parser.add_argument("--identity-file",help="仅入口模式使用的现有 SSH 私钥文件；使用已验证的默认 known_hosts")
+    parser.add_argument("--identity-file",help="现有 SSH 私钥文件；使用已验证的默认 known_hosts")
+    parser.add_argument("--smtp-config",help="可选的 0600 SMTP 配置文件，安全合并到远端 saas.env")
     parser.add_argument("--ssh-user",default="root",help="仅入口模式的 SSH 用户")
     parser.add_argument("--ssh-port",type=int,default=22,help="仅入口模式的 SSH 端口")
     parser.add_argument("--remote-root",default="/srv/shiyue",help="仅入口模式的现有安装目录")
@@ -91,8 +92,10 @@ def main():
                        (target["public_domain"],manager.now(),target["id"]))
             db.commit();db.close()
         print(json.dumps(result,ensure_ascii=False,indent=2));return
-    if args.host or args.identity_file or args.domain or args.acme_email:
-        parser.error("--host/--identity-file/--domain/--acme-email 仅用于 --https-entry；部署域名请在节点设置保存")
+    if args.host or args.domain or args.acme_email:
+        parser.error("--host/--domain/--acme-email 仅用于 --https-entry；部署域名请在节点设置保存")
+    if args.identity_file:os.environ["SHIYUE_DEPLOY_IDENTITY_FILE"]=args.identity_file
+    if args.smtp_config:os.environ["SHIYUE_DEPLOY_SMTP_CONFIG"]=args.smtp_config
     if not args.target:parser.error("部署时必须提供 --target")
     target=resolve_target(args.target)
     action="SaaS 根站完整部署" if args.saas else "公共资源增量同步" if args.sync_public else "完整部署" if args.full else "SaaS 程序升级"

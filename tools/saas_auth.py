@@ -16,11 +16,13 @@ import os
 import re
 import secrets
 import smtplib
+import ssl
 import sqlite3
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
+from email.utils import formataddr
 from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import quote
@@ -700,17 +702,21 @@ class SaaSService:
         try:
             port = int(self.environment.get("SMTP_PORT", "587"))
             message = EmailMessage()
-            message["From"], message["To"], message["Subject"] = sender, recipient, subject
+            message["From"] = formataddr((self.environment.get("SMTP_FROM_NAME", "").strip(), sender))
+            message["To"], message["Subject"] = recipient, subject
             message.set_content(text)
-            with smtplib.SMTP(host, port, timeout=15) as client:
+            context = ssl.create_default_context()
+            transport = smtplib.SMTP_SSL if port == 465 else smtplib.SMTP
+            options = {"context": context} if port == 465 else {}
+            with transport(host, port, timeout=15, **options) as client:
                 client.ehlo()
                 if port in {25, 587}:
-                    client.starttls()
+                    client.starttls(context=context)
                     client.ehlo()
                 username = self.environment.get("SMTP_USER", "")
                 if username:
                     client.login(username, self.environment.get("SMTP_PASSWORD", ""))
-                client.send_message(message)
+                client.send_message(message, from_addr=sender, to_addrs=[recipient])
             return True
         except (OSError, ValueError, smtplib.SMTPException):
             return False

@@ -6,9 +6,11 @@ import gzip
 import hashlib
 import hmac
 import io
+import ipaddress
 import mimetypes
 import os
 import re
+import secrets
 import signal
 import shutil
 import socket
@@ -46,6 +48,7 @@ from saas_imports import WorkspaceImportService
 from saas_ai import WorkspaceAIService
 from saas_billing import PaddleBillingService
 from saas_cache import SaaSCache
+from saas_captcha import CaptchaService
 from saas_commerce import CommerceService
 from saas_redemptions import RedemptionService
 from saas_payments import AlipayService
@@ -100,11 +103,13 @@ PAYMENTS=AlipayService(SAAS,MEMBERSHIPS)
 COMMERCE=CommerceService(SAAS,PAYMENTS)
 REDEMPTIONS=RedemptionService(SAAS,MEMBERSHIPS)
 CACHE_SERVICE=SaaSCache()
+CAPTCHA=CaptchaService(SAAS,CACHE_SERVICE.client)
 RATE_LIMIT_LOCK=threading.Lock()
 RATE_LIMIT_BUCKETS=defaultdict(deque)
 RATE_LIMIT_RULES={
     "/api/auth/login":(10,300),"/api/auth/register":(8,3600),"/api/auth/forgot-password":(5,3600),
     "/api/auth/login/replace-device":(10,300),
+    "/api/auth/captcha/gen":(40,300),"/api/auth/captcha/check":(40,300),
     "/api/auth/reset-password":(8,3600),"/api/checkins":(30,3600),"/api/word-context":(60,3600),"/api/sentence-grammar":(60,3600),
     "/api/word-hover":(300,3600),"/api/word-dictionary":(120,3600),"/api/membership/redeem":(10,300),
 }
@@ -223,7 +228,7 @@ class Handler(SimpleHTTPRequestHandler):
     def rate_limit(self,path):
         rule=RATE_LIMIT_RULES.get(path)
         if not rule:return True
-        maximum,window=rule;now_time=time.monotonic();key=(path,self.client_address[0])
+        maximum,window=rule;now_time=time.monotonic();key=(path,self.auth_client_ip())
         with RATE_LIMIT_LOCK:
             bucket=RATE_LIMIT_BUCKETS[key]
             while bucket and bucket[0]<=now_time-window:bucket.popleft()
@@ -232,6 +237,26 @@ class Handler(SimpleHTTPRequestHandler):
                 self.reply({"code":"rate_limited","error":"请求过于频繁，请稍后重试。","retryAfter":retry},429,extra_headers=(("Retry-After",str(retry)),));return False
             bucket.append(now_time)
         return True
+
+    def auth_client_ip(self):
+        peer=self.client_address[0]
+        if ipaddress.ip_address(peer).is_loopback:
+            try:return str(ipaddress.ip_address(self.headers.get("X-Shiyue-Client-IP",peer)))
+            except ValueError:pass
+        return peer
+
+    def captcha_same_origin(self):
+        if self.headers.get("Sec-Fetch-Site","")=="cross-site":
+            raise SaaSError("invalid_origin","请在当前网站完成验证。",403)
+        origin=self.headers.get("Origin","")
+        if not origin:return
+        allowed={os.environ.get("APP_BASE_URL","").rstrip("/")}
+        host=self.headers.get("Host","")
+        if ipaddress.ip_address(self.client_address[0]).is_loopback:
+            host=self.headers.get("X-Shiyue-Original-Host",host)
+        allowed.update({"http://"+host,"https://"+host})
+        if origin not in allowed:
+            raise SaaSError("invalid_origin","请在当前网站完成验证。",403)
 
     def do_GET(self):
         route=urlsplit(self.path)
@@ -735,6 +760,10 @@ class Handler(SimpleHTTPRequestHandler):
     def auth_get(self,path):
         if not SAAS.enabled:
             self.reply({"code":"saas_disabled","error":"SaaS 账号功能尚未启用。"},404);return
+        if path=="/api/auth/config":
+            try:self.reply(CAPTCHA.config())
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            return
         if path=="/api/auth/me":
             if not self.require_saas_user():return
             headers=()
@@ -777,7 +806,22 @@ class Handler(SimpleHTTPRequestHandler):
             self.reply({"code":"saas_disabled","error":"SaaS 账号功能尚未启用。"},404);return
         try:item=self.json_body()
         except Exception:self.reply({"code":"invalid_payload","error":"请求数据无效。"},400);return
+        if not isinstance(item,dict):self.reply({"code":"invalid_payload","error":"请求数据无效。"},400);return
         try:
+            if path=="/api/auth/captcha/gen":
+                self.captcha_same_origin()
+                browser=self.cookie_value("shiyue_captcha")
+                if not re.fullmatch(r"[A-Za-z0-9_-]{40,100}",browser):browser=secrets.token_urlsafe(32)
+                context=CAPTCHA.prepare(item.get("scene"),item.get("email"),browser)["context"]
+                result=CAPTCHA.generate(context,browser)
+                secure="; Secure" if os.environ.get("APP_BASE_URL","").startswith("https://") else ""
+                self.reply(result,extra_headers=(("Set-Cookie",f"shiyue_captcha={browser}; Path=/api/auth/; Max-Age=600; HttpOnly; SameSite=Strict{secure}"),));return
+            if path=="/api/auth/captcha/check":
+                self.captcha_same_origin()
+                self.reply(CAPTCHA.check(item,self.cookie_value("shiyue_captcha")));return
+            scene={"/api/auth/register":"register","/api/auth/login":"login","/api/auth/login/replace-device":"login_replace","/api/auth/forgot-password":"forgot"}.get(path)
+            if scene:
+                CAPTCHA.require(scene,item.get("email"),item.get("captchaToken"),self.cookie_value("shiyue_captcha"))
             if path=="/api/auth/register":
                 result=SAAS.register(item.get("email"),item.get("password"),item.get("invitationCode",item.get("invitation_code")),item.get("displayName",""),self.client_address[0])
                 self.reply(result,201);return
@@ -927,6 +971,7 @@ class Handler(SimpleHTTPRequestHandler):
         if route.path=="/api/admin/platform-config" and not self.deployment_allowed():return
         try:
             path,query=route.path,parse_qs(route.query)
+            if path=="/api/admin/auth-config":self.reply(CAPTCHA.config());return
             if path=="/api/admin/dashboard":self.reply(ADMIN.dashboard());return
             if path=="/api/admin/journey-report":self.reply(JOURNEY.report((query.get("days")or[30])[0]));return
             if path=="/api/admin/users":self.reply(ADMIN.users((query.get("q")or[""])[0],(query.get("limit")or[100])[0]));return
@@ -961,6 +1006,8 @@ class Handler(SimpleHTTPRequestHandler):
         if not isinstance(item,dict):self.reply({"code":"invalid_payload","error":"请求数据无效。"},400);return
         try:
             actor_id=str(self._saas_session["id"])
+            if path=="/api/admin/auth-config":
+                self.reply(CAPTCHA.update_config(actor_id,item));return
             if path=="/api/admin/catalog/delete":
                 self.reply(CATALOG.delete_book(actor_id,str(item.get("sourceBookId","")).strip(),str(item.get("confirmTitle","")).strip()));return
             if path=="/api/admin/catalog/books":

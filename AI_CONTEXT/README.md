@@ -19,6 +19,8 @@
 
 ## 全局完成状态
 
+- 2026-11-05 京东云已发布验证码开关与 DirectMail，当前版本 `code-20261105-173117-956a2f49`：去掉重复窗口、视口居中、修复 SDK 页面坐标导致验证失败；按用户最新反馈恢复原动物示例图，移除难识别的书籍照片。生产旋转验证码已开启，覆盖登录/注册/找回密码/换设备；本地三流程和线上 Cloudflare 真实浏览器验证通过。SMTP 测试邮件已被接受，实际收件待用户确认。原 5173 和 Cloudflare 入口正常；本机公网域名 80/443 出现拦截/超时，外部访问待确认。详见 `tasks/auth-captcha/HANDOFF.md`。
+
 - 2026-11-05 京东云标准 HTTPS 入口已上线，域名改为 `rynenglish.com`：80 自动 308 到 443，Let's Encrypt 证书有效至 2027-02-03，自动续期 timer active、实际续期 dry-run/重载通过；公网跳转、严格 TLS、首页/API 验收通过。安装/升级脚本及节点域名设置已补齐；仅调整入口和后台基础 URL，保留业务版本与数据。详见 `tasks/platform-operations/HANDOFF.md`。
 
 - 2026-10-27 本地前端端口改为 4173 并已启动，后台 8790；京东云程序升级任务 #26157 完成，生产版本 `code-20261027-151445-6f1c16a2`，公网 HTTPS 5173、Cloudflare 域名及数据库/Redis 健康通过。保留现有用户数据；IP 直连需安装并信任根证书。详见 `tasks/platform-operations/HANDOFF.md`。
@@ -107,6 +109,7 @@
 | 生词复习、练习会话、学习结算与复访闭环 | `tasks/vocabulary-review/HANDOFF.md` |
 | 阅读器、媒体、字幕、快捷键、词典 | `tasks/reader/HANDOFF.md` |
 | 账号、会员、数据库、API、安全 | `tasks/backend-saas/HANDOFF.md` |
+| 认证验证码开关、天爱旋转验证、DirectMail 发信 | `tasks/auth-captcha/HANDOFF.md` |
 | 公开官网、商品版本、折扣、云猫寄售、套餐兑换 | `tasks/public-commerce/HANDOFF.md` |
 | 支付方式配置、支付宝订单/退款、兑换记录管理 | `tasks/payments/HANDOFF.md` |
 | 文件/YouTube 导入、任务进度、媒体处理 | `tasks/import-media/HANDOFF.md` |

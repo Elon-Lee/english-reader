@@ -52,6 +52,18 @@ class FrontendHandler(BaseHTTPRequestHandler):
             body = self.rfile.read(length)
         headers = {key: value for key, value in self.headers.items() if key.lower() not in {"host", "content-length", "connection"}}
         headers["Host"] = BACKEND.netloc
+        # Overwrite internal identity headers on every ingress, including direct TLS.
+        headers = {key: value for key, value in headers.items() if key.lower() not in {"x-shiyue-client-ip", "x-shiyue-original-host"}}
+        peer = self.client_address[0]
+        client_ip = peer
+        if ipaddress.ip_address(peer).is_loopback:
+            # Nginx appends its socket peer to XFF. Cloudflared sets CF-Connecting-IP.
+            forwarded = self.headers.get("X-Forwarded-For", "").split(",")[-1].strip()
+            candidate = forwarded or self.headers.get("CF-Connecting-IP", "")
+            try: client_ip = str(ipaddress.ip_address(candidate))
+            except ValueError: pass
+        headers["X-Shiyue-Client-IP"] = client_ip
+        headers["X-Shiyue-Original-Host"] = self.headers.get("Host", "")
         connection = http.client.HTTPConnection(BACKEND.hostname, BACKEND.port or 80, timeout=60)
         try:
             connection.request(self.command, self.path, body=body, headers=headers)
