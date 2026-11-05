@@ -132,6 +132,7 @@ def connect():
         """)
     target_columns={row[1] for row in db.execute("PRAGMA table_info(deployment_targets)")}
     if "use_https" not in target_columns:db.execute("ALTER TABLE deployment_targets ADD COLUMN use_https INTEGER NOT NULL DEFAULT 1")
+    if "public_domain" not in target_columns:db.execute("ALTER TABLE deployment_targets ADD COLUMN public_domain TEXT NOT NULL DEFAULT ''")
     deployment_job_columns={row[1] for row in db.execute("PRAGMA table_info(deployment_jobs)")}
     if "target_id" not in deployment_job_columns:db.execute("ALTER TABLE deployment_jobs ADD COLUMN target_id INTEGER")
     db.execute("UPDATE deployment_jobs SET target_id=1 WHERE target_id IS NULL AND EXISTS(SELECT 1 FROM deployment_targets WHERE id=1)")

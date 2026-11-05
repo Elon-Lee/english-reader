@@ -53,14 +53,46 @@ def main():
     parser.add_argument("--package-only",action="store_true",help="只构建发布包，不连接服务器")
     parser.add_argument("--target",help="部署节点 ID 或完整名称")
     mode=parser.add_mutually_exclusive_group()
-    mode.add_argument("--full",action="store_true",help="执行首次完整部署，启用 5173 HTTPS")
-    mode.add_argument("--upgrade",action="store_true",help="升级已有部署并启用 5173 HTTPS（默认，保留远端数据）")
-    mode.add_argument("--saas",action="store_true",help="完整部署根路径 SaaS、PostgreSQL、Redis 和公共资源，启用 5173 HTTPS")
+    mode.add_argument("--full",action="store_true",help="首次完整部署；已配置域名使用标准 80/443，否则兼容 5173 HTTPS")
+    mode.add_argument("--upgrade",action="store_true",help="升级已有部署并保留数据、标准 HTTPS 入口（默认）")
+    mode.add_argument("--saas",action="store_true",help="完整部署 SaaS、PostgreSQL、Redis 和公共资源；启用已配置的 HTTPS 入口")
     mode.add_argument("--sync-public",action="store_true",help="只增量同步 SaaS 公共书目与媒体")
+    mode.add_argument("--https-entry",action="store_true",help="仅安装/更新标准 HTTPS 入口及域名，不发布业务代码或替换数据库")
+    parser.add_argument("--domain",help="标准 HTTPS 域名，例如 rynenglish.com（不带协议或路径）")
+    parser.add_argument("--host",help="仅入口模式的 SSH 地址，可替代 --target")
+    parser.add_argument("--identity-file",help="仅入口模式使用的现有 SSH 私钥文件；使用已验证的默认 known_hosts")
+    parser.add_argument("--ssh-user",default="root",help="仅入口模式的 SSH 用户")
+    parser.add_argument("--ssh-port",type=int,default=22,help="仅入口模式的 SSH 端口")
+    parser.add_argument("--remote-root",default="/srv/shiyue",help="仅入口模式的现有安装目录")
+    parser.add_argument("--acme-email",help="可选的 ACME 账户联系邮箱；留空不注册邮箱")
     parser.add_argument("--timeout",type=int,default=1800,help="最长等待秒数，默认 1800")
     args=parser.parse_args()
     if args.package_only:
         package_only();return
+    if args.https_entry:
+        if args.host:
+            if args.target:parser.error("--host 和 --target 只能指定一个")
+            if not args.identity_file:parser.error("--host 模式必须提供 --identity-file")
+            if not 1<=args.ssh_port<=65535:parser.error("SSH 端口必须在 1–65535")
+            target={"id":0,"host":args.host,"username":args.ssh_user,"port":args.ssh_port,
+                    "remote_root":args.remote_root,"identity_file":args.identity_file}
+        else:
+            if not args.target:parser.error("仅入口模式必须提供 --target 或 --host")
+            target=dict(resolve_target(args.target))
+            if args.identity_file:target["identity_file"]=args.identity_file
+        target["public_domain"]=manager.normalize_domain(args.domain or target.get("public_domain",""))
+        if not target["public_domain"]:parser.error("仅入口模式必须提供 --domain 或在节点保存域名")
+        if args.acme_email:target["acme_email"]=args.acme_email
+        job=ConsoleJob()
+        result=manager.configure_existing_https_entry(job,manager.Remote(target,job),target)
+        if args.target:
+            db=manager.connect()
+            db.execute("UPDATE deployment_targets SET public_domain=?,use_https=1,updated_at=? WHERE id=?",
+                       (target["public_domain"],manager.now(),target["id"]))
+            db.commit();db.close()
+        print(json.dumps(result,ensure_ascii=False,indent=2));return
+    if args.host or args.identity_file or args.domain or args.acme_email:
+        parser.error("--host/--identity-file/--domain/--acme-email 仅用于 --https-entry；部署域名请在节点设置保存")
     if not args.target:parser.error("部署时必须提供 --target")
     target=resolve_target(args.target)
     action="SaaS 根站完整部署" if args.saas else "公共资源增量同步" if args.sync_public else "完整部署" if args.full else "SaaS 程序升级"

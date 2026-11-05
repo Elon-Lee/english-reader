@@ -1,6 +1,6 @@
 # 拾页 AI 共享上下文
 
-更新时间：2026-10-27（Asia/Shanghai）
+更新时间：2026-11-05（Asia/Shanghai）
 
 这是后续 AI 的最小全局上下文。只读取与当前任务相关的任务文档。
 
@@ -15,9 +15,11 @@
 - 认证：数据库会话 Cookie + CSRF；未登录时 React 渲染登录页。
 - 长任务：导入和部署使用任务 API + 前端轮询，不依赖 WebSocket。
 - 本地服务：后台 `127.0.0.1:8790`；Vite `http://127.0.0.1:4173`（2026-10-27 从 5173 改为 4173，启用 strictPort；`npm run dev:modern` 启动）。
-- 京东云生产：公网前台 `https://117.72.209.44:5173`，域名 `https://10ye.cc`；后台仅 `127.0.0.1:8790`。Docker 运行 `shiyue-saas`、前台、PostgreSQL 16 和 Redis 7；PostgreSQL/Redis 只监听远程回环地址。IP 直连需信任自建根证书，详见 platform-operations。
+- 京东云生产：入口 `https://rynenglish.com`，Docker Nginx 提供 80 → 443 跳转、Let's Encrypt 证书和每日两次自动续期检查；代理现有前台 5173，后台仅 `127.0.0.1:8790`。Docker 运行 SaaS、前台、PostgreSQL 16、Redis 7；数据库/Redis 只监听回环。原 IP:5173 自建证书入口保留兼容，详见 platform-operations。
 
 ## 全局完成状态
+
+- 2026-11-05 京东云标准 HTTPS 入口已上线，域名改为 `rynenglish.com`：80 自动 308 到 443，Let's Encrypt 证书有效至 2027-02-03，自动续期 timer active、实际续期 dry-run/重载通过；公网跳转、严格 TLS、首页/API 验收通过。安装/升级脚本及节点域名设置已补齐；仅调整入口和后台基础 URL，保留业务版本与数据。详见 `tasks/platform-operations/HANDOFF.md`。
 
 - 2026-10-27 本地前端端口改为 4173 并已启动，后台 8790；京东云程序升级任务 #26157 完成，生产版本 `code-20261027-151445-6f1c16a2`，公网 HTTPS 5173、Cloudflare 域名及数据库/Redis 健康通过。保留现有用户数据；IP 直连需安装并信任根证书。详见 `tasks/platform-operations/HANDOFF.md`。
 

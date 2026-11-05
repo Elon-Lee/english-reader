@@ -7,7 +7,22 @@
 - “上传官方内容”只增量同步已登记的官方读物及关联媒体，不发布代码，也不覆盖远端用户数据。新增或变更内容需在线上审核后才公开。
 - 远程部署、重新部署、回滚、卸载和清理均需管理员确认；除非用户明确要求，不执行远程变更。
 
-## 当前实现（2026-10-27）
+## 当前实现（2026-11-05 核实）
+
+### 2026-11-05 标准 HTTPS 入口已上线
+
+- 用户确认现用域名为 `rynenglish.com`，解析到京东云 `117.72.209.44`。已按用户确认实施 Docker Nginx + Certbot，仅调整入口和后台 `APP_BASE_URL`，现有程序版本仍为 `code-20261027-151445-6f1c16a2`，应用镜像 SHA 未变；数据库、Redis、媒体及 Cloudflare Tunnel 保留。
+- 标准入口为 `https://rynenglish.com`。80 普通请求返回 308 到固定域名并保留路径/查询参数，IP 的 HTTP 请求也跳转到域名；HTTP `/.well-known/acme-challenge/` 独立 webroot，缺失文件 404。443 使用 Let's Encrypt YE1 证书，当前有效至 **2027-02-03 02:11:59 UTC**；不需要用户安装自建根证书。原 5173 自建证书入口保留兼容，后端 8790、PostgreSQL 5432、Redis 6379 仍仅回环。
+- 运行环境为 CentOS 7、Docker 26.1.4、systemd 219。Nginx 容器 `shiyue-https` 使用 `nginx:1.28-alpine`（实机 1.28.3），Certbot 使用 `certbot/certbot:v5.4.0`；按项目既有方式支持 m.daocloud.io 镜像拉取及官方源回退，不改宿主 Docker 仓库配置。代理上传上限与应用视频上限对齐为 20 GiB，关闭代理请求/响应缓冲。
+- 证书、账户、Nginx 配置及续期脚本持久化于 `/var/lib/shiyue/https/57dfc879ad04/`（安装目录 SHA-256 前 12 位），在应用安装目录之外。重新安装应用不删除该目录；共享配置清单为 `/srv/shiyue/shared/config/https-entry.json`。
+- `shiyue-https-renew-57dfc879ad04.timer` 已 enabled/active，每天服务器本地时间 **03:00、15:00** 检查并按需续期，`Persistent=true`；续期成功后校验并重载 Nginx。安装和续期共用 flock，失败保留有效配置/重载标记。实际执行 `renew.sh --dry-run --run-deploy-hooks` 成功并验证重载；未覆盖生产证书。
+- `APP_BASE_URL=https://rynenglish.com` 已生效；更新前的 env 与容器配置备份位于 `/var/lib/shiyue/https/57dfc879ad04/backups/entry-20261105-111036-5cf36450/`，权限 600。后台以原镜像及原代码重建，失败时恢复旧容器和 env。未发布本地业务程序或重新初始化数据库。
+- 本地源码已同步：`tools/deployment/https_entry.py` 负责入口生成与续期，`manager.py` 的首次安装/升级共用入口流程；升级前从远端清单恢复域名，避免旧本地节点回退旧域名。节点持久化 `public_domain` 并校验，平台表单显示域名及内部应用端口；无域名的旧节点兼容原路径。仅当前仓库涉及改动，已检查指定 idea/webstorm 源码目录，无跨仓依赖。
+- `tools/deploy_remote.py --https-entry` 可独立配置入口，支持 `--target` 或 `--host` + `--identity-file`；`--domain` 指定域名，`--acme-email` 可选。显式私钥模式复用默认 known_hosts 并严格校验，不读取/保存私钥内容；本次 ACME 账户未设置联系邮箱。
+- 验证：前端构建、modern smoke、UI 22 项、JS 检查、Python 编译、diff 检查通过；部署/HTTPS/节点/发布流程 44 项、入口模块 16 项、其他部署/路由 10 项全部通过。独立规格与质量审查通过；发现的 1 GiB 入口上传限制已修为 20 GiB。构建后还原已跟踪生成物，仅保留源码改动。
+- 实机验收：公网域名/IP HTTP 跳转及路径参数正确；HTTPS 首页/API 为 200，本机指定公网 IP 的严格 TLS 校验结果为 0；运行镜像及 current 指针未变、SaaS/Redis 健康，续期 dry-run 成功，timer active，实际 systemd 续期服务 `Result=success/ExecMainStatus=0`。未登录 `/api/auth/me` 返回 401，HTTP 验证路径缺失文件返回 404。既有真实 TLS/双 Secure Cookie 代理回归通过；未使用生产用户登录。当前无阻塞，源码、测试及部署架构文档一同交付；开发分支为 `feat/https-standard-entry`，合并目标为本地 `main`，提交与合并结果以 Git 历史为准。
+
+### 已部署实现（2026-10-27）
 
 - 本地 Vite 默认端口从 5173 改为 **4173**（`http://127.0.0.1:4173/`），`strictPort: true` 避免端口占用时静默漂移；本地 API 仍为 8790，远端前台继续使用 **HTTPS 5173**。本地已启动且首页/API 代理 200；启动命令 `npm run dev:modern`，后端为 `./start-reader.sh --saas-local 8790`。日志分别为 `.local/logs/vite-4173.log`、`.local/logs/saas-local-8790.log`；布局检查脚本默认地址同步更新到 4173 根路径。
 - SaaS 首次部署、重新部署和程序升级统一启用公网 `https://<节点 host>:5173`，后台仍仅监听回环 `8790`；旧节点保存的 HTTP/8765 配置会在本次任务内按 HTTPS/5173 执行，成功后回写节点配置。CLI `--upgrade` 或平台“程序升级”可保留远端数据并切换 HTTPS，无需重装。
@@ -29,12 +44,15 @@
 
 ## 关键文件
 
+- `AI_CONTEXT/tasks/platform-operations/DEPLOYMENT_ARCHITECTURE.md`：京东云生产访问链路、容器/端口、配置与数据目录、证书续期及常用运维命令（2026-11-05 实机核实）。
 - `frontend/src/pages/PlatformOperationsPage.jsx`：部署操作、顺序、确认文案。
 - `frontend/vite.config.js`：首页截图 URL 内容版本化及入口缓存版本。
 - `tools/deployment/manager.py`：前端构建、发布包、SaaS 部署任务。
+- `tools/deployment/https_entry.py`：标准入口、ACME 验证、持久证书及自动续期脚本生成。
 - `tools/deploy_remote.py`：命令行打包与部署入口。
 - `tools/test_deployment_release_pipeline.py`：发布包、截图与部署流程回归。
 - `tools/test_deployment_https.py`：HTTPS 配置、旧节点升级和真实 TLS/Cookie 代理回归。
+- `tools/test_deployment_https_entry.py`、`tools/test_deployment_https_integration.py`：入口重复安装/失败回滚/续期和节点/CLI/应用重建集成回归。
 - `tools/deployment/saas_public_sync.py`：官方内容增量同步。
 
 ## 验证
@@ -44,6 +62,7 @@ npm run build:modern
 npm run test:modern
 npm run test:ui
 PYTHONPATH=tools python3 -m unittest tools.test_deployment_release_pipeline
+PYTHONPATH=tools python3 -m unittest tools.test_deployment_https_entry tools.test_deployment_https_integration
 PYTHONPATH=tools python3 -m unittest tools.test_deployment_https tools.test_deployment_nodes tools.test_deployment_docker_install tools.test_deployment_dioco_config tools.test_deployment_content_paths tools.test_deployment_grammar_content tools.test_saas_frontend_routes
 python3 -m py_compile tools/deployment/manager.py tools/deploy_remote.py tools/test_deployment_https.py tools/test_deployment_release_pipeline.py
 git diff --check

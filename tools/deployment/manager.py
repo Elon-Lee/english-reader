@@ -4,6 +4,7 @@ import gzip,hashlib,io,ipaddress,json,os,re,secrets,shlex,shutil,sqlite3,subproc
 from datetime import datetime,timedelta
 from pathlib import Path
 from urllib.parse import unquote
+from .https_entry import entry_paths, frontend_url, install_script, normalize_domain
 
 ROOT=Path(__file__).resolve().parents[2]
 DB=ROOT/".local/library.sqlite3"
@@ -61,6 +62,7 @@ def list_targets():
 def save_target(data,password=""):
     host=str(data.get("host","")).strip();username=str(data.get("username","root")).strip() or "root"
     if not host:raise ValueError("请输入SSH地址")
+    public_domain=normalize_domain(data["publicDomain"]) if "publicDomain" in data else None
     port=max(1,min(65535,int(data.get("port",22))));remote_root=str(data.get("remoteRoot","/srv/shiyue")).strip() or "/srv/shiyue"
     if remote_root in {"","/","/root","/home","/srv"}:raise ValueError("远程目录范围过大，请使用类似 /srv/shiyue 的独立目录")
     service_port=SAAS_FRONTEND_PORT;stamp=now();db=connect();target_id=data.get("id") or data.get("targetId")
@@ -74,6 +76,7 @@ def save_target(data,password=""):
             target_id=existing[0];db.execute("UPDATE deployment_targets SET name=?,service_port=?,install_recording=?,use_https=?,updated_at=? WHERE id=?",(str(data.get("name","远程服务器")).strip() or "远程服务器",service_port,1 if data.get("installRecording",True) else 0,1 if data.get("useHttps",True) else 0,stamp,target_id))
         else:
             cur=db.execute("INSERT INTO deployment_targets(name,host,port,username,remote_root,service_port,install_recording,use_https,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",(str(data.get("name","远程服务器")).strip() or "远程服务器",host,port,username,remote_root,service_port,1 if data.get("installRecording",True) else 0,1 if data.get("useHttps",True) else 0,stamp,stamp));target_id=cur.lastrowid
+    if public_domain is not None:db.execute("UPDATE deployment_targets SET public_domain=? WHERE id=?",(public_domain,target_id))
     row=dict(db.execute("SELECT * FROM deployment_targets WHERE id=?",(target_id,)).fetchone())
     try:
         if password:save_password(row,password)
@@ -112,11 +115,17 @@ class Job:
 
 class Remote:
     def __init__(self,target,job):
-        self.t=target;self.job=job;self.password=load_password(target);self.key=KEYS/f"target-{target['id']}-ed25519"
+        self.t=target;self.job=job
+        self.explicit_identity=bool(target.get("identity_file"))
+        self.key=Path(target["identity_file"]).expanduser() if self.explicit_identity else KEYS/f"target-{target['id']}-ed25519"
+        if self.explicit_identity and not self.key.is_file():raise ValueError("SSH 私钥文件不存在")
+        self.password="" if self.explicit_identity else load_password(target)
         STATE.mkdir(parents=True,exist_ok=True);KEYS.mkdir(parents=True,exist_ok=True);KNOWN_HOSTS.touch(exist_ok=True)
         if not self.password and not self.key.exists():raise ValueError("没有可用SSH密码或部署密钥，请重新保存远程配置")
     def ssh_options(self,use_key=True):
-        options=["-p",str(self.t["port"]),"-o",f"UserKnownHostsFile={KNOWN_HOSTS}","-o","StrictHostKeyChecking=accept-new","-o","ConnectTimeout=15"]
+        options=["-p",str(self.t["port"]),"-o","ConnectTimeout=15"]
+        if self.explicit_identity:options += ["-o","StrictHostKeyChecking=yes","-o","BatchMode=yes"]
+        else:options += ["-o",f"UserKnownHostsFile={KNOWN_HOSTS}","-o","StrictHostKeyChecking=accept-new"]
         if use_key and self.key.exists():options += ["-i",str(self.key),"-o","IdentitiesOnly=yes"]
         return options
     def base_ssh(self,use_key=True):return ["ssh",*self.ssh_options(use_key),f"{self.t['username']}@{self.t['host']}"]
@@ -486,14 +495,14 @@ def health_check_command(target):
     code=f"import json,ssl,urllib.request; u='{scheme}://127.0.0.1:{port}/api/health'; c=ssl._create_unverified_context() if u.startswith('https') else None; print(urllib.request.urlopen(u,context=c,timeout=20).read().decode())"
     return f"docker exec shiyue-reader python3 -c {shlex.quote(code)}"
 
-def saas_app_run_command(target,release_path,name="shiyue-saas",port=None,restart=True):
+def saas_app_run_command(target,release_path,name="shiyue-saas",port=None,restart=True,image=None):
     root=shlex.quote(target["remote_root"]);release=shlex.quote(release_path);port=int(port or SAAS_BACKEND_PORT);recording=bool(target["install_recording"])
     options=[f"docker run -d --name {shlex.quote(name)}"]
     if restart:options.append("--restart unless-stopped")
     options += ["--network host",f"--env-file {root}/shared/config/saas.env","-e READER_HOST=127.0.0.1",f"-e READER_PORT={port}","-e SHIYUE_RUNTIME_MODE=saas","-e SHIYUE_DEPLOYMENT_MODE=remote","-e SHIYUE_SAAS_ENABLED=1","-e MEDIA_ROOT=/app/books","-e SAAS_BACKUP_ROOT=/state/backups/saas","-e SHIYUE_PDF_OCR=/opt/shiyue/pdf_ocr","-e SHIYUE_YTDLP=/usr/local/bin/yt-dlp","-e SHIYUE_NODE=/usr/bin/node",
       f"-v {release}/reader:/app/reader:ro,z",f"-v {release}/tools:/app/tools:ro,z",f"-v {root}/shared/books:/app/books:z",f"-v {root}/shared/.local:/app/.local:z",f"-v {root}/shared/cache:/app/.cache:z",f"-v {root}/backups:/state/backups:z"]
     if recording:options += [f"-v {root}/shared/whisper/ggml-base.en.bin:/opt/shiyue/models/ggml-base.en.bin:ro,z","-e SHIYUE_WHISPER_CLI=/opt/shiyue/whisper/whisper-cli","-e SHIYUE_WHISPER_MODEL=/opt/shiyue/models/ggml-base.en.bin"]
-    options.append(shlex.quote(SAAS_IMAGE));return " \\\n  ".join(options)
+    options.append(shlex.quote(image or SAAS_IMAGE));return " \\\n  ".join(options)
 
 def saas_frontend_run_command(target,release_path,name="shiyue-saas-frontend",port=None,backend_port=None,restart=True):
     root=shlex.quote(target["remote_root"]);release=shlex.quote(release_path);port=int(port or SAAS_FRONTEND_PORT);backend_port=int(backend_port or SAAS_BACKEND_PORT)
@@ -525,8 +534,105 @@ versions=sorted(path.name for path in Path('/app/tools/saas_migrations').glob('*
 print('SHIYUE_MIGRATIONS_READY '+','.join(versions))"""
     return f"docker exec {shlex.quote(container)} python3 -c {shlex.quote(code)}"
 
+def saas_https_target(remote,target):
+    """Recover edge settings before an older local node can overwrite its URL."""
+    effective={**target,"service_port":SAAS_FRONTEND_PORT,"use_https":1}
+    if not effective.get("public_domain"):
+        manifest=f"{target['remote_root']}/shared/config/https-entry.json"
+        output=remote.ssh(f"if test -s {shlex.quote(manifest)}; then echo SHIYUE_HTTPS_ENTRY_CONFIG; cat {shlex.quote(manifest)}; fi")
+        marker="SHIYUE_HTTPS_ENTRY_CONFIG\n"
+        if marker in output:
+            try:settings=json.loads(output.split(marker,1)[1])
+            except (TypeError,ValueError) as exc:raise ValueError("远程 HTTPS 入口配置损坏，拒绝覆盖现有入口") from exc
+            effective["public_domain"]=settings.get("public_domain","")
+    effective["public_domain"]=normalize_domain(effective.get("public_domain",""))
+    return effective
+
+def ensure_remote_https_entry(job,remote,target):
+    if not target.get("public_domain"):return {}
+    job.write(f"配置标准 HTTPS 入口：{frontend_url(target)}")
+    output=remote.ssh(install_script(target))
+    marker="SHIYUE_HTTPS_ENTRY_READY"
+    if marker not in output:raise ValueError("标准 HTTPS 入口未完成验收")
+    # Use the deployed Python trust store and domain verification, including SNI.
+    code=f"""import json,ssl,urllib.request
+opener=urllib.request.build_opener(urllib.request.ProxyHandler({{}}),urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+base={frontend_url(target)!r}
+with opener.open(base+'/',timeout=20) as response:
+    assert response.status==200 and b'id="root"' in response.read()
+with opener.open(base+'/api/health',timeout=20) as response:
+    health=json.load(response)
+    assert health.get('status')=='ok' and health.get('saasEnabled') and health.get('redisReady')
+print('SHIYUE_HTTPS_PUBLIC_READY')
+"""
+    verification=remote.ssh(f"docker exec shiyue-saas python3 -c {shlex.quote(code)}")
+    if "SHIYUE_HTTPS_PUBLIC_READY" not in verification:raise ValueError("公网 HTTPS 入口严格校验失败")
+    return {"frontendUrl":frontend_url(target),"stateRoot":entry_paths(target)["state_root"]}
+
+def configure_existing_https_entry(job,remote,target):
+    """Change only the public entry and origin URL, using the deployed image."""
+    target={**target,"service_port":SAAS_FRONTEND_PORT,"use_https":1,
+            "public_domain":normalize_domain(target.get("public_domain",""))}
+    if not target["public_domain"]:raise ValueError("配置标准 HTTPS 入口必须提供域名")
+    root=shlex.quote(target["remote_root"])
+    metadata=remote.ssh(f"""set -euo pipefail
+test -s {root}/shared/config/saas.env
+docker inspect -f '{{{{.Image}}}}' shiyue-saas
+docker inspect -f '{{{{range .Mounts}}}}{{{{if eq .Destination "/opt/shiyue/models/ggml-base.en.bin"}}}}SHIYUE_RECORDING_ENABLED{{{{end}}}}{{{{end}}}}' shiyue-saas
+docker exec shiyue-saas python3 -c 'import os; print("SHIYUE_BASE_URL="+os.environ.get("APP_BASE_URL",""))'
+{saas_health_check_command(SAAS_FRONTEND_PORT)}
+""")
+    image=next((line.strip() for line in metadata.splitlines() if re.fullmatch(r"sha256:[0-9a-f]{64}",line.strip())),"")
+    if not image:raise ValueError("无法确认运行中的 SaaS 镜像，拒绝重建应用")
+    target["runtime_image"]=image
+    target["install_recording"]="SHIYUE_RECORDING_ENABLED" in metadata
+    entry=ensure_remote_https_entry(job,remote,target)
+    paths=entry_paths(target);stamp=new_release_id("entry")
+    backup=f"{paths['state_root']}/backups/{stamp}"
+    remote.ssh(f"set -e; umask 077; mkdir -p {shlex.quote(backup)}; cp -p {root}/shared/config/saas.env {shlex.quote(backup)}/saas.env; docker inspect shiyue-saas > {shlex.quote(backup)}/container.json; chmod 600 {shlex.quote(backup)}/*")
+    try:
+        ensure_remote_saas_config(job,remote,target)
+        if f"SHIYUE_BASE_URL={frontend_url(target)}" not in metadata.splitlines():
+            old=f"shiyue-saas-before-{stamp}"
+            command=saas_app_run_command(target,f"{target['remote_root']}/current",image=image)
+            remote.ssh(f"""set -euo pipefail
+rollback() {{
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    cp -p {shlex.quote(backup)}/saas.env {root}/shared/config/saas.env
+    if docker inspect {shlex.quote(old)} >/dev/null 2>&1; then
+      docker rm -f shiyue-saas >/dev/null 2>&1 || true
+      docker rename {shlex.quote(old)} shiyue-saas
+      docker start shiyue-saas >/dev/null
+    else
+      docker start shiyue-saas >/dev/null 2>&1 || true
+    fi
+  fi
+  exit "$status"
+}}
+trap rollback EXIT
+docker stop shiyue-saas >/dev/null
+docker rename shiyue-saas {shlex.quote(old)}
+{command}
+healthy=0
+for attempt in $(seq 1 30); do
+  if {saas_health_check_command(SAAS_FRONTEND_PORT)}; then healthy=1; break; fi
+  sleep 1
+done
+test "$healthy" = 1
+trap - EXIT
+docker rm {shlex.quote(old)} >/dev/null
+echo SHIYUE_HTTPS_APP_READY
+""")
+    except Exception:
+        remote.ssh(f"cp -p {shlex.quote(backup)}/saas.env {root}/shared/config/saas.env")
+        raise
+    health=remote.ssh(saas_health_check_command(SAAS_FRONTEND_PORT))
+    return {**entry,"backup":backup,"health":health,"applicationCodePreserved":True}
+
 def ensure_remote_saas_config(job,remote,target):
     root=target["remote_root"];destination=f"{root}/shared/config/saas.env"
+    domain=normalize_domain(target.get("public_domain",""))
     found=remote.ssh(f"test -s {shlex.quote(destination)} && echo SHIYUE_SAAS_ENV_READY || true")
     if "SHIYUE_SAAS_ENV_READY" in found:
         scheme="https" if target.get("use_https",0) else "http"
@@ -536,27 +642,28 @@ def ensure_remote_saas_config(job,remote,target):
 from urllib.parse import urlsplit
 path=Path('/config/saas.env')
 lines=path.read_text().splitlines(keepends=True)
-fallback={f'{scheme}://{target["host"]}:{SAAS_FRONTEND_PORT}'!r}
+fallback={frontend_url(target)!r}
+explicit_domain={bool(domain)!r}
 found=False
 for index,line in enumerate(lines):
     if line.startswith('APP_BASE_URL='):
         found=True
         current=line.split('=',1)[1].strip().strip('\\\"').strip("'")
         parsed=urlsplit(current)
-        if not (parsed.scheme=='https' and parsed.hostname and parsed.hostname!={target['host']!r}):
+        if explicit_domain or not (parsed.scheme=='https' and parsed.hostname and parsed.hostname!={target['host']!r}):
             lines[index]='APP_BASE_URL='+fallback+'\\n'
 if not found:
     if lines and not lines[-1].endswith('\\n'):lines[-1]+='\\n'
     lines.append('APP_BASE_URL='+fallback+'\\n')
 path.write_text(''.join(lines))
 """
-        remote.ssh(f"docker run --rm --network none -v {shlex.quote(root)}/shared/config:/config:rw,z {shlex.quote(SAAS_IMAGE)} python3 -c {shlex.quote(code)}")
-        job.write("远程 SaaS 密钥配置已存在，保留数据库、会话密钥及已配置的 HTTPS 域名，补齐 HTTPS 入口配置");return
+        remote.ssh(f"docker run --rm --network none -v {shlex.quote(root)}/shared/config:/config:rw,z {shlex.quote(target.get('runtime_image',SAAS_IMAGE))} python3 -c {shlex.quote(code)}")
+        job.write("保留远程数据库及会话密钥，使用节点明确配置的域名；未指定域名时兼容现有 HTTPS 地址");return
     postgres_password=secrets.token_hex(24);redis_password=secrets.token_hex(24);session_secret=secrets.token_urlsafe(48);scheme="https" if target.get("use_https",0) else "http"
     values={
       "POSTGRES_DB":"shiyue","POSTGRES_USER":"shiyue","POSTGRES_PASSWORD":postgres_password,
       "DATABASE_URL":f"postgresql://shiyue:{postgres_password}@127.0.0.1:5432/shiyue","REDIS_PASSWORD":redis_password,"REDIS_URL":f"redis://:{redis_password}@127.0.0.1:6379/0",
-      "SESSION_SECRET":session_secret,"APP_BASE_URL":f"{scheme}://{target['host']}:{SAAS_FRONTEND_PORT}","SHIYUE_SAAS_AUTO_MIGRATE":"1","BOOTSTRAP_ADMIN_EMAIL":"","BOOTSTRAP_ADMIN_PASSWORD":"",
+      "SESSION_SECRET":session_secret,"APP_BASE_URL":frontend_url(target),"SHIYUE_SAAS_AUTO_MIGRATE":"1","BOOTSTRAP_ADMIN_EMAIL":"","BOOTSTRAP_ADMIN_PASSWORD":"",
     }
     with tempfile.TemporaryDirectory(prefix="shiyue-saas-env-") as temp:
         path=Path(temp)/"saas.env";path.write_text("".join(f"{key}={value}\n" for key,value in values.items()),encoding="utf-8");os.chmod(path,0o600)
@@ -992,7 +1099,7 @@ def start_upgrade(target_id):
 
 def start_saas_upgrade(target_id):
     def worker(job,remote,target):
-        target={**target,"service_port":SAAS_FRONTEND_PORT,"use_https":1}
+        target=saas_https_target(remote,target)
         release=new_release_id("code");job.update(5,"检查远程 SaaS 生产栈",release_id=release)
         check_remote_saas_upgrade_target(remote,target)
         job.update(15,"生成 SaaS 程序发布包");package,digest=build_code_package(job,release)
@@ -1007,6 +1114,7 @@ def start_saas_upgrade(target_id):
         ensure_remote_saas_config(job,remote,target)
         job.update(70,"启动候选版本并执行 SaaS 健康检查")
         activation=activate_saas_release(job,remote,target,release)
+        ensure_remote_https_entry(job,remote,target)
         health=remote.ssh(saas_health_check_command(target["service_port"]))
         job.update(95,"核对线上版本指针与运行容器")
         root=shlex.quote(target["remote_root"])
@@ -1022,8 +1130,8 @@ echo SHIYUE_SAAS_RELEASE_ACTIVE
 """)
         if "SHIYUE_SAAS_RELEASE_ACTIVE" not in verification:raise ValueError("线上 SaaS 容器与 current 发布版本不一致")
         db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":health,"mode":"saas"}),now()));db.commit();db.close()
-        db=connect();db.execute("UPDATE deployment_targets SET service_port=?,use_https=1,updated_at=? WHERE id=?",(SAAS_FRONTEND_PORT,now(),target["id"]));db.commit();db.close()
-        job.complete({"targetId":target["id"],"releaseId":release,"health":health,"backup":backup,"candidate":activation["candidate"],"verification":verification,"buildInfo":build_info,"diocoConfigured":dioco["configured"],"frontendUrl":f"https://{target['host']}:{SAAS_FRONTEND_PORT}","rootCertificate":str(certificate)},"SaaS 程序升级完成（5173 HTTPS）")
+        db=connect();db.execute("UPDATE deployment_targets SET service_port=?,use_https=1,public_domain=?,updated_at=? WHERE id=?",(SAAS_FRONTEND_PORT,target.get("public_domain",""),now(),target["id"]));db.commit();db.close()
+        job.complete({"targetId":target["id"],"releaseId":release,"health":health,"backup":backup,"candidate":activation["candidate"],"verification":verification,"buildInfo":build_info,"diocoConfigured":dioco["configured"],"frontendUrl":frontend_url(target),"rootCertificate":"" if target.get("public_domain") else str(certificate)},"SaaS 程序升级完成（HTTPS）")
     return run_task("saas_upgrade",worker,target_id)
 
 def uninstall_saas_for_redeploy(job,remote,target):
@@ -1062,7 +1170,7 @@ echo SHIYUE_UNINSTALLED
 
 def start_saas_deploy(target_id,reinstall=False):
     def worker(job,remote,target):
-        target={**target,"service_port":SAAS_FRONTEND_PORT,"use_https":1}
+        target=saas_https_target(remote,target)
         release=new_release_id("code");job.update(2,"准备本机发布包与数据库快照",release_id=release)
         package,digest=build_code_package(job,release);dump,dump_digest=build_saas_database_dump(job,release)
         if reinstall:uninstall_saas_for_redeploy(job,remote,target)
@@ -1080,10 +1188,12 @@ def start_saas_deploy(target_id,reinstall=False):
         ensure_remote_saas_services(job,remote,target,release);restored=restore_remote_saas_database(job,remote,target,dump,dump_digest)
         if restored:prune_initial_database_to_published_content(job,remote,target)
         public=sync_saas_public_content(job,remote,target,f"{target['remote_root']}/releases/{release}",{"scan":70,"prepare":73,"package":76,"upload":79,"apply":82,"database":85,"merge":88},False)
-        activation=activate_saas_release(job,remote,target,release);final_health=remote.ssh(saas_health_check_command(target["service_port"]))
+        activation=activate_saas_release(job,remote,target,release)
+        ensure_remote_https_entry(job,remote,target)
+        final_health=remote.ssh(saas_health_check_command(target["service_port"]))
         db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health,"mode":"saas"}),now()));db.commit();db.close()
-        db=connect();db.execute("UPDATE deployment_targets SET service_port=?,use_https=1,updated_at=? WHERE id=?",(SAAS_FRONTEND_PORT,now(),target["id"]));db.commit();db.close()
-        job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"databaseImported":restored,"publicContentRevision":public["contentRevision"],"publicMedia":public["media"],"candidate":activation["candidate"],"frontendUrl":f"https://{target['host']}:{SAAS_FRONTEND_PORT}","rootCertificate":str(certificate)},"SaaS 根站完整部署完成（5173 HTTPS）")
+        db=connect();db.execute("UPDATE deployment_targets SET service_port=?,use_https=1,public_domain=?,updated_at=? WHERE id=?",(SAAS_FRONTEND_PORT,target.get("public_domain",""),now(),target["id"]));db.commit();db.close()
+        job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"databaseImported":restored,"publicContentRevision":public["contentRevision"],"publicMedia":public["media"],"candidate":activation["candidate"],"frontendUrl":frontend_url(target),"rootCertificate":"" if target.get("public_domain") else str(certificate)},"SaaS 根站完整部署完成（HTTPS）")
     return run_task("saas_redeploy" if reinstall else "saas_deploy",worker,target_id)
 def start_saas_public_sync(target_id):
     def worker(job,remote,target):
