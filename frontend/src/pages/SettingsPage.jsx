@@ -103,10 +103,9 @@ export default function SettingsPage({ currentUser, devices, preferences, deleti
           {!currentDeviceKnown && devices?.length > 0 && <Text type="warning" style={{ display: 'block', marginBottom: 8 }}>当前设备状态待确认，暂不可撤销设备。</Text>}
           <List size="small" dataSource={devices || []} locale={{ emptyText: '暂无设备信息' }} renderItem={device => <List.Item actions={currentDeviceKnown && !device.current ? [<Button key="revoke" size="small" danger onClick={() => onRevokeOwnDevice?.(device.id)}>撤销</Button>] : []}><List.Item.Meta title={<Space>{device.label || '未命名设备'}{device.current ? <Tag color="success">当前设备</Tag> : currentDeviceKnown ? <Tag>已连接</Tag> : <Tag color="warning">状态待确认</Tag>}</Space>} description={device.userAgent || '未知客户端'} /></List.Item>} />
         </Card>
-        <Card title="危险区域" className="danger-card">
-          <Text type="secondary">导出会下载当前账号数据。注销申请会退出登录，并在 30 天宽限期后清理账户；期间重新登录可取消。</Text>
+        <Card title="账号操作" className="danger-card">
+          <Text type="secondary">注销申请会退出登录，并在 30 天宽限期后清理账户；期间重新登录可取消。</Text>
           <div className="settings-account-actions">
-            <Button block onClick={() => { location.href = '/api/account/export' }}>导出账户数据</Button>
             <Button block danger onClick={onLogout}>退出登录</Button>
             {deletionStatus?.status === 'requested' ? <><Text type="warning">计划删除时间：{new Date(deletionStatus.scheduledFor).toLocaleString('zh-CN')}</Text><Button block onClick={onCancelDeletion}>取消注销申请</Button></> : <Button block danger onClick={onRequestDeletion}>申请注销账户</Button>}
           </div>

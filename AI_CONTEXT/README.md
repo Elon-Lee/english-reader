@@ -1,6 +1,6 @@
-# 拾页 AI 共享上下文
+# RynEnglish AI 共享上下文
 
-更新时间：2026-11-05（Asia/Shanghai）
+更新时间：2026-11-06（Asia/Shanghai）
 
 这是后续 AI 的最小全局上下文。只读取与当前任务相关的任务文档。
 
@@ -18,6 +18,10 @@
 - 京东云生产：入口 `https://rynenglish.com`，Docker Nginx 提供 80 → 443 跳转、Let's Encrypt 证书和每日两次自动续期检查；代理现有前台 5173，后台仅 `127.0.0.1:8790`。Docker 运行 SaaS、前台、PostgreSQL 16、Redis 7；数据库/Redis 只监听回环。原 IP:5173 自建证书入口保留兼容，详见 platform-operations。
 
 ## 全局完成状态
+
+- 2026-11-06 品牌第二轮与设置调整已发布 `code-20261106-113458-43116bfb`（任务 #5）：小写 e 调至 R 右上角，全部图标/截图与缓存版本同步；未完成购买提示改“不再提醒”，设置改“账号操作”并移除导出入口。构建、相关回归及隔离 Chrome 交互通过，线上健康正常，源码交付分支 `feat/rynenglish-brand`，提交与推送状态以 Git 为准。详见 brand-assets、pc-workspace 交接。
+
+- 2026-11-06 RynEnglish 品牌更新已发布京东云 `code-20261106-111413-2385a2c5`（任务 #4）：R/e 新 Logo、网站名称与 slogan `Every Page, A Deeper Understanding.` 覆盖公开页、认证、工作台、邮件、法律文案及网站图标；构建、相关测试及 Cloudflare 公网 Chrome 11 路由验收通过，保留数据与入口。本机直连正式域名仍有既有超时，源码交付分支 `feat/rynenglish-brand`，提交与推送状态以 Git 为准。详见 `tasks/brand-assets/HANDOFF.md`。
 
 - 2026-11-05 京东云已发布验证码开关与 DirectMail，当前版本 `code-20261105-173117-956a2f49`：去掉重复窗口、视口居中、修复 SDK 页面坐标导致验证失败；按用户最新反馈恢复原动物示例图，移除难识别的书籍照片。生产旋转验证码已开启，覆盖登录/注册/找回密码/换设备；本地三流程和线上 Cloudflare 真实浏览器验证通过。SMTP 测试邮件已被接受，实际收件待用户确认。原 5173 和 Cloudflare 入口正常；本机公网域名 80/443 出现拦截/超时，外部访问待确认。详见 `tasks/auth-captcha/HANDOFF.md`。
 

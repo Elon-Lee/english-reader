@@ -153,7 +153,7 @@ class PhaseSixPostgresTests(unittest.TestCase):
             deadline=time.time()+10
             while time.time()<deadline:
                 try:
-                    connection=http.client.HTTPConnection("127.0.0.1",port,timeout=1);connection.request("GET","/terms");response=connection.getresponse();body=response.read();self.assertEqual(response.status,200);self.assertIn("拾页用户协议",body.decode());self.assertEqual(response.getheader("X-Frame-Options"),"DENY");self.assertIn("default-src 'self'",response.getheader("Content-Security-Policy"));connection.close();connection=None;break
+                    connection=http.client.HTTPConnection("127.0.0.1",port,timeout=1);connection.request("GET","/terms");response=connection.getresponse();body=response.read();self.assertEqual(response.status,200);self.assertIn("RynEnglish 用户协议",body.decode());self.assertEqual(response.getheader("X-Frame-Options"),"DENY");self.assertIn("default-src 'self'",response.getheader("Content-Security-Policy"));connection.close();connection=None;break
                 except OSError:time.sleep(.1)
             else:self.fail("security server did not start")
             statuses=[]

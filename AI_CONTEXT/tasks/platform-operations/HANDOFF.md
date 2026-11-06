@@ -7,7 +7,17 @@
 - “上传官方内容”只增量同步已登记的官方读物及关联媒体，不发布代码，也不覆盖远端用户数据。新增或变更内容需在线上审核后才公开。
 - 远程部署、重新部署、回滚、卸载和清理均需管理员确认；除非用户明确要求，不执行远程变更。
 
-## 当前实现（2026-11-05 核实）
+## 当前实现（2026-11-06 核实）
+
+### 2026-11-06 品牌第二轮与账号操作更新
+
+- 任务 #5 complete，当前版本 `code-20261106-113458-43116bfb`；数据库备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261106-113458-43116bfb.dump` 非空。调整 R/e 图标布局、购买提醒和设置入口，保留线上数据、容器技术标识与原访问链路；SaaS/Redis 健康、Cloudflare active。
+
+### 2026-11-06 RynEnglish 品牌已发布
+
+- 用户授权程序升级任务 #4 complete，当前版本 `code-20261106-111413-2385a2c5`；备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261106-111413-2385a2c5.dump`，保留远端数据、验证码开关、HTTPS/5173 和 Cloudflare。
+- R/e Logo、网站名称、slogan、favicon、邮件及法律文案更新；技术容器/目录/会话标识保留兼容。详见 `../brand-assets/HANDOFF.md`。
+- 候选/正式健康及迁移核验通过；服务器侧域名严格 TLS、新品牌首页、原公网 5173 严格 CA 验证200，Cloudflare active；Cloudflare 公网 Chrome 11 路由验收通过。本机直连正式域名443仍为既有 SSL 超时。
 
 ### 2026-11-05 验证码与 DirectMail 已发布
 

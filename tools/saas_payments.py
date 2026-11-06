@@ -337,11 +337,11 @@ class AlipayService:
                 test_order = bool(order and self._test_mode() and as_json(order.get("product_snapshot_json")).get("testMode"))
                 expected_app_id = self._credentials()["app_id"] or ("local-test" if test_order else "")
                 if not order or int(order["amount_cents"]) != amount or str(trade.get("app_id", expected_app_id)) != expected_app_id:
-                    raise SaaSError("alipay_order_mismatch", "支付宝付款与拾页订单不匹配。", 409)
+                    raise SaaSError("alipay_order_mismatch", "支付宝付款与 RynEnglish 订单不匹配。", 409)
                 if order["status"] == "paid":
                     return
                 if order["status"] != "pending":
-                    raise SaaSError("alipay_order_not_payable", "拾页订单已不能支付。", 409)
+                    raise SaaSError("alipay_order_not_payable", "RynEnglish 订单已不能支付。", 409)
                 user_id = order["user_id"]
                 cursor.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", (user_id,))
                 if not cursor.fetchone():

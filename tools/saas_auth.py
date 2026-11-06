@@ -684,11 +684,11 @@ class SaaSService:
 
     def _send_verification(self, email: str, raw_token: str) -> bool:
         url = self._app_url("/verify-email?token=" + quote(raw_token))
-        return self._send_mail(email, "验证你的拾页邮箱", f"请在 24 小时内打开以下链接验证邮箱：\n{url}\n")
+        return self._send_mail(email, "验证你的 RynEnglish 邮箱", f"请在 24 小时内打开以下链接验证邮箱：\n{url}\n\nRynEnglish\nEvery Page, A Deeper Understanding.\n")
 
     def _send_password_reset(self, email: str, raw_token: str) -> bool:
         url = self._app_url("/reset-password?token=" + quote(raw_token))
-        return self._send_mail(email, "重置拾页密码", f"请在 2 小时内打开以下链接重置密码：\n{url}\n")
+        return self._send_mail(email, "重置 RynEnglish 密码", f"请在 2 小时内打开以下链接重置密码：\n{url}\n\nRynEnglish\nEvery Page, A Deeper Understanding.\n")
 
     def _app_url(self, path: str) -> str:
         base = self.environment.get("APP_BASE_URL", "").strip().rstrip("/")

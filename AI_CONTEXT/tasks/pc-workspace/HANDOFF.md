@@ -10,6 +10,7 @@
 
 ## 当前状态（2026-10-25）
 
+- 2026-11-06 已随品牌第二轮发布 `code-20261106-113458-43116bfb`（任务 #5）：会员未完成购买提示按钮改为“不再提醒”，继续调用原 `clear_purchase` 接口并保留失败/重试；设置改为“账号操作”，移除导出账户数据按钮及相关说明，保留退出/注销/取消注销。未删除后端导出接口。关键文件 `components/LearningJourney.jsx`、`pages/SettingsPage.jsx`；构建、modern/UI 22 项/JS 与隔离 Chrome 组件交互验收通过。
 - PC 主要页面与 API 流程已实现；移动端正式优化尚未开始。
 - 本地开发服务已启动：Vite `5173`、SaaS 后台 `8790`。后台健康接口返回 200；未登录访问 `/api/auth/me` 返回 401 `authentication_required` 是预期行为。
 - 本次排查发现 Vite 进程曾带有过时的 `SHIYUE_API_PROXY_TARGET=http://127.0.0.1:8765`，请求因此落到旧后台并返回 `saas_disabled`。已将 Vite 以 `SHIYUE_API_PROXY_TARGET=http://127.0.0.1:8790` 重启并验证代理返回正确后台的 401。仓库配置无需修改；若问题复现，先检查 Vite 进程启动环境并重启，不要先改 API 路由。

@@ -45,7 +45,7 @@ def main()->int:
             except Exception:time.sleep(.1)
         else:raise RuntimeError("reader did not become healthy")
         check("health",status==200 and health.get("status")=="ok",json.dumps(health,ensure_ascii=False));check("legacy mode",health.get("saasEnabled") is False,str(health.get("saasEnabled")));check("book count",health.get("books")==39,str(health.get("books")))
-        status,headers,index=request("/");html=index.decode("utf-8");check("index",status==200 and "拾页" in html);check("frontend bundle","app.js?v=20261010-6" in html and "styles.css?v=20261010-4" in html);check("security headers",headers.get("x-frame-options")=="DENY" and headers.get("x-content-type-options")=="nosniff",str(headers))
+        status,headers,index=request("/");html=index.decode("utf-8");check("index",status==200 and "RynEnglish" in html);check("frontend bundle","app.js?v=20261010-6" in html and "styles.css?v=20261010-4" in html);check("security headers",headers.get("x-frame-options")=="DENY" and headers.get("x-content-type-options")=="nosniff",str(headers))
         _,_,library_body=request("/api/library");library=json.loads(library_body).get("books",[]);check("library",len(library)==39,str(len(library)));book_id=str(library[0]["id"])
         _,_,manifest_body=request(f"/api/books/{quote(book_id)}/manifest");manifest=json.loads(manifest_body);book=manifest.get("book",manifest);sentences=book.get("sentences",[]);check("manifest",bool(book.get("title")));check("sentences",bool(sentences),str(len(sentences)))
         audio=str(book.get("audio","") or book.get("audio_url","") or "")

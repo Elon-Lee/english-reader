@@ -33,7 +33,7 @@ export default function JourneyReport() {
     {loading ? <Skeleton active paragraph={{ rows: 6 }} /> : error ? <Alert type="error" showIcon message="转化数据暂时无法加载" description={error} action={<Button onClick={() => setRevision(value => value + 1)}>重试</Button>} /> : report && <>
       <Row gutter={[20, 20]}><Col span={12}><Card title="首次学习">{l.registered ? <Table columns={columns} dataSource={learningRows} pagination={false} size="small" /> : <Empty description="观察期内暂无新注册账号" />}
         <div className="journey-retention"><Text strong>完成首次学习次日留存</Text><Paragraph>{l.returned} / {l.return_eligible} 人 · {percent(l.returned, l.return_eligible)}</Paragraph><Text type="secondary">以听读记录和首个生词都保存完成的日期为起点。分母为次日已完整结束的账号，分子为次日再次保存听读记录的账号。观察时间不足时不计为流失。</Text></div>
-      </Card></Col><Col span={12}><Card title="购买到兑换">{p.selected ? <Table columns={columns} dataSource={purchaseRows} pagination={false} size="small" /> : <Empty description="观察期内暂无付费方案选择记录" />}<Paragraph type="secondary" className="journey-report-note">兑换以拾页服务端开通记录为准，包含该账号前往云猫后完成的兑换。外部支付成功、失败及云猫订单金额未接入，无法据此计算支付成功率。</Paragraph></Card></Col></Row>
+      </Card></Col><Col span={12}><Card title="购买到兑换">{p.selected ? <Table columns={columns} dataSource={purchaseRows} pagination={false} size="small" /> : <Empty description="观察期内暂无付费方案选择记录" />}<Paragraph type="secondary" className="journey-report-note">兑换以 RynEnglish 服务端开通记录为准，包含该账号前往云猫后完成的兑换。外部支付成功、失败及云猫订单金额未接入，无法据此计算支付成功率。</Paragraph></Card></Col></Row>
     </>}
   </Space>
 }

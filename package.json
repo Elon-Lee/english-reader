@@ -1,7 +1,7 @@
 {
   "name": "english",
   "version": "1.0.0",
-  "description": "拾页英语学习平台前端组件层",
+  "description": "RynEnglish 英语学习平台前端组件层",
   "private": true,
   "main": "index.js",
   "scripts": {

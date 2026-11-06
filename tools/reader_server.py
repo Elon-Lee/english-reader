@@ -284,7 +284,7 @@ class Handler(SimpleHTTPRequestHandler):
             except SaaSConfigurationError as exc:self.reply({"code":"commerce_unavailable","error":str(exc)},503)
             return
         if SAAS.enabled and route.path.startswith("/api/commerce/orders/"):
-            self.reply({"code":"payment_provider_retired","error":"支付订单接口已停用；请通过云猫购买并在拾页兑换。"},410)
+            self.reply({"code":"payment_provider_retired","error":"支付订单接口已停用；请通过云猫购买并在 RynEnglish 兑换。"},410)
             return
         if SAAS.enabled and (route.path=="/api/workspace/imports" or route.path.startswith("/api/workspace/imports/")):
             if not self.require_saas_user(verified=True):return
@@ -572,7 +572,7 @@ class Handler(SimpleHTTPRequestHandler):
             except SaaSError as exc:self.reply(exc.payload(),exc.status)
             return
         if SAAS.enabled and route.path=="/api/commerce/orders":
-            self.reply({"code":"payment_provider_retired","error":"请通过云猫购买并在拾页兑换。"},410);return
+            self.reply({"code":"payment_provider_retired","error":"请通过云猫购买并在 RynEnglish 兑换。"},410);return
         if SAAS.enabled and route.path in {"/api/billing/checkout","/api/billing/manage"}:
             if not self.require_saas_user(verified=True) or not self.require_csrf():return
             try:
@@ -1731,7 +1731,7 @@ if __name__ == "__main__":
             if not address.startswith("127.") and address not in addresses: addresses.append(address)
     except OSError: pass
     scheme="https" if secure else "http"
-    print(f"拾页已启动：{scheme}://localhost:{port}",flush=True)
+    print(f"RynEnglish 已启动：{scheme}://localhost:{port}",flush=True)
     for address in addresses: print(f"局域网访问：{scheme}://{address}:{port}",flush=True)
     print(f"监听地址：{host}:{port}",flush=True)
     server.serve_forever()
