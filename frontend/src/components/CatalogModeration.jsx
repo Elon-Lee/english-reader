@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Alert, Button, Card, Form, Input, InputNumber, Modal, Progress, Select, Space, Table, Tag } from 'antd'
 import { getJson, postJson } from '../api/client'
 import ImportModal from './ImportModal'
+import ResumeAudioUpload from './ResumeAudioUpload'
 import { bookLevels } from '../utils/levels.mjs'
 import { MAX_TOPICS, bookTopics } from '../utils/topics.mjs'
 
@@ -133,7 +134,7 @@ export default function CatalogModeration({ messageApi }) {
       { title: '官方导入任务', render: (_, task) => task.title || task.originalFilename || task.sourceUrl },
       { title: '导入时间', dataIndex: 'createdAt', width: 180, render: value => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—' },
       { title: '进度', render: (_, task) => <><Progress percent={task.progress} size="small" status={task.status === 'failed' ? 'exception' : task.status === 'complete' ? 'success' : 'normal'} />{task.error || task.step}</> },
-      { title: '操作', render: (_, task) => task.status === 'failed' ? <Button loading={taskBusy === task.id} onClick={() => { void taskAction(task, 'retry').catch(() => {}) }}>重试</Button> : ['queued', 'uploading', 'running', 'processing', 'awaiting_processor'].includes(task.status) ? <Button loading={taskBusy === task.id} onClick={() => Modal.confirm({ title: '取消该导入任务？', okText: '确认取消', cancelText: '继续处理', onOk: () => taskAction(task, 'cancel') })}>取消</Button> : null },
+      { title: '操作', render: (_, task) => <Space>{task.status === 'queued' && task.awaitingAudioUpload && <ResumeAudioUpload task={task} base="/api/admin/content-imports" messageApi={messageApi} onComplete={async () => { await loadTasks(); await load() }} />}{task.status === 'failed' ? <Button loading={taskBusy === task.id} onClick={() => { void taskAction(task, 'retry').catch(() => {}) }}>重试</Button> : ['queued', 'uploading', 'running', 'processing', 'awaiting_processor'].includes(task.status) ? <Button loading={taskBusy === task.id} onClick={() => Modal.confirm({ title: '取消该导入任务？', okText: '确认取消', cancelText: '继续处理', onOk: () => taskAction(task, 'cancel') })}>取消</Button> : null}</Space> },
     ]} />
     <Modal title={editing ? `${mode === 'review' ? '审核' : '编辑'}《${editing.title}》` : '内容管理'} open={Boolean(editing)} onCancel={() => { if (!saving) setEditing(null) }} onOk={submit} confirmLoading={saving} okText={mode === 'review' ? '保存审核结果' : '保存内容信息'} cancelText="取消" width={620}>
       <Form form={form} layout="vertical">

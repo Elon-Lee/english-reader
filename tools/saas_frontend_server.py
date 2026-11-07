@@ -52,6 +52,7 @@ class FrontendHandler(BaseHTTPRequestHandler):
             body = self.rfile.read(length)
         declared = self.headers.get('X-Upload-Size')
         if (length and len(body) != length) or (declared is not None and (not declared.isdecimal() or int(declared) != length)):
+            self.log_message('incomplete upload: expected=%d received=%d declared=%s',length,len(body or b''),declared if declared and declared.isdecimal() and len(declared)<=12 else 'invalid-or-missing')
             self.close_connection = True
             data = '{"code":"incomplete_upload","error":"上传文件不完整，请重新上传完整文件。"}'.encode('utf-8')
             self.send_response(400)
@@ -59,7 +60,8 @@ class FrontendHandler(BaseHTTPRequestHandler):
             self.send_header('Content-Length', str(len(data)))
             self.send_header('Connection', 'close')
             self.end_headers()
-            self.wfile.write(data)
+            try:self.wfile.write(data)
+            except (BrokenPipeError,ConnectionResetError):pass
             return
         headers = {key: value for key, value in self.headers.items() if key.lower() not in {"host", "content-length", "connection"}}
         headers["Host"] = BACKEND.netloc

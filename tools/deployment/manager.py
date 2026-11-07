@@ -242,8 +242,13 @@ def build_frontend_assets(job):
         if output:job.write(output[-4000:])
         raise ValueError("React 前端构建失败")
     required=(ROOT/"reader/site/index.html",ROOT/"reader/site/assets/index.js",ROOT/"reader/site/assets/index.css",ROOT/"reader/site/product/reader-word-panel.jpg",ROOT/"reader/site/product/workspace-current.jpg",ROOT/"reader/site/product/learning-insights.png")
+    brand_assets=("rynenglish-mark.svg","rynenglish-favicon.ico","rynenglish-apple-touch.png","rynenglish-icon-320.png","rynenglish-icon-512.png")
+    required+=tuple(ROOT/"reader/site/brand"/name for name in brand_assets)
     missing=[str(path.relative_to(ROOT)) for path in required if not path.is_file() or path.stat().st_size==0]
     if missing:raise ValueError("React 前端构建产物不完整："+", ".join(missing))
+    html=(ROOT/"reader/site/index.html").read_text(encoding="utf-8")
+    if "<title>RynEnglish" not in html or any("/brand/"+name not in html for name in brand_assets[:3]):
+        raise ValueError("React 前端品牌入口不完整：缺少 RynEnglish 标题或图标引用")
     summary=next((line for line in reversed(output.splitlines()) if line.strip()),"构建完成")
     job.write(f"React 生产前端已构建：{summary[:500]}")
 

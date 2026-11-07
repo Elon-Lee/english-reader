@@ -33,6 +33,7 @@ from saas_media import MediaService
 from saas_membership import MembershipService, as_json, timestamp
 from youtube_subtitles import has_translated_english_track, select_chinese_track, select_native_english_track
 from text_segmentation import WORD_RE, split_sentences
+from reading_document import build_reading_document
 
 
 IMPORT_FEATURES={}
@@ -67,7 +68,7 @@ class WorkspaceImportService:
 
     @staticmethod
     def _public(task:dict[str,Any])->dict[str,Any]:
-        return {"id":task["id"],"kind":task["kind"],"status":task["status"],"title":task["title"],"originalFilename":task["original_filename"],"sourceUrl":task["source_url"],"sourceAssetId":task["source_asset_id"],"outputBookId":task["output_book_id"],"planVersion":task["plan_version_id"],"progress":int(task["progress"]),"step":task["step"],"error":task["error"],"createdAt":timestamp(task["created_at"]),"updatedAt":timestamp(task["updated_at"]),"completedAt":timestamp(task["completed_at"])}
+        return {"id":task["id"],"kind":task["kind"],"status":task["status"],"title":task["title"],"originalFilename":task["original_filename"],"sourceUrl":task["source_url"],"sourceAssetId":task["source_asset_id"],"outputBookId":task["output_book_id"],"planVersion":task["plan_version_id"],"progress":int(task["progress"]),"step":task["step"],"error":task["error"],"awaitingAudioUpload":bool(as_json(task["metadata_json"]).get('awaitingAudioUpload')),"createdAt":timestamp(task["created_at"]),"updatedAt":timestamp(task["updated_at"]),"completedAt":timestamp(task["completed_at"])}
 
     def create(self,user_id:str,kind:str,title:str,filename:str,idempotency_key:str,source_url:str="",metadata:dict[str,Any]|None=None)->dict[str,Any]:
         metadata={**(metadata or {}),"officialImport":self.official}
@@ -141,7 +142,8 @@ class WorkspaceImportService:
                 task=self._task(cursor,user_id,task_id);old_asset=task.get("source_asset_id")
                 aborted=task["status"] not in {"uploading","failed"}
                 if not aborted:
-                    cursor.execute("UPDATE workspace_import_tasks SET source_asset_id=%s,original_filename=%s,status='queued',progress=15,step='源文件已上传，等待处理',error='',updated_at=NOW() WHERE id=%s",(asset["id"],safe_name,task_id))
+                    step='文档已上传，等待完整配套音频' if as_json(task['metadata_json']).get('awaitingAudioUpload') else '源文件已上传，等待处理'
+                    cursor.execute("UPDATE workspace_import_tasks SET source_asset_id=%s,original_filename=%s,status='queued',progress=15,step=%s,error='',updated_at=NOW() WHERE id=%s",(asset["id"],safe_name,step,task_id))
                     if old_asset and old_asset!=asset["id"]:
                         cursor.execute("UPDATE media_assets SET status='deleted',deleted_at=NOW() WHERE id=%s",(old_asset,))
                     cursor.execute("SELECT * FROM workspace_import_tasks WHERE id=%s",(task_id,));uploaded=self._public(self.accounts._one(cursor)or{})
@@ -149,6 +151,10 @@ class WorkspaceImportService:
             self.media.delete(user_id,asset["id"])
             raise SaaSError("import_task_terminal","任务在上传期间已取消或结束。",409)
         return uploaded
+
+    def audio_upload(self):
+        from import_audio_upload import CompanionAudioUpload
+        return CompanionAudioUpload(self)
 
     def upload_audio(self,user_id:str,task_id:str,filename:str,data:bytes)->dict[str,Any]:
         if not data or len(data)>UPLOAD_LIMITS['mp3']:
@@ -222,16 +228,20 @@ class WorkspaceImportService:
                 except subprocess.CalledProcessError as exc:raise SaaSError("pdf_ocr_failed","PDF OCR 处理失败。",422) from exc
                 try:pages_data=json.loads(ocr_file.read_text(encoding="utf-8"))
                 except (OSError,json.JSONDecodeError) as exc:raise SaaSError("pdf_ocr_failed","PDF OCR 没有产生可读文本。",422) from exc
-                lines=[]
-                for page in pages_data if isinstance(pages_data,list) else []:
+                lines=[];blocks=[]
+                for page_index,page in enumerate(pages_data if isinstance(pages_data,list) else []):
+                    if not isinstance(page,dict):continue
+                    page_lines=[]
                     for line in page.get("lines",[]) if isinstance(page,dict) else []:
                         value=str(line.get("text","")).strip() if isinstance(line,dict) else ""
-                        if value:lines.append(value)
-                return "\n\n".join(lines),{"extractor":"local-pdf-ocr","pages":len(pages_data) if isinstance(pages_data,list) else 0,"lines":len(lines)}
+                        if value:lines.append(value);page_lines.append(value)
+                    if page_lines:blocks.append({"type":"paragraph","text":"\n".join(page_lines),"page":page_index+1})
+                return "\n\n".join(lines),{"extractor":"local-pdf-ocr","pages":len(pages_data) if isinstance(pages_data,list) else 0,"lines":len(lines),"documentBlocks":blocks}
         if suffix==".epub":
             try:
-                cover=source.with_name('epub-cover.jpg');text,cover_path=self._epub_text(source,cover)
-                return text,{"extractor":"epub-html",**({"coverPath":cover_path} if cover_path else {})}
+                source_index={}
+                cover=source.with_name('epub-cover.jpg');text,cover_path,blocks=read_epub(source,cover,structured=True,source_index=source_index)
+                return text,{"extractor":"epub-html","documentBlocks":blocks,"sourceDocument":source_index,**({"coverPath":cover_path} if cover_path else {})}
             except (OSError,zipfile.BadZipFile,KeyError,ValueError,ParseError) as exc:raise SaaSError("epub_invalid","EPUB 文件无法读取。",422) from exc
         raise SaaSError("unsupported_document","当前原生文档处理器仅支持 TXT、Markdown、PDF 和 EPUB。",422)
 
@@ -654,9 +664,20 @@ class WorkspaceImportService:
                     raise
                 pending_variant_paths=[]
             else:
-                text,extractor=self._document_text(source,work["kind"]);sentences=self._sentences(text)
+                text,extractor=self._document_text(source,work["kind"])
+                blocks=extractor.pop("documentBlocks",None)
+                # PDF and EPUB own their extraction strategies. Other resource
+                # types keep the established segmentation and media pipeline.
+                reading_document=None
+                if source.suffix.lower() in {'.pdf','.epub'} and blocks is not None:
+                    sentences,reading_document=build_reading_document(blocks,source.suffix.lower().lstrip('.'))
+                    if source.suffix.lower()=='.epub':
+                        reading_document['source']=extractor.pop('sourceDocument')
+                        reading_document['source']['assetId']=work['source_asset_id']
+                else:sentences=self._sentences(text)
                 if not sentences:raise SaaSError("empty_import_text","未从源文件提取到可导入的文本。",400)
                 source_type="document" if work["kind"]=="document" else "text";book_id=f"private-{task_id}";data={"id":book_id,"title":title,"englishTitle":title,"sentences":sentences,"sourceType":source_type,"import":{"kind":work["kind"],"extractor":extractor}}
+                if reading_document:data["readingDocument"]=reading_document
                 if extractor.get("coverPath"):
                     cover_path=Path(extractor["coverPath"]);cover_relative=cover_path.relative_to(self.media.media_root).as_posix();data["cover"]=f"/api/media/{work['source_asset_id']}?variant=cover";pending_variant_paths.append(cover_relative)
                     try:self.media.add_variants(user_id,work["source_asset_id"],[{"name":"cover","storagePath":cover_relative,"contentType":mimetypes.guess_type(cover_path.name)[0] or "image/jpeg"}])
@@ -785,6 +806,7 @@ class WorkspaceImportService:
         if cancelled.get("source_asset_id"):
             try:self.media.delete(user_id,cancelled["source_asset_id"])
             except SaaSError:pass
+        self.audio_upload().discard(user_id,task_id)
         return {"task":self._public(cancelled),"idempotent":False}
 
     def delete_invalid(self,user_id:str)->dict[str,Any]:

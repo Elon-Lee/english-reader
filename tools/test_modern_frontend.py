@@ -29,6 +29,13 @@ def check(condition: bool, message: str) -> None:
 def main() -> int:
     check(INDEX.is_file(), "reader/site/index.html missing")
     html = INDEX.read_text(encoding="utf-8")
+    check('<title>RynEnglish' in html and 'og:site_name' in html and 'og:url' in html, "RynEnglish title and social metadata missing")
+    for name in ('rynenglish-mark.svg', 'rynenglish-favicon.ico', 'rynenglish-apple-touch.png', 'rynenglish-icon-320.png', 'rynenglish-icon-512.png'):
+        source = ROOT / 'frontend/public/brand' / name
+        built = SITE / 'brand' / name
+        check(built.is_file() and built.read_bytes() == source.read_bytes(), f"brand asset missing or stale: {name}")
+    for name in ('rynenglish-mark.svg', 'rynenglish-favicon.ico', 'rynenglish-apple-touch.png'):
+        check(f'/brand/{name}?v=' in html, f"versioned brand icon reference missing: {name}")
     check('/assets/index.js' in html, "root site must use the fixed production entry")
     check('/assets/index.css' in html, "root site must load the production stylesheet")
     check(re.search(r'/assets/index\.js\?v=[A-Za-z0-9_-]+', html), "root entry must carry a cache-busting build version")

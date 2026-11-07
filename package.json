@@ -11,6 +11,9 @@
     "deploy:jdcloud": "python3 tools/deploy_remote.py --target 京东云服务器 --saas --timeout 14400",
     "sync:jdcloud:public": "python3 tools/deploy_remote.py --target 京东云服务器 --sync-public",
     "test:modern": "python3 tools/test_modern_frontend.py",
+    "test:extensive": "node --test frontend/src/utils/extensiveReading.test.mjs frontend/src/utils/epubSource.test.mjs && python3 -m unittest discover -s tools -p test_reading_document.py && python3 -m unittest discover -s tools -p test_epub_document.py && python3 -m unittest discover -s tools -p test_source_reading.py",
+    "test:extensive:browser": "node tools/test_extensive_reader_browser.cjs",
+    "test:epub-source:browser": "node tools/test_epub_source_browser.cjs",
     "test:ui": "python3 tools/test_mobile_reader_presentation.py && python3 tools/test_membership_presentation.py && python3 tools/test_remote_reader_presentation.py && python3 tools/test_reader_performance.py",
     "check:js": "node --check reader/app.js"
   },
@@ -21,7 +24,11 @@
   "dependencies": {
     "bootstrap": "5.3.3",
     "bootstrap-icons": "1.11.3",
-    "dayjs": "^1.11.23"
+    "css-tree": "3.2.1",
+    "dayjs": "^1.11.23",
+    "dompurify": "3.4.17",
+    "fflate": "0.8.3",
+    "pdfjs-dist": "5.4.624"
   },
   "devDependencies": {
     "@ant-design/icons": "^6.0.0",

@@ -72,6 +72,7 @@ class WorkspaceService:
                 cursor.execute("UPDATE media_assets SET status='deleted',deleted_at=NOW() WHERE owner_id=%s AND content_book_id=%s AND status='active'",(user_id,book_id))
                 cursor.execute("UPDATE asset_variants SET deleted_at=NOW() WHERE asset_id=ANY(%s) AND deleted_at IS NULL",(asset_ids,))
                 cursor.execute("DELETE FROM content_books WHERE id=%s AND owner_id=%s",(book_id,user_id))
+                cursor.execute('DELETE FROM workspace_settings WHERE user_id=%s AND key=%s',(user_id,'source-position:'+book_id))
                 cursor.execute("INSERT INTO security_events(id,user_id,event_type,metadata_json) VALUES(%s,%s,'workspace_permanent_delete',%s::jsonb)",(new_id(),user_id,json.dumps({"bookId":book_id,"title":title})))
         from saas_media import MediaService
         from saas_membership import MembershipService
@@ -88,8 +89,9 @@ class WorkspaceService:
                     if text:sentences.append({"id":str(item.get("id",len(sentences))),"text":text,"translation":str(item.get("translation","")).strip(),"start":item.get("start"),"end":item.get("end"),"timingPolicy":item.get("timingPolicy"),"page":item.get("page"),"section":item.get("section"),"words":item.get("words",[]) if isinstance(item.get("words",[]),list) else []})
                 from saas_media import MediaService
                 MediaService(self.accounts,None).attach_reader_captions(cursor,book_id,sentences)
-                cursor.execute("SELECT last_sentence_id,reading_seconds,completed_at FROM workspace_progress WHERE user_id=%s AND content_book_id=%s",(user_id,book_id));progress=self.accounts._one(cursor)or{}
-                return {"book":{"id":book["id"],"title":book["title"],"englishTitle":book["english_title"],"series":book["series"],"level":book["level"],"resourceType":book["source_type"],"duration":float(book["duration"]),"sentences":sentences,"mediaAssets":self._asset_summaries(cursor,book_id),"canWatchHdVideo":can_watch_hd_video(cursor,user_id),"progress":{"lastSentenceId":progress.get("last_sentence_id","") or "","readingSeconds":int(progress.get("reading_seconds",0)or 0),"completedAt":timestamp(progress.get("completed_at"))}}}
+                cursor.execute("SELECT last_sentence_id,reading_seconds,completed_at,(SELECT value_json FROM workspace_settings WHERE user_id=%s AND key=%s) AS reading_location FROM workspace_progress WHERE user_id=%s AND content_book_id=%s",(user_id,'source-position:'+book_id,user_id,book_id));progress=self.accounts._one(cursor)or{}
+                from reading_document import reader_document
+                return {"book":{"id":book["id"],"title":book["title"],"englishTitle":book["english_title"],"series":book["series"],"level":book["level"],"resourceType":book["source_type"],"duration":float(book["duration"]),"sentences":sentences,"readingDocument":reader_document(data,sentences),"mediaAssets":self._asset_summaries(cursor,book_id),"canWatchHdVideo":can_watch_hd_video(cursor,user_id),"progress":{"readingLocation":as_json(progress.get("reading_location")) or None,"lastSentenceId":progress.get("last_sentence_id","") or "","readingSeconds":int(progress.get("reading_seconds",0)or 0),"completedAt":timestamp(progress.get("completed_at"))}}}
 
     def vocabulary(self,user_id:str,book_id:str="")->dict[str,Any]:
         with self.accounts.transaction() as connection:
@@ -149,12 +151,18 @@ class WorkspaceService:
                 self._user(cursor,user_id);cursor.execute("SELECT day,payload FROM content_learning_daily WHERE owner_id=%s ORDER BY day DESC LIMIT %s",(user_id,max(1,min(730,int(limit)))))
                 return {"days":[{"day":row["day"].isoformat(),"payload":as_json(row["payload"])} for row in self.accounts._many(cursor)]}
 
-    def save_progress(self,user_id:str,book_id:str,last_sentence_id:str,completed:bool=False)->dict[str,Any]:
+    def save_progress(self,user_id:str,book_id:str,last_sentence_id:str,completed:bool=False,reading_location=None)->dict[str,Any]:
         sentence_id=str(last_sentence_id or "").strip()
         if not sentence_id or not isinstance(completed,bool):raise SaaSError("invalid_progress","阅读进度数据无效。",400)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 self._user(cursor,user_id);storage_book_id,public_book_id=self._learning_book(cursor,user_id,book_id,True)
+                if reading_location is not None:
+                    from source_reading import validate_source_location
+                    cursor.execute('SELECT data_json FROM content_books WHERE id=%s',(storage_book_id,))
+                    reading_location=validate_source_location(as_json(self.accounts._one(cursor)['data_json']),reading_location)
+                    cursor.execute('INSERT INTO workspace_settings(user_id,key,value_json) VALUES(%s,%s,%s::jsonb) ON CONFLICT(user_id,key) DO UPDATE SET value_json=EXCLUDED.value_json,updated_at=NOW()',
+                                   (user_id,'source-position:'+storage_book_id,json.dumps(reading_location)))
                 if completed:
                     cursor.execute("SELECT data_json FROM content_books WHERE id=%s",(storage_book_id,));data=as_json(self.accounts._one(cursor)["data_json"])
                     rows=data.get("sentences",[])

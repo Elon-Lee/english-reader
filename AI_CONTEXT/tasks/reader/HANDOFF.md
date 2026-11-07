@@ -1,11 +1,64 @@
 # PC 阅读器交接
 
-更新时间：2026-10-24（Asia/Shanghai）
+更新时间：2026-11-07（Asia/Shanghai）
+
+## 阅读界面细节调整（2026-11-07）
+
+- 翻页时长由 460ms 调整为 900ms，并放缓缓动；保留 reduced-motion 和动画清理。EPUB/PDF 各自原文件策略不变。
+- 原 EPUB 书页外框与 iframe 使用当前原文 body/root 的实际底色，透明时回退白色；PDF 外框白底，翻页纸色同步，消除阅读框内的背景断层，不覆盖原文段落样式。
+- 页脚紧凑显示 `当前页 1/7页`，输入框按位数适配且仍能跳页；保存状态统一为“进度已保存/正在保存进度/重试保存进度”，与上方当前页采用等宽两侧列居中对齐。
+- PC 精读原始图片铺满媒体列宽、保持源比例；长图在列内滚动，消除容器黑边，不裁剪或拉伸图片。
+- 本地标题、favicon、认证/工作区/官网品牌已同步生产 RynEnglish 官方资源；原因是旧本地源码未合入线上品牌变更。具体文件见 brand-assets 交接。
+- 本地构建、modern smoke、UI 22 项、阅读器 Node 7 项/Python 15 项、JS/Python 编译/diff 检查通过；Chrome 在本地与生产基线候选检查真实原书两章、EPUB 2/3/目录兜底、900ms 动画、纸色/页码/对齐、图片横竖/左右上下布局，另检查真实三入口验证码。候选的 PDF 原页/空白页/查词/恢复及音频补传回归通过；测试在隔离浏览器拦截业务 API，不写真实用户数据。
+- 已定向发布入口 `7b99f4600df6`、阅读器 `source-reader-72d99f5ab867.js`，新增 5 个版本化资产 + HTML，248 个既有文件哈希保持；无后台更新、数据库迁移或重启。备份 `backups/saas/reader-polish-20261107/`，清单 `manifests/history/reader-polish-20261107.json`。发布前后哈希和源站 HTTPS/SaaS/Redis 健康通过；实际生产静态文件经 Chrome 复验 EPUB 2/3/兜底/真实两章、背景/页码/状态对齐/900ms 动画、原图两布局、PDF 原页/空白页/查词/恢复，以及真实品牌登录/验证码开关/401/新资产 200，均通过，无页面异常。日志和截图在 `/private/tmp/english-reader-polish/deploy/`。
+- 关键文件：`useBookPageTurn.jsx`、`EpubSourceReader.jsx`、`ExtensiveReader.jsx`、`extensive-reader.css`；浏览器回归 `tools/test_reader_polish_browser.cjs`、`tools/test_reader_interactions_browser.cjs`。
+
+## 阅读交互修复（2026-11-07）
+
+- 阅读器切换按钮、提示和系统设置将“普通模式”统一改为“精读模式”；持久化仍使用既有 `focusMode`，不迁移数据。
+- 原文件 EPUB 的目录优先读取 EPUB 3 nav / EPUB 2 NCX 的真实标题与片段锚点；缺失或只声明封面 Start 时，使用已存正文标题和真实句地址。最新《The Stars》两个章节都在 `index.xhtml`，原 NCX 只有 Start；不再把封面/正文两个 spine 文件误当成两章，同一 XHTML 内反复点击目录可定位标题。无需重导入或回填旧书。
+- `EpubSourceReader.jsx` 统一处理目录和原文链接的章节/锚点/句地址跳转，目录显示当前章节，页脚区分章节数量与当前正文文件的屏幕页。PDF 保持独立原页策略。
+- `sourceWordHover.mjs` 为 EPUB DOM Range / PDF.js 文字层提供真实可查词范围的背景、下划线和手形指针；保留原段落和 CSS 结构，点击仍走既有查词 API。精读正文补充悬停背景。
+- `useBookPageTurn.jsx` 在按钮、方向键与页码跳转时显示 460ms 纸页转动及阴影，兼容 EPUB / PDF / 既有段落泛读，动效限制在纸面内；遵循 reduced-motion。Vite 将复用 hook 单独打包为 `bookPageTurn`，避免 EPUB 懒加载反向依赖主入口。
+- 已完成本地 Vite 4173 + Python 8790 调试；远程 PostgreSQL / Redis / 验证码使用 SSH 回环隧道，媒体经 Vite 转发远端鉴权接口。启动和日志见 platform-operations；后续先在此环境验证，再发布。
+- 验证：独立目录构建、modern smoke、UI 22 项、Node 7 项 / Python 文档与位置 15 项、JS 检查、Python 编译及 diff 检查通过。Chrome 在本地源码和生产基线组装候选上检查原 EPUB/PDF、查词背景/手形、空白页、目录反复跳转/刷新恢复、翻页与 reduced-motion、上传断点重试；新增 `tools/test_reader_interactions_browser.cjs` 覆盖 EPUB 2/3、目录缺失和最新真实原文件。隔离浏览器拦截账号与写 API，不写真实用户学习数据。
+- 已定向发布入口 `596c367b06f6`（模块 `source-reader-093be4088218.js`），7 个新增资产 + HTML，241 个既有静态文件哈希保持；无后台修改、数据库迁移或服务重启。备份 `backups/saas/reader-interactions-20261107/`，清单 `manifests/history/reader-interactions-20261107.json`。发布后真实静态文件的 EPUB 2/3/目录缺失/最新原书、PDF 原页/查词/空白页、设置模式名称均经 Chrome 复验通过，无页面异常；真实登录页/验证码开关/401 保护、源站 HTTPS/Redis 健康通过。
+
+## 当前原文件泛读（2026-11-07 已发布京东云）
+
+- 目标：泛读直接展示鉴权原文件；PDF 保留实际页、尺寸、图文与空白页，EPUB 保留原始 XHTML 的段落、CSS、插图和嵌入字体。学习分句与原音继续使用独立原流程，旧书不回填。
+- `EpubSourceReader.jsx` 仅对含 `readingDocument.source.version=1` 的新 EPUB 启用；旧结构化 EPUB 保留既有阅读方式，试读使用裁剪段落，不加载完整原件。固定版式按原 viewport 等比显示，一项 spine 对应一页；普通流式 EPUB 按窗口分页，原字号/段距/缩进不覆盖，Aa 明示页数随窗口变化。
+- `epubSource.mjs` 按需获取鉴权原 EPUB，浏览器有界解压后只挂载当前章节；当前仍整包下载，不是网络逐章流式读取。DOMPurify 清理主动内容，CSS-tree 解析原 CSS 和嵌套导入，将本地图片/字体换为受控 Blob URL，禁止外部网络；无脚本的同源 sandbox iframe + CSP 隔离章节，退出释放 Blob。加密 EPUB 明确报不支持。
+- `sourceTextRanges.mjs` 通过原 DOM Range 与学习词地址建立索引，不插入 span 破坏原 CSS；EPUB 与 PDF.js 文字层共享。只有匹配真实正文的词才接现有查词 API；扫描 PDF 无可匹配文本时保留原图，不生成伪词地址。节点查询二分定位，避免长章逐词全表扫描。
+- 阅读位置沿用鉴权/CSRF `/api/workspace/progress`，附 `readingLocation`：PDF `{format:'pdf',page}`（包含空白页），EPUB `{format:'epub',chapter,offset}`。后端校验源格式与范围，在现有 `workspace_settings` 以 `source-position:<源书ID>` 按账号保存，与学习句进度同事务；不修改 schema，普通学习写入不清空原文位置。私人所有权、官方当前书架权限、试读隔离仍有效，永久删除清理对应位置。
+- 翻页、目录、原文内部链接、刷新/窗口变化锚点恢复、模式往返位置保留、学习工具“定位原句”、位置保存失败重试均已接入；显式 `sentence` 学习链接优先于历史源位置。切章只在新章节完成排版后报告位置，避免旧章词索引导致跳回。泛读继续暂停且不跟随原音。
+- 关键文件：`frontend/src/components/{EpubSourceReader,ExtensiveReader,PdfReadingPage}.jsx`、`frontend/src/utils/{epubSource,sourceTextRanges}.mjs`、`ReaderPage.jsx`、`tools/{epub_document,reading_document,source_reading,saas_workspace,saas_catalog,saas_imports,reader_server}.py`。新增依赖 fflate / DOMPurify / CSS-tree 已锁定并独立懒加载为 epub chunk；现有安装/升级会打包构建产物与全部 `tools/*.py`，Linux 无新增运行依赖。
+- 验证：生产构建（独立目录 `/private/tmp/english-reader-source-build`）、modern smoke、UI 22 项/JS 检查、Node 22 项、Python 文档/位置 15 项、Python 编译及 diff 检查通过。Linux 隔离 PostgreSQL 与单元共 61 项通过，删除清理另复验 2 项，含 EPUB 实际导入/所有者隔离、官方书架/试读权限、真实 PDF 空白页、MP3/视频与完整上传回归；未触碰生产业务数据，专用测试库 `source_reader_20261107_test` 已删除。
+- Chrome 脚本：`tools/test_epub_source_browser.cjs`（原 DOM/CSS/嵌套样式/图片/字体、查词/定位、隔离、精确位置/刷新/窗口变化/切章、固定画布、失败重试）；`tools/test_extensive_reader_browser.cjs`（既有 EPUB、资源入口限制、原音暂停、PDF 原页查词/空白页及恢复）；`tools/test_companion_audio_browser.cjs`（分段上传回归）。均使用独立浏览器上下文与拦截 API，不写真实账号。
+- 已按用户授权定向发布，入口 `/assets/index-source-abd3103b9d5f.js?v=abd3103b9d5f`，阅读器模块 `source-reader-095d7575ec22.js`，复用生产 React / Ant Design（43 个导出实现经 AST 校验），只替换原入口的阅读器 import。新增 7 个静态文件并保留 237 个既有文件哈希，原品牌/CSS/验证码/音频补传保持。后端 6 个源文档文件 + `reader_server` 进度参数的单行补丁；仅重启 SaaS，无 schema 迁移或旧书处理。本地常驻后端未重启。
+- 生产备份 `/srv/shiyue/backups/saas/source-reader-20261107/` 含通过 `pg_restore --list` 的数据库备份与旧代码；清单 `/srv/shiyue/manifests/history/source-reader-20261107.json`。基线 release 指针仍为 `code-20261106-113458-43116bfb`。候选后端 Linux 隔离库 61 项、原版/既有泛读/音频补传的候选与真实生产静态文件 Chrome 回归、真实登录/验证码/401/HTTPS 健康与发布哈希校验通过；业务 API 交互只在隔离上下文模拟，未写生产用户数据。专用 `source_reader_publish_20261107_test` 已删除。
+- 发布候选及脚本 `/private/tmp/english-reader-source-deploy/`，远程执行记录 `shared/.local/source-reader-publish-20261107/`。首次解包遇到测试夹具 reader 符号链接指向容器路径，未进入发布；将夹具重命名后解包/校验/备份/发布成功。该品牌源码缺口现已通过完整同步提交 `7b65f78` 补齐，见 brand-assets 交接。
+
+## 线上泛读基线（2026-11-07 已发布京东云）
+
+- 用户限定：专注模式改名为泛读模式；泛读不跟随、不恢复原音；只先支持 PDF / EPUB；旧书不回填或重跑，其他资源处理策略保持原流程。偏好仍使用 `focusMode` 布尔键兼容已有账号，无数据库迁移。
+- 泛读能力由 `canReadExtensively()` 统一判定：阅读 API 提供可访问 PDF 原件，或 `readingDocument.version=1 / format=epub` 且有原文块。音频、视频、YouTube、TXT、无结构的旧 EPUB 禁用入口并说明原因；默认泛读偏好也不能绕过能力判断。PDF 试读无全文媒体时不允许进入。
+- PC 泛读独立于逐句工作台：居中纸页、章节目录、左右按钮/方向键/PageUp/PageDown/空格翻页、跳页、进度条、字号/行距/宽度、护眼纸色。EPUB 保留新导入的段落、标点、显式换行、标题/章节和可用原书页码标签；阅读页数随窗口/字号调整，调整后按当前词锚点定位。
+- PDF 使用独立惰性加载的 `PdfReadingPage` / PDF.js 5.4.624，渲染鉴权原文件的实际页面、文字选择层、真实总页数、空白页、整页适配与缩放；不把 OCR 分句排版冒充原书页面。PDF 字号不重排，Aa 中仅提供适用设置。字体/CMap/WASM 本地随构建打包，资源路径带版本，worker URL 带版本，适配远程 Linux 静态前台与缓存。
+- 进入泛读暂停原始媒体和单词发音，播放事件/时钟同步/普通播放快捷键均有模式守卫；自动单词发音关闭，手动查词与显式词发音仍走现有真实 API。隐藏播放器、跟读入口和跟读标签；普通模式的媒体实例与工作台恢复保留。
+- EPUB 点击词继续使用真实句 ID / 单词索引查词和收藏，默认轻量词卡、按需展开学习工具。阅读位置仍沿用现有鉴权 `/api/workspace/progress` 的句级位置，新增保存中、成功、失败重试状态；试读不写进度。PDF 空白页及 EPUB 跨页长句的刷新恢复精度仍受现有句级进度模型限制。
+- 新文档模型仅在导入时建立，私有与官方阅读 API 都在原鉴权之后透传。官方试读按实际获准句集合裁剪段落和词地址，不返回后续段落/标题；旧书读取不写入数据。
+- 新增关键文件：`frontend/src/components/{ExtensiveReader.jsx,PdfReadingPage.jsx,extensive-reader.css}`、`frontend/src/utils/extensiveReading{.mjs,.test.mjs}`、`tools/reading_document.py`；PDF 资源打包见 `frontend/vite.config.js`；独立资源提取见 import-media 交接。
+- 已验证：生产构建与 modern smoke、UI 22 项、39 项阅读器 Node 回归、12 项 EPUB/文档/API 单元回归、静态前台路由 2 项、Python 编译及 diff 检查；Linux Python 3.11 的隔离 PostgreSQL 与单元回归共 18 项通过，包含 EPUB 实际导入/段落与词地址持久化/所有者隔离、真实 Linux PDF 处理（保留第 1/3 页及中间空白页）、TXT、MP3 和视频原路径。测试仅使用专用 `_test` 库及临时媒体，没有修改生产账号或书目。新增持久化回归见 `tools/test_saas_phase8_integration.py`。
+- 京东云基线仍为 `code-20261106-113458-43116bfb`，定向发布前端 `73a8f1652388`：独立阅读器模块 `extensive-reader-1345b43bb194.js`、作用域 CSS、PDF.js/字体资源，入口使用 `index-extensive-73a8f1652388.js`；旧入口及 CSS/其他线上模块字节保持不变。保留现有 React / Ant Design 实例和主题上下文，远端阅读器页脚使用 RynEnglish。后端 4 个既有文件与本地 HEAD 基线逐字节一致后才合入本轮补丁，新增 `reading_document.py`。未重处理旧书、未迁移 schema。
+- 备份 `/srv/shiyue/backups/saas/extensive-reader-20261107/` 含经 `pg_restore --list` 校验的数据库及原代码；清单 `/srv/shiyue/manifests/history/extensive-reader-20261107.json`。品牌源码现已通过完整同步提交 `7b65f78` 补齐。
+- 浏览器脚本：`PLAYWRIGHT_MODULE=<playwright-core路径> READER_TEST_BASE=<前台URL> node tools/test_extensive_reader_browser.cjs`；可设 `READER_TEST_BOOK` 为隔离书籍 JSON。构建目录 `/private/tmp/english-reader-extensive-build`；发布候选及远端截图 `/private/tmp/english-reader-extensive-deploy/`。Chrome 已检查原段落、翻页/重排定位/目录/真实查词请求地址、无音频同步、试读与资源限制、PDF 原页/空白页和加载/保存失败重试；业务 API 由测试上下文拦截，生产登录页另用真实未登录 API 检查 RynEnglish、验证码开启及 401 访问保护，无页面异常。
+- 源站标准 HTTPS 首页/API 200、SaaS/Redis 健康、发布与保留文件哈希一致。开发机公网访问 `rynenglish.com:443` 仍有既有 TLS 超时，SSH 隧道可正常访问真实生产前台，公网外部访问需用户所处网络确认。
 
 ## 现状
 
-- 面向 PC 的 React 阅读器已经覆盖普通、护眼、专注三种呈现状态，使用 SaaS API 和鉴权后的原始音视频。当前只在本机验证，尚未发布生产。
-- 本地前端开发入口由 `npm run dev:modern` 运行在 `127.0.0.1:5173`；`./start-reader.sh --saas-local` 单独启动 SaaS 后端 `8790` 和调试 SMTP `1025`。后端健康检查为 `/api/health`。调试 SMTP 仍用于在 `.local/smtp-outbox` 捕获注册验证和找回密码邮件，不能作为无用逻辑删除。
+- 面向 PC 的 React 阅读器提供普通学习、护眼配色及受资源能力限制的泛读模式，使用 SaaS API 和鉴权后的原始音视频。当前线上原文件泛读见首节；EPUB 需新导入才建立新索引，旧书按用户要求保持原样。
+- 本地前端开发入口由 `npm run dev:modern` 运行在 `127.0.0.1:4173`；`./start-reader.sh --saas-local` 单独启动 SaaS 后端 `8790` 和调试 SMTP `1025`。后端健康检查为 `/api/health`。调试 SMTP 仍用于在 `.local/smtp-outbox` 捕获注册验证和找回密码邮件，不能作为无用逻辑删除。
 - 如果启动时报端口已占用，先检查现有服务是否健康，不要直接再起一份。健康时复用该实例；确认是残留或无响应进程后，使用 `./start-reader.sh --stop-saas-local` 清理，再执行 `./start-reader.sh --saas-local`。
 - 2026-10-24 已清理一个无响应的残留 `8790` 进程并重启，健康接口和两个监听端口均已验证。本次操作未修改业务代码。
 - 2026-10-24 新增阅读推进方式：默认“当前行轮播”保持原逐句跟随；可选择“整屏阅读”，当前句自然向下推进，到达可见区域底部后才把下一条未读句移到正文顶部。选项同时位于 Aa 阅读设置和系统设置，原有账号未保存该字段时按当前行轮播处理。两处共用 `ReaderFlowControl.jsx`，底层 `SettingsRadioGroup.jsx` 也用于默认学习空间、正文布局和界面密度，统一轻量 Radio 单选、浅色选中背景和细边框；圆点、背景、边框及文字通过 Ant Design 主题 Token 跟随松林绿/雾蓝/鸢尾紫，弹窗不依赖 Layout 的 CSS 变量继承。行为说明实时变化，阅读设置保持紧凑间距。
@@ -25,10 +78,10 @@
 ### 页面与模式
 
 - 正文、原媒体和学习工具组成单视口工作台；字幕列独立滚动，页面外层不随播放滚动。
-- 普通模式显示完整阅读工作台；专注模式使用连续纸面与紧凑播放器，隐藏媒体和侧栏但保留快捷键。两种模式共用同一个媒体实例、字号、笔记和活动草稿，退出后恢复普通模式此前的工具与媒体位置。
+- 普通模式显示完整阅读工作台；泛读模式使用独立原文书页与翻页导航，暂停并隐藏原音及跟读工具。两种模式共享字号、笔记和活动草稿，退出后恢复普通工作台的工具与媒体位置。
 - 护眼模式覆盖头部、正文、工具、播放器、浮层、翻译块和媒体区域。纸面与工具样式使用现有语义变量，不使用移动端布局替代 PC 页面。
 - 阅读器与系统设置不再使用“阅读 / 精读 / 影子模式”；前端忽略旧 `readerMode` 数据，不新增相关迁移。
-- Aa 设置管理字号、行距、正文宽度、护眼、固定侧栏和媒体位置；偏好通过现有鉴权 preferences API 校验并持久化。进入专注时临时收起侧栏，退出时恢复普通模式快照。
+- Aa 设置管理字号、行距、正文宽度及护眼，PDF 泛读只显示适用设置；固定侧栏和媒体位置仍在普通工作台管理。偏好通过现有鉴权 preferences API 持久化。进入泛读临时收起侧栏，退出恢复普通模式快照。
 - 阅读推进方式使用现有 preferences JSON 的 `readerFlowMode` 字段，值为 `line` 或 `screen`，无需数据库迁移。整屏阅读不会逐句调用滚动，只在当前句不能完整停留在可见区域时按正文顶部对齐，并保留当前句高亮、原音同步、手动切句和进度恢复。
 
 ### 媒体与播放

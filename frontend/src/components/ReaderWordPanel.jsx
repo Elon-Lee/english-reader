@@ -30,7 +30,7 @@ export default function ReaderWordPanel({ info, sentence, savedWord, meaning, no
     {info.dictionaryError && <div className="reader-light-service"><span>词典暂不可用</span><Button type="link" size="small" onClick={() => onRetry('dictionary')}>重试</Button></div>}
     <Space wrap className="reader-light-actions">
       <Button size="small" type={savedWord ? 'default' : 'primary'} icon={savedWord ? <CheckOutlined /> : <StarOutlined />} loading={saving && !savingDetails} disabled={Boolean(savedWord) || savingDetails || locked} onClick={() => onSave()}>{savedWord ? '已收藏' : '加入生词本'}</Button>
-      <Button size="small" onClick={onPractice}>练这一句</Button>
+      {onPractice&&<Button size="small" onClick={onPractice}>练这一句</Button>}
       <Button size="small" type="link" onClick={onExpand}>查看更多用法</Button>
       <Button size="small" type="link" onClick={onLocate}>定位原句</Button>
     </Space>

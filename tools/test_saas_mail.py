@@ -40,6 +40,21 @@ class MailTests(unittest.TestCase):
     def test_failure_is_false(self, _):
         self.assertFalse(self.service(465)._send_mail("to@example.test", "subject", "body"))
 
+    def test_auth_mail_brand_and_original_token_links(self):
+        service = SaaSService(environment={"APP_BASE_URL": "https://rynenglish.com"})
+        for method, path, subject in (
+            (service._send_verification, '/verify-email', '验证你的 RynEnglish 邮箱'),
+            (service._send_password_reset, '/reset-password', '重置 RynEnglish 密码'),
+        ):
+            with self.subTest(path=path), patch.object(service, '_send_mail', return_value=True) as send:
+                self.assertTrue(method('to@example.test', 'test token+/'))
+                email, title, body = send.call_args.args
+                self.assertEqual(email, 'to@example.test')
+                self.assertEqual(title, subject)
+                self.assertIn(f'https://rynenglish.com{path}?token=test%20token%2B/', body)
+                self.assertIn('RynEnglish\nEvery Page, A Deeper Understanding.', body)
+                self.assertNotIn('拾页', body)
+
 
 if __name__ == "__main__":
     unittest.main()

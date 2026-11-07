@@ -155,6 +155,28 @@ class PrivateWorkspaceTests(unittest.TestCase):
             with connection.cursor() as cursor:cursor.execute('DELETE FROM user_library WHERE user_id=%s AND catalog_book_id=%s',(viewer_id,catalog_id))
         with self.assertRaises(SaaSError):self.workspace.save_progress(viewer_id,catalog_id,'s2',True)
 
+    def test_source_locations_are_private_per_reader_and_require_official_access(self):
+        owner,viewer=str(self.owner['id']),str(self.other['id']);catalog_id='source-position-official'
+        structure={'version':1,'format':'pdf','blocks':[{'page':1,'text':'First.'},{'page':3,'text':'Last.'}]}
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE content_books SET data_json=data_json || %s::jsonb WHERE id=%s",(json.dumps({'readingDocument':structure,'import':{'extractor':{'pages':3}}}),self.book_id))
+                cursor.execute("INSERT INTO catalog_books(id,source_content_book_id,title,rights_status,publication_status) VALUES(%s,%s,'Source','licensed','published')",(catalog_id,self.book_id))
+                cursor.execute('INSERT INTO user_library(id,user_id,catalog_book_id) VALUES(%s,%s,%s)',(new_id(),viewer,catalog_id))
+        location={'format':'pdf','page':2}
+        self.workspace.save_progress(viewer,catalog_id,'s1',reading_location=location)
+        self.assertEqual(self.catalog.reader(viewer,catalog_id)['book']['progress']['readingLocation'],location)
+        self.assertIsNone(self.catalog.reader(viewer,catalog_id,trial=True)['book']['progress']['readingLocation'])
+        self.assertIsNone(self.catalog.reader(owner,catalog_id,trial=True)['book']['progress']['readingLocation'])
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:cursor.execute('DELETE FROM user_library WHERE user_id=%s AND catalog_book_id=%s',(viewer,catalog_id))
+        with self.assertRaises(SaaSError):self.workspace.save_progress(viewer,catalog_id,'s1',reading_location=location)
+        self.catalog.delete_book(str(self.admin['id']),self.book_id,'Source')
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT 1 FROM workspace_settings WHERE key=%s',('source-position:'+self.book_id,))
+                self.assertIsNone(cursor.fetchone())
+
     def test_owner_isolation_reader_vocab_annotation_and_activity(self):
         owner_id,other_id=str(self.owner["id"]),str(self.other["id"])
         books=self.workspace.list_books(owner_id)["books"];self.assertEqual(books[0]["id"],self.book_id);self.assertEqual(books[0]["mediaCount"],1)

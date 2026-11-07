@@ -1,5 +1,33 @@
 # 导入与媒体交接
 
+## 2026-11-07 原文件泛读索引（已发布京东云）
+
+- 新 EPUB 在现有独立导入分支调用 `read_epub(...,source_index=...)`，保留原返回接口；为原文件登记 `readingDocument.source={version:1,assetId,layout,spine:[{href,section,layout}]}`。解析全局与每个 itemref 的 fixed/reflow 版式，空/图片章节仍保留 spine 位置，文本章节 ID 与原 spine 索引一致。
+- 泛读读取鉴权原 EPUB 的 XHTML/CSS/字体/插图；导入索引负责原文定位和学习地址映射。既有 `blocks` 与分句仍服务普通学习、查词及原音对齐，不以重新排版的分句代替新书原文。PDF 继续按原页直接加载，OCR 只服务学习索引。
+- `reader_document()` 仅为完整授权阅读透传源索引；试读移除 source，继续按获准句裁剪段落。旧书不回填，TXT/Markdown/独立音视频/YouTube 不进入新 EPUB 策略，配套音频完整性与分段补传保持独立。
+- 原文页/章与文本偏移由现有进度接口校验后保存在每用户的 `workspace_settings`，无 schema 迁移；删除书籍同时清理位置。前端新依赖随构建产物打包，安装/升级现有 `code_files()` 覆盖新增 `tools/*.py` 与 reader 静态资源，远端 Linux 不需新增 Node/Python 运行依赖。
+- 验证：Linux 隔离 PostgreSQL/单元 61 项通过，最终位置删除清理 2 项复验通过，专用测试库 `source_reader_20261107_test` 已删除；EPUB/文档/位置单元 15 项、Node 22 项、构建/modern smoke/UI/JS/Python 编译/diff 检查通过。Chrome 原版 EPUB、既有泛读/PDF 和配套音频补传回归通过；验收脚本与产品边界见 reader 首节。当前 EPUB 整包下载、有界解压；加密 EPUB 不支持，流式 EPUB 无固定屏幕页数。
+- 已按用户授权发布，入口 `abd3103b9d5f`，备份 `/srv/shiyue/backups/saas/source-reader-20261107/`、清单 `/srv/shiyue/manifests/history/source-reader-20261107.json`。在当前生产基线上定向替换 reader import 和进度参数，保留 RynEnglish/验证码/分段补传。实际发布候选后端在 Linux 隔离库重新运行 61 项通过，候选与生产静态文件 Chrome 回归通过，未写真实账号或旧书；发布专用测试库 `source_reader_publish_20261107_test` 已删除。完整部署前仍须合并线上较新品牌源码。
+
+## 2026-11-07 再次停在 15%：配套音频分段补传（已发布）
+
+- 新任务 `8bfb4be97a97498e9ba8d0525615c17c` 的 EPUB 已上传；08:32:30 UTC 配套音频请求被上传完整性校验拒绝（400），随后响应断连。后端未收到音频、没有处理子进程。不是对齐模型卡住；具体是哪层连接中断仍无证据。原界面把等待音频显示为 queued / 15%，且不能原任务补传，造成再次卡住的观感。
+- 配套 MP3 改为独立 `tools/import_audio_upload.py` 策略：256 KiB 分段、每段 SHA-256/长度及合并后总长度校验、已接收分段持久化、幂等确认与完成凭据。刷新后选择同一完整文件，只发送缺失分段；最多三次自动重试。不同内容/长度拒绝混传，残缺音频不登记、不启动处理。取消清理本任务暂存；按账号锁定并检查存储额度。
+- 新增私人及官方同构接口 `GET .../{id}/audio-upload`、`POST .../{id}/upload-audio-chunk`、`POST .../{id}/complete-audio-upload`，保留登录、CSRF、所有者/管理员与官方范围检查。最后一个接口在完整校验后提交后台任务，仍轮询进度。普通文档、独立 MP3、视频等资源处理及原上传策略保持独立。
+- 私人导入列表和官方导入列表显示等待完整配套音频及“补传完整音频”，不再对未传完音频显示“继续处理”。`ResumeAudioUpload.jsx` 与 `companionAudioUpload.mjs` 共用新传输策略。代理补充安全的数字长度诊断，已知短读的断连响应不再抛 BrokenPipe 堆栈。
+- 已定向发布入口 `206bdef9aa05`，备份 `backups/saas/import15-20261107/`、清单 `manifests/history/import15-20261107.json`。新任务通过新分段服务接收 32 段完整原音（8,159,161 字节，SHA-256 `e065fd63be99e495af3f1010672b6d49fdbd11a53966e1fe6e6b124993275a98`），当前 EPUB 已重新声学对齐并完成入库：`private-8bfb4be97a97498e9ba8d0525615c17c`、206 句、89 个原文块、1,011.947378 秒、词覆盖率 98.81%。所有者阅读接口、完整音频媒体服务和原文件哈希通过；旧书不恢复、不重处理。结果 `shared/.local/import15-20261107/recovery-result.json`。首次恢复脚本在导入成功后的校验误从 reader 响应读取未公开的 audioAlignment 字段，修正为从鉴权所属书籍 data_json 只读校验，通过后未重新处理任务。
+- 验证：Linux Python 3.11 + 独立 PostgreSQL 共 26 项通过，覆盖分段、持久化补传、损坏/丢失分段、幂等、取消、所有者隔离、真实 HTTP 鉴权/CSRF、EPUB/PDF/独立 MP3/视频原路径；客户端单测 4 项通过。正式构建、modern smoke、UI 22 项、JS、Python 编译与 diff 检查通过；候选生产静态文件 Chrome 验收覆盖中断/刷新补传/确认丢失/不完整不启动、私人/官方补传及既有泛读，零页面异常。真实生产经 SSH 隧道验证新入口、RynEnglish 登录页、私人/官方 API 未登录 401、零页面异常；源站严格 HTTPS、SaaS/Redis 健康。专用测试库 `companion_upload_20261107_test` 已删除。
+
+## 线上 PDF / EPUB 原文结构基线（2026-11-07 已发布京东云）
+
+- 按用户要求只先启用 PDF / EPUB 泛读，旧书不回填、不重处理。`_document_text()` 的各资源分支独立提取；只有 PDF / EPUB 有 `documentBlocks` 时才执行 `build_reading_document()`。TXT/Markdown 保留 `_sentences()`，MP3/本地视频/YouTube 仍走原有转写和时间轴策略，未修改上传完整性、原音对齐或部署校验。
+- EPUB：`read_epub(...,structured=True)` 在读取 spine 顺序时提取纯文本段落、标题、引用、显式 br、章节与 EPUB pagebreak 标签；过滤 head/script/style，不将上传 HTML 直接插入页面。部分导出器的独立 CHAPTER/PART/BOOK 标签识别为标题。原 `(text,cover)` 调用保持兼容；结构模式多返回 blocks。
+- PDF：OCR/文本提取结果保留实际页索引（含空白页导致的不连续），作为学习分句与页的对应关系；原页排版和实际页数由阅读器直接渲染鉴权原 PDF，独立于 OCR 行分组。
+- 新书 `data_json.readingDocument` 含 version、format、pagination、blocks；每块保留完整标点/换行及词的 Unicode code point 位置、句 ID、词索引，分句只服务学习与原音，不重排原文块。文档配套原音对齐仍保留此结构，无数据库 schema 迁移。
+- 私有/官方 reader 接口完成原访问控制后返回结构；试读按允许句集合裁剪原文和词，避免整段/后续章节泄漏。无结构的旧 EPUB 禁止切泛读；PDF 有原件即可阅读原页，均不写回旧书。
+- 回归：`PYTHONPATH=tools python3 -m unittest tools/test_reading_document.py tools/test_epub_document.py` 12 项通过；Linux Python 3.11 的隔离 PostgreSQL 与单元检查共 18 项通过，包含新 EPUB 完整导入落库/段落及词地址/所有者隔离/幂等、真实 `/opt/shiyue/pdf_ocr` 处理三页含空白页 PDF（学习句页码 1/3）、TXT、MP3 与本地视频原流程。PDF 单元、官方试读裁剪及旧书只读均通过。新增实际 EPUB 持久化和 TXT/PDF 断言在 `tools/test_saas_phase8_integration.py`。本轮没有重新运行整本 EPUB 配套原音声学推理，原完整音频校验与对齐文件保持不变。
+- 已定向发布至基线 `code-20261106-113458-43116bfb`，前端版本 `73a8f1652388`，标准 HTTPS 源站与 SaaS/Redis 健康。备份 `/srv/shiyue/backups/saas/extensive-reader-20261107/`、发布清单 `/srv/shiyue/manifests/history/extensive-reader-20261107.json`。4 个后端基线先逐字节核对再应用本轮变更，现有上传校验、媒体对齐、前台代理及品牌/验证码保持原文件哈希；无 schema 迁移、旧书不回填。前端合入方式见 reader 与 platform-operations 交接。
+
 ## 2026-11-07 远程上传截断修复与完整原音恢复
 
 - 京东云基线实际为 `code-20261106-113458-43116bfb`，本轮按用户授权发布定向热修复，未重新初始化数据。备份 `/srv/shiyue/backups/saas/import-recovery-20261107/` 含可读取的 PostgreSQL dump 与原文件。保留线上 RynEnglish 品牌、验证码和其他功能。
@@ -93,7 +121,7 @@
 ## 未完成
 
 - 用户本轮仅授权人工字幕；无字幕/自动字幕的 VAD + ASR + CTC、新识别引擎、FFmpeg 阶段并行、持久 worker、阶段缓存/版本化原始结果和断点恢复均未实施。后续比较引擎需实测目标服务器端到端耗时、峰值内存、正文错误及人工逐词标注边界误差（P50/P95、多秒异常率）；不将其他硬件加速宣传当作本站承诺。用户原有“不改已有书籍”要求继续有效。
-- 可恢复分片上传、断点续传和失败分片重试。
+- 普通文档与独立音视频的可恢复分片上传（配套 MP3 已完成，见首部已发布节）。
 - 重复文件/URL 的前端确认流程。
 - YouTube 导入前的信息预览。
 - 批量导入 UI。

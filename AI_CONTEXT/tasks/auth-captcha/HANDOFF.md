@@ -8,6 +8,10 @@
 
 ## 当前状态
 
+- 2026-11-07 本地提示“验证码服务暂不可用”已修复：远端 Java 容器正常，本地 SSH 连接被远端关闭，导致 15432/16379/18080 等全部转发消失，认证配置读取也因数据库连接失败返回 503。不是验证码开关关闭。恢复隧道，并为 `tools/run_remote_dev.py` 增加常驻监督进程、15 秒保活和 1～30 秒退避自动重连；本地前后台无需重启。
+- 本地启动新增 PostgreSQL 真查询、Redis PING 和带内部认证的真实 ROTATE 图片生成检查，避免只看到转发端口或开关接口正常就报成功。已主动终止 SSH 子进程，确认自动重连及 SaaS/Redis 健康恢复；本地真实 `/api/auth/captcha/gen` 返回 200、图片及 HttpOnly Cookie 正常。Chrome 无 API mock 验证登录、注册、找回密码三入口加载 SDK/真实图片/弹窗/取消均通过，没有提交登录或注册、没有发送邮件、没有修改线上开关或账号。
+- 回归：新增 `tools/test_run_remote_dev.py` 3 项（监督重连/停止、依赖拒绝、图片检查）、原验证码 7 项、modern smoke、UI 22 项、独立前端构建、Python 编译与 diff 检查通过；真实 UI 脚本 `tools/test_remote_dev_captcha_browser.cjs`，截图 `.local/remote-dev/debug/captcha-loaded.png`。仅修复本地调试基础设施，未发布或重启生产服务。
+
 - 开发分支 `feat/auth-security-captcha`，基线 `main` / `1887b0d`；交付目标为 `main` / `origin/main`，用户已授权本轮提交、合并与推送，实际提交状态以 Git 为准。用户已授权修改和远程测试发布，保留线上数据、HTTPS 和 Cloudflare 隧道。
 - 已实现：Java 天爱 1.5.6 与同版本自托管 SDK，Python 一次性凭证、运营后台认证安全开关、React 验证弹窗、安装/升级/卸载集成。
 - SMTP 新增 465 隐式 TLS 与发件人名称，587 保留验证证书的 STARTTLS。

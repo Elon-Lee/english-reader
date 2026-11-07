@@ -9,9 +9,58 @@
 
 ## 当前实现（2026-11-07 核实）
 
-### 2026-11-07 品牌源码合并主分支
+### 2026-11-07 品牌分支正式合并与清理
 
-- `feat/rynenglish-brand`（`7b65f78`）正式合并 main，保留 main 的上传完整性与 Linux 对齐安装修复；仅两处交接文档冲突，业务源码自动合并。此为 Git 源码交付，不执行生产部署。
+- 合并提交 `d1ca8d9`（父提交 `0a2f966`、`7b65f78`）已推送 main，远程 `feat/rynenglish-brand` 已删除，本地无同名分支。保留 main 的上传完整性和 Linux 对齐部署修复；隔离构建、modern/UI、38 项邮件/部署/对齐/上传回归、JS/Python/diff 通过。
+- 原工作区 673 个文件内容/状态指纹保持，阅读器/导入和额外品牌门禁/测试改动仍未提交；仅交接状态在合并后更新。本轮不重新部署生产，不变更用户数据或现有本地服务。
+
+### 2026-11-07 完整品牌源码同步
+
+- 定位原品牌提交 `7b65f78` 在 `origin/feat/rynenglish-brand`，已上线但未合入 main；后续定向发布只保留线上产物，造成当前工作区遗漏。现按完整提交合入品牌组件/标语/SEO/邮件/法律/截图/运行提示及账号操作，保留本地导入、阅读器、对齐依赖等修复，详见 brand-assets。
+- 只读对比生产，`saas_auth.py`、`saas_commerce.py`、`saas_payments.py`、`reader_server.py` 与本地逐字节相同；本轮无生产代码/数据更新。生产已有品牌，相关源码未同步的历史阻塞已解除。
+- 安装/重装/升级共用的 `build_frontend_assets()` 新增五个品牌资产、RynEnglish 标题/图标引用检查；缺失中止。打包仍包含完整 reader、tools，新增回归覆盖缺图标/旧标题和品牌归档。无需增加 Linux 依赖或数据库迁移。
+- 构建/modern/UI/阅读器回归、19 项邮件与部署测试、相关编译/diff 通过；构建预览 12 路由、隔离账号操作/提醒失败重试、真实三入口验证码通过。后台已重新加载，保留本地前端和受监督隧道；临时候选服务验收后关闭。日志 `/private/tmp/english-reader-ryn-sync/`。
+
+### 2026-11-07 阅读界面细节发布
+
+- 已完成本地源码和生产基线组装候选验证后，定向发布入口 `index-source-7b99f4600df6.js`、模块 `source-reader-72d99f5ab867.js`、CSS `source-reader-51f9ee5047df.css`；翻页 900ms、原书连续底色、紧凑页码/居中保存状态、精读原图铺满列宽。沿用生产 React/Ant Design，43 个导出 AST 校验一致；5 个新增资产 + HTML，248 个保留文件哈希一致，无服务重启、数据库或后台变更。
+- 生产基线仍为 `code-20261106-113458-43116bfb`；备份 `backups/saas/reader-polish-20261107/{original-index.tar,manifest.json}`，执行目录 `shared/.local/reader-polish-20261107/`，清单 `manifests/history/reader-polish-20261107.json`。先版本化资产后原子切 HTML，发布前后哈希/严格源站 HTTPS/SaaS/Redis 健康通过。
+- 本地构建、modern/UI 22 项、阅读器 Node 7 项/Python 15 项、JS/编译/diff 通过；候选 Chrome 覆盖原 EPUB/PDF、真实两章与目录兜底、纸色/页码/保存状态/900ms 动画、横竖原图/两布局、音频补传；本地真实登录/注册/找回验证码出图通过。实际生产静态文件的四组目录/真实原书、页脚/动画、图片、PDF 原页/空白页/查词/恢复均复验通过，真实未登录入口品牌/验证码开关/401/全部新增资产 200 通过，无页面异常；业务写 API 均在浏览器上下文拦截。日志/截图 `/private/tmp/english-reader-polish/deploy/`，临时候选服务与验收隧道已结束，用户本地 4173/8790/受监督隧道保留。
+- 本地标题/图标使用 `frontend/public/brand/` 官方 RynEnglish 资产，详见 brand-assets。保留生产已有品牌/验证码/上传模块，本轮没有发布本地旧官网等无关变化。原品牌提交现已完整同步至当前工作区，见 brand-assets 交接。
+
+### 2026-11-07 本地远程数据调试与阅读交互发布
+
+- 按用户要求先本地测试再发布。`tools/run_remote_dev.py` 启动本地 SaaS 8790 / Vite 4173，通过 SSH 转发 PostgreSQL 15432→5432、Redis 16379→6379、原媒体后台 18791→8790、验证码 18080→18080；全部仅监听回环。Vite 可选 `SHIYUE_MEDIA_PROXY_TARGET` 优先代理 `/api/media/`，其余 API 走本地源码。用户在本地登录使用远程账号与数据，正常业务操作会写远程数据。
+- 已修复本地 SSH 被远端关闭后未恢复的问题：`pids.json` 的 `ssh` 现在记录监督进程，实际 SSH 子进程见 `tunnel.json`，断开后 1～30 秒退避重连，15 秒保活/3 次失败判定。终止时需停止监督进程，避免只停止 SSH 子进程又被拉起。启动不再只探测端口，还检查 PostgreSQL 真查询、Redis PING 和认证后的真实 ROTATE 出图。主动断线重连和本地 Chrome 三个认证入口的真实图片加载已通过；没有关闭验证码或修改生产服务/数据。单元 3 项及验证码 7 项、构建/modern/UI 22 项/编译/diff 均通过，详见 auth-captcha。
+- 运行时用 SSH 捕获容器所需数据库/Redis/会话/验证码配置，仅存进程环境，不打印或落盘密钥；禁用自动 migration / bootstrap，保持 remote 权限模式，未导入远端 SMTP/支付配置。后台启动已验证远程迁移状态，健康显示 SaaS/Redis ready，前端代理与真实验证码开关正常。
+- 当前环境 `.local/remote-dev/venv/bin/python` 为 Python 3.11.18，依赖来自 `requirements-saas.txt`，Node 22.16.0 在 `/private/tmp/node-v22.16.0-darwin-x64/bin`。启动：`.local/remote-dev/venv/bin/python tools/run_remote_dev.py --key '<已有 SSH 密钥路径>' --known-hosts /private/tmp/english-reader-jdcloud-known-hosts`；启动前需确认 4173/8790/隧道端口未占用。后台、前台、隧道已保留运行，PID 与权限受限的日志在忽略目录 `.local/remote-dev/{pids.json,backend.log,frontend.log,ssh.log}`；停止前核对 PID 对应命令再终止这些进程，不打印环境变量。
+- 阅读器修复精读名称、原文件目录/同文件锚点、词背景/指针和翻书动效；详见 reader。实时生产基线组装候选并完成本地浏览器/构建/相关测试后，定向发布入口 `index-source-596c367b06f6.js`，模块 `source-reader-093be4088218.js`；新增 7 个静态资产 + HTML，241 个原文件哈希保持，保留 RynEnglish/验证码/音频补传。无需后台更新、迁移或重启。
+- 发布目录 `shared/.local/reader-interactions-20261107/`；备份 `backups/saas/reader-interactions-20261107/{original-index.tar,manifest.json}`，清单 `manifests/history/reader-interactions-20261107.json`；基线/发布/保留哈希和严格源站 HTTPS 首页、SaaS/Redis 健康通过。仅前端发布，未写生产书籍/账号/学习数据。发布候选与验收日志 `/private/tmp/english-reader-interactions/deploy/`；发布后实际静态文件经隔离 Chrome 复验最新原书两章节、EPUB 2/3/缺失目录、词悬停/翻书、PDF 原页/空白页/查词/恢复、系统设置改名均通过；真实未登录入口的品牌/验证码/401 与全部新资产 200 通过，无页面异常。
+
+### 2026-11-07 原文件泛读定向发布
+
+- 用户授权“部署到线上我看一下”。当前入口 `/assets/index-source-abd3103b9d5f.js?v=abd3103b9d5f`，阅读器模块 `source-reader-095d7575ec22.js`，新增 EPUB/原文范围/PDF 模块及作用域 CSS 共 7 个静态文件；release 指针仍为 `code-20261106-113458-43116bfb`。PDF 原页与新 EPUB 原 XHTML/CSS/字体/图像直接加载，旧书不回填；具体产品行为见 reader、import-media。
+- 从实时生产归档构建候选，仅替换已发布入口的 reader import，原 ImportModal/LibraryPage/CatalogModeration 等字节保持；43 个 Ant Design 导出实现 AST 校验后映射，复用生产 React/主题。237 个保留文件哈希通过，包含原品牌/CSS/验证码/音频补传、旧入口和代理/对齐 helper。
+- 后端更新 `epub_document.py`、`reading_document.py`、`saas_imports.py`、`saas_catalog.py`、`saas_workspace.py`，新增 `source_reading.py`；`reader_server.py` 只改进度路由的 readingLocation 参数，保留线上较新品牌内容。正常安装/升级会打包全部 tools/*.py 与 reader 静态资源；无新 Linux 运行依赖和 schema 迁移。原品牌提交现已完整同步至当前工作区。
+- 发布前确认无活动导入，备份 `/srv/shiyue/backups/saas/source-reader-20261107/{database.dump,database.list,original-code.tar,deployment-manifest.json}`；pg_restore 列表验证通过。宿主机原子放置版本化资源与后端，仅重启 SaaS，健康通过再切 HTML；失败只恢复代码，不回滚数据库。清单 `/srv/shiyue/manifests/history/source-reader-20261107.json`，执行目录 `shared/.local/source-reader-publish-20261107/`。首次解包因容器路径测试符号链接失败、未改生产；重命名该夹具后成功发布。
+- 实际候选后端 Linux Python 3.11 隔离库/单元 61 项通过；候选及真实生产静态文件 Chrome 覆盖原 EPUB 字体/插图/排版/固定画布/精确位置/切章、PDF 原页查词与空白页恢复、资源限制、音频补传、失败重试，无页面异常。交互业务 API 使用隔离拦截，真实生产另核实 RynEnglish 登录、验证码开启、未登录接口 401、全部新增资源 200。
+- 源站严格 HTTPS 首页/API、SaaS/Redis、发布和保留文件哈希验收通过，生产导入状态仍 complete 5/cancelled 8，未写生产书籍或学习数据。专用 `source_reader_publish_20261107_test` 已删除。开发机公网域名 TLS 仍需区分既有网络限制，SSH 隧道验收正常。
+
+### 2026-11-07 配套原音可恢复上传定向发布
+
+- 用户报告线上再次停 15%；定位文档已到达、音频请求被完整性校验拒绝，后端未启动。已发布配套 MP3 的 256 KiB 分段校验、重试、断点补传及私人/官方列表恢复入口。具体业务/API/恢复状态见 `../import-media/HANDOFF.md`；不接受残缺音频，不改其他媒体处理策略。
+- release 指针仍为 `code-20261106-113458-43116bfb`，当前入口 `/assets/index-import15-206bdef9aa05.js?v=206bdef9aa05`，模块 `/assets/import-upload-6cf1568944cf.js`。只替换入口的 ImportModal、LibraryPage、CatalogModeration，复用原 React / Ant Design；官方组件变更前与基线做 AST 一致性检查，保留已上线泛读、品牌、验证码及 232 个既有静态文件哈希。
+- 后端新增 `import_audio_upload.py`，更新 `saas_imports.py`，reader_server 只移植两个导入路由方法、前台服务只移植 `_proxy`，避免覆盖线上较新代码。正常安装/升级的 `tools/*.py` 与完整 reader 归档自动包含新 helper 与构建结果，无新增依赖、配置或 schema 迁移。原品牌提交现已完整同步至当前工作区。
+- 备份 `/srv/shiyue/backups/saas/import15-20261107/` 包含通过 `pg_restore --list` 的生产 dump 和原文件；清单 `/srv/shiyue/manifests/history/import15-20261107.json`。先校验基线/候选哈希，宿主机原子替换，重启 SaaS 与前台服务，健康通过后切 HTML；发布文件与保留文件最终核验通过，源站严格 HTTPS 首页和 API 正常。未修改 current、数据库结构或旧书数据。
+- Linux 隔离测试 26 项、客户端 4 项、构建/modern/UI 22 项/JS/Python/diff 及候选 Chrome 私人/官方补传与泛读检查通过。新任务已恢复完成，完整原音 8,159,161 字节/1,011.947378 秒、词覆盖 98.81%、206 句/89 原文块；结果 `shared/.local/import15-20261107/recovery-result.json`。真实生产 SSH 隧道 Chrome 验证入口、品牌登录页、私人/官方 401 及零页面异常通过，线上 HTTPS/SaaS/Redis 与发布哈希复查正常。专用 `companion_upload_20261107_test` 已删除。
+
+### 2026-11-07 泛读模式定向发布
+
+- 用户明确授权“部署远程我看一下”。保留数据的定向升级已完成，release 指针仍为 `code-20261106-113458-43116bfb`；前端入口 `/assets/index-extensive-73a8f1652388.js?v=73a8f1652388`，阅读器模块 `/assets/extensive-reader-1345b43bb194.js`，新增作用域 CSS 与本地 PDF.js/字体/CMap/WASM。旧入口、CSS、RynEnglish 登录/品牌、验证码、上传修复及其他现有资产全部按原哈希保留。只替换生产入口中的 ReaderPage 与设置项文字；阅读器通过独立模块复用生产 React / Ant Design，43 个 Ant Design 导出实现经 AST 核对后映射，避免主题上下文分裂。
+- 后端只合入 `saas_imports.py`、`epub_document.py`、`saas_catalog.py`、`saas_workspace.py` 并新增 `reading_document.py`；4 个原文件与本地 HEAD 一致才应用改动。安装/升级的 `code_files()` 已使用 `tools/*.py` 并归档完整 reader 目录，新文件及 PDF 资源会随正常构建入包；原品牌提交现已完整同步至当前工作区。无 schema 迁移，既有书籍与学习记录不修改。
+- 发布前检查没有进行中的导入任务。备份 `/srv/shiyue/backups/saas/extensive-reader-20261107/database.dump`（`pg_restore --list` 可读取）及 `original-code.tar`；清单 `/srv/shiyue/manifests/history/extensive-reader-20261107.json`，含 210 个发布文件与 31 个保留文件的哈希。发布脚本/验证/回归日志在 `shared/.local/extensive-reader-20261107/`。第一次写入因 `/app` 代码只读挂载被拒绝，自动恢复原代码；修正为宿主机原子替换后成功。先放入版本化资产和后端、健康通过后原子切换 HTML；失败只回退代码，不自动恢复数据库。
+- Linux Python 3.11 隔离 PostgreSQL 回归与单元检查 18 项通过，包括真实 EPUB 导入持久化、真实 PDF OCR（含空白页）及 TXT/MP3/视频原路径。构建、modern smoke、UI 22 项、Python 编译、diff 与候选 Chrome 验收通过。实际生产登录页的品牌、验证码开启、未登录 API 401 与原 CSS 已检查，无页面异常；阅读交互用生产静态文件和隔离模拟 API 验证，不写入生产用户数据。
+- 源站标准 HTTPS 首页/API 200、后台与 Redis 健康，原前台/验证码/HTTPS 容器不需要重启；发布文件与保留文件的最终哈希一致，业务导入任务仍为完成 4/取消 8。通过 SSH 隧道服务真实生产静态文件的全套泛读浏览器检查通过（模拟 API，仅测试上下文），零页面异常；专用 `extensive_reader_20261107_test` 已删除。开发机公网域名 443 仍有既有 TLS 超时，外部网络访问需用户确认。
 
 ### 2026-11-07 Linux 安装与升级补齐原音对齐
 
@@ -24,17 +73,8 @@
 ### 2026-11-07 导入故障定向修复
 
 - 实机基线为 `code-20261106-113458-43116bfb`。本轮按用户授权备份 PostgreSQL（pg_restore --list 校验）与原代码后，定向热修复导入上传启动、部分原音校验和前端导入组件；保留线上数据、RynEnglish 品牌、验证码与现有 CSS。备份 `/srv/shiyue/backups/saas/import-recovery-20261107/`。
-- 当前 release 目录未切换。后续定向修复加入前台代理/后端上传完整性校验，并撤回接受部分音频的临时方案；前端仅替换 ImportModal/LibraryPage 组件。后续完整升级必须保留线上 11 月 6 日源码变更，不能直接用本地旧品牌构建覆盖。
+- 当前 release 目录未切换。后续定向修复加入前台代理/后端上传完整性校验，并撤回接受部分音频的临时方案；前端仅替换 ImportModal/LibraryPage 组件。线上 11 月 6 日品牌提交现已完整同步至当前工作区。
 - CPU 对齐环境与模型在既有持久化 `shared/.local/forced-aligner/`，不改容器挂载或全局配置。最终上传完整性修复已发布，前端入口 **`c03008a13c69`**；原任务已更正为完整音频 8,159,161 字节/1,011.947378 秒，2,073/2,098 词实测时间，原书 ID/学习记录保留。备份 `backups/saas/upload-integrity-20261107/` 含可读取 pgdump 和原代码，清单 `manifests/history/upload-integrity-20261107.json`；实际前台短读请求返回 400，后台/前台/Redis 健康。恢复详情见 `../import-media/HANDOFF.md`。
-### 2026-11-06 品牌第二轮与账号操作更新
-
-- 任务 #5 complete，当前版本 `code-20261106-113458-43116bfb`；数据库备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261106-113458-43116bfb.dump` 非空。调整 R/e 图标布局、购买提醒和设置入口，保留线上数据、容器技术标识与原访问链路；SaaS/Redis 健康、Cloudflare active。
-
-### 2026-11-06 RynEnglish 品牌已发布
-
-- 用户授权程序升级任务 #4 complete，当前版本 `code-20261106-111413-2385a2c5`；备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261106-111413-2385a2c5.dump`，保留远端数据、验证码开关、HTTPS/5173 和 Cloudflare。
-- R/e Logo、网站名称、slogan、favicon、邮件及法律文案更新；技术容器/目录/会话标识保留兼容。详见 `../brand-assets/HANDOFF.md`。
-- 候选/正式健康及迁移核验通过；服务器侧域名严格 TLS、新品牌首页、原公网 5173 严格 CA 验证200，Cloudflare active；Cloudflare 公网 Chrome 11 路由验收通过。本机直连正式域名443仍为既有 SSL 超时。
 
 ### 2026-11-05 验证码与 DirectMail 已发布
 

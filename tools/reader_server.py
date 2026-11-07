@@ -1129,7 +1129,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.reply(result);return
             if path=="/api/workspace/vocabulary":self.reply(WORKSPACE.save_vocabulary(user_id,str(item.get("bookId","")).strip(),str(item.get("sentenceId","")).strip(),item.get("wordIndex"),item.get("payload")),201);return
             if path=="/api/workspace/annotations":self.reply(WORKSPACE.annotate(user_id,str(item.get("bookId","")).strip(),str(item.get("sentenceId","")).strip(),item.get("wordIndex"),item.get("payload")));return
-            if path=="/api/workspace/progress":self.reply(WORKSPACE.save_progress(user_id,str(item.get("bookId","")).strip(),str(item.get("lastSentenceId","")).strip(),item.get("completed",False)));return
+            if path=="/api/workspace/progress":self.reply(WORKSPACE.save_progress(user_id,str(item.get("bookId","")).strip(),str(item.get("lastSentenceId","")).strip(),item.get("completed",False),item.get("readingLocation")));return
             if path=="/api/workspace/activity":
                 result=WORKSPACE.activity(user_id,str(item.get("bookId","")).strip(),item.get("readingSeconds",0),item.get("sentences",0),str(item.get("lastSentenceId","")or""),str(item.get("idempotencyKey","")).strip(),item.get("lookups",0),item.get("reviews",0),item.get("shadowAttempts",0),item.get("sessions",0))
                 try:result["reward"]=REWARDS.activity(user_id,item.get("readingSeconds",0),item.get("sentences",0),item.get("reviews",0),str(item.get("idempotencyKey","")).strip())
@@ -1158,6 +1158,9 @@ class Handler(SimpleHTTPRequestHandler):
                 self.reply(service.list(user_id,(query.get("limit")or[100])[0],(query.get("page")or[1])[0]));return
             if path==base+"/match-audio":
                 query=parse_qs(route.query);self.reply(service.match_audio(user_id,(query.get("filename")or[""])[0]));return
+            if path.endswith('/audio-upload'):
+                task_id=unquote(path[len(base+'/'):-len('/audio-upload')].rstrip('/'))
+                self.reply(service.audio_upload().status(user_id,task_id));return
             task_id=unquote(path.rsplit("/",1)[1]);tasks=service.list(user_id,200)["tasks"];task=next((item for item in tasks if item["id"]==task_id),None)
             self.reply({"task":task} if task else {"code":"import_task_not_found","error":"导入任务不存在或你无权访问。"},200 if task else 404);return
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
@@ -1177,6 +1180,23 @@ class Handler(SimpleHTTPRequestHandler):
         service=service or WORKSPACE_IMPORTS
         path,user_id=route.path,str(self._saas_session["id"])
         try:
+            if path.endswith('/upload-audio-chunk'):
+                task_id=unquote(path[len(base+'/'):-len('/upload-audio-chunk')].rstrip('/'))
+                try:
+                    length=int(self.headers.get('Content-Length','0'))
+                    total=int(self.headers.get('X-Upload-File-Size','0'))
+                    index=int(self.headers.get('X-Upload-Chunk-Index','-1'))
+                except ValueError:raise SaaSError('invalid_audio_chunk','音频分段参数无效。',400)
+                if not 0<length<=256*1024:raise SaaSError('invalid_audio_chunk','音频分段大小无效。',400)
+                data=self.read_import_upload(length)
+                self.reply(service.audio_upload().put(user_id,task_id,unquote(self.headers.get('X-Upload-Filename','')),total,index,self.headers.get('X-Upload-SHA256',''),data));return
+            if path.endswith('/complete-audio-upload'):
+                task_id=unquote(path[len(base+'/'):-len('/complete-audio-upload')].rstrip('/'))
+                item=self.json_body()
+                if not isinstance(item,dict):raise SaaSError('invalid_payload','音频上传参数无效。',400)
+                service.audio_upload().finish(user_id,task_id,item.get('filename',''),item.get('totalBytes'),item.get('chunkHashes'))
+                result=service.submit_complete(user_id,task_id,background=True)
+                self.reply(result,202 if result.get('asynchronous') else 200);return
             if path.endswith('/upload-audio'):
                 task_id=unquote(path[len(base+'/'):-len('/upload-audio')].rstrip('/'));length=int(self.headers.get('Content-Length','0'))
                 if length<=0 or length>2*1024*1024*1024:raise SaaSError('upload_too_large','MP3 文件大小无效。',413)

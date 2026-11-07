@@ -3,6 +3,7 @@ import { Alert, Button, Card, Dropdown, Empty, Input, Modal, Pagination, Progres
 import { AppstoreOutlined, BarsOutlined, CloseOutlined, DeleteOutlined, FileTextOutlined, InboxOutlined, MoreOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons'
 import { deleteJson, getJson, postJson } from '../api/client'
 import BookCover from '../components/BookCover'
+import ResumeAudioUpload from '../components/ResumeAudioUpload'
 import { deriveReadingState, formatLastUpdated, READING_STATES } from '../utils/libraryState.mjs'
 import { bookDescription, resourceNames } from '../utils/presentation.mjs'
 
@@ -137,7 +138,8 @@ export default function LibraryPage({ libraryBooks, importTasks, openReader, ope
     if (!tasks.length) return <Empty description="还没有导入任务" />
     return <div className="import-task-list">{tasks.map(task => {
       const isProcessing = ['pending', 'queued', 'uploading', 'processing', 'running', 'awaiting_processor'].includes(task.status)
-      const statusText = task.status === 'complete' ? '已完成' : task.status === 'failed' ? '失败' : task.status === 'cancelled' ? '已取消' : isProcessing ? '处理中' : '未知状态'
+      const waitingForAudio = task.status === 'queued' && task.awaitingAudioUpload
+      const statusText = waitingForAudio ? '等待完整配套音频' : task.status === 'complete' ? '已完成' : task.status === 'failed' ? '失败' : task.status === 'cancelled' ? '已取消' : isProcessing ? '处理中' : '未知状态'
       return (
         <div key={task.id} className="import-task-item">
           <FileTextOutlined />
@@ -153,7 +155,8 @@ export default function LibraryPage({ libraryBooks, importTasks, openReader, ope
             {task.status === 'failed' && <Text type="danger">{task.error || '导入失败'}</Text>}
             {task.status === 'cancelled' && <Text type="secondary">导入过程中断，请重新导入</Text>}
           </div>
-          {task.status === 'queued' && task.sourceAssetId && <Button size="small" type="primary" loading={resumingTask === task.id} disabled={Boolean(resumingTask && resumingTask !== task.id)} onClick={() => resumeImport(task)}>继续处理</Button>}
+          {waitingForAudio && <ResumeAudioUpload task={task} messageApi={messageApi} onComplete={async () => { await onRefresh?.(); setTaskReload(value => value + 1) }} />}
+          {task.status === 'queued' && task.sourceAssetId && !waitingForAudio && <Button size="small" type="primary" loading={resumingTask === task.id} disabled={Boolean(resumingTask && resumingTask !== task.id)} onClick={() => resumeImport(task)}>继续处理</Button>}
           {isProcessing && <Button size="small" onClick={() => onCancelImport?.(task)}>取消</Button>}
           {task.status === 'failed' && <Button size="small" onClick={() => onRetryImport?.(task)}>重试</Button>}
           {task.status === 'cancelled' && <Button size="small" type="primary" onClick={openImport}>重新导入</Button>}

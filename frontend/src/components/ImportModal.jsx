@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react'
 import { Form, Input, Modal, Progress, Segmented, Select, Tooltip, Typography } from 'antd'
 import { CloudUploadOutlined, QuestionCircleOutlined } from '@ant-design/icons'
-import { csrfHeaders, getJson, postJson } from '../api/client'
+import { csrfHeaders, getJson, postJson, requestJson } from '../api/client'
 import { handleMembershipLimit } from '../api/membershipLimit'
 import { bookLevels } from '../utils/levels.mjs'
 import { MAX_TOPICS, bookTopics } from '../utils/topics.mjs'
 import { selectImportFiles } from '../utils/importFiles.mjs'
+import { uploadCompanionAudio } from '../utils/companionAudioUpload.mjs'
 const { Text } = Typography
 
 export default function ImportModal({ open, onClose, onResume, onCreated, messageApi, official = false }) {
@@ -52,6 +53,11 @@ export default function ImportModal({ open, onClose, onResume, onCreated, messag
         const total = uploads.reduce((sum, item) => sum + item.file.size, 0)
         let uploaded = 0
         for (const item of uploads) {
+        if (item.route === 'upload-audio') {
+          await uploadCompanionAudio({ file: item.file, base, taskId: created.task.id, api: { csrfHeaders, getJson, requestJson }, onProgress: bytes => setUploadProgress(Math.round((uploaded + bytes) / total * 100)) })
+          uploaded += item.file.size
+          continue
+        }
         await new Promise((resolve, reject) => {
           const request = new XMLHttpRequest()
           request.open('POST', `${base}/${encodeURIComponent(created.task.id)}/${item.route}`)

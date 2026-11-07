@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import io
 import json
 import os
 import shutil
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import time
 import unittest
+import zipfile
 from unittest.mock import patch
 from datetime import timedelta
 from pathlib import Path
@@ -95,9 +97,43 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         book_id=completed["task"]["outputBookId"]
         reader=self.workspace.reader(owner,book_id)["book"]
         self.assertEqual(len(reader["sentences"]),2)
+        self.assertIsNone(reader.get("readingDocument"))
         self.assertEqual(reader["mediaAssets"][0]["id"],completed["task"]["sourceAssetId"])
         self.assertEqual(self.workspace.list_books(other)["books"],[])
         repeat=self.imports.complete(owner,task_id);self.assertTrue(repeat["idempotent"])
+
+    def test_epub_import_persists_original_blocks_and_isolates_reader(self):
+        owner,other=str(self.owner['id']),str(self.other['id'])
+        content=io.BytesIO()
+        with zipfile.ZipFile(content,'w') as archive:
+            archive.writestr('META-INF/container.xml','<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>')
+            archive.writestr('book.opf','<package><manifest><item id="one" href="one.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/></spine></package>')
+            archive.writestr('one.xhtml','<html><body><h1>Chapter One</h1><p>“Original punctuation,” she said.<br/>The same paragraph continues!</p><p>A separate original paragraph.</p></body></html>')
+        task=self.imports.create(owner,'document','Original EPUB','original.epub','structured-epub')['task']['id']
+        self.imports.upload(owner,task,'original.epub',content.getvalue(),'application/epub+zip')
+        result=self.imports.complete(owner,task)['task']
+        self.assertEqual(result['status'],'complete')
+        book=self.workspace.reader(owner,result['outputBookId'])['book']
+        document=book['readingDocument']
+        self.assertEqual(document['source']['spine'],[{'href':'one.xhtml','section':'section-1','layout':'reflow'}])
+        self.assertEqual((document['version'],document['format'],document['pagination']),(1,'epub','reflow'))
+        self.assertEqual([b['text'] for b in document['blocks']],['Chapter One','“Original punctuation,” she said.\nThe same paragraph continues!','A separate original paragraph.'])
+        sentences={s['id']:s for s in book['sentences']}
+        for block in document['blocks']:
+            for word in block['words']:
+                self.assertEqual(block['text'][word['start']:word['end']],sentences[word['sentenceId']]['words'][word['wordIndex']]['text'])
+        with self.assertRaises(SaaSError):self.workspace.reader(other,result['outputBookId'])
+        location={'format':'epub','chapter':0,'offset':23}
+        self.workspace.save_progress(owner,result['outputBookId'],book['sentences'][0]['id'],reading_location=location)
+        self.assertEqual(self.workspace.reader(owner,result['outputBookId'])['book']['progress']['readingLocation'],location)
+        with self.assertRaises(SaaSError):self.workspace.save_progress(other,result['outputBookId'],book['sentences'][0]['id'],reading_location=location)
+        with self.assertRaises(SaaSError):self.workspace.save_progress(owner,result['outputBookId'],book['sentences'][0]['id'],reading_location={**location,'chapter':3})
+        self.assertTrue(self.imports.complete(owner,task)['idempotent'])
+        self.workspace.delete_book(owner,book['id'],book['title'])
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT 1 FROM workspace_settings WHERE user_id=%s AND key=%s',(owner,'source-position:'+book['id']))
+                self.assertIsNone(cursor.fetchone())
 
     def test_document_companion_audio_variant_isolation_idempotency_and_delete(self):
         owner,other=str(self.owner['id']),str(self.other['id'])
@@ -253,6 +289,9 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         reader=self.workspace.reader(owner,completed["task"]["outputBookId"])["book"]
         self.assertEqual(reader["resourceType"],"document")
         self.assertEqual([item["text"] for item in reader["sentences"]],["PDF native first sentence.","PDF native second sentence!"])
+        self.assertEqual(reader['readingDocument']['format'],'pdf')
+        self.assertEqual(reader['readingDocument']['pagination'],'original')
+        self.assertEqual([s['page'] for s in reader['sentences']],[1,1])
 
     @unittest.skipUnless(shutil.which("ffmpeg"),"FFmpeg is required for the native video acceptance test")
     def test_video_native_ffmpeg_processor_registers_variants_and_isolates_tenant(self):
@@ -545,6 +584,22 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
             short_upload('upload-audio')
             short_upload('upload-audio',100)
             self.assertEqual(request('POST',f'/api/workspace/imports/{short_id}/complete','{}',owner_headers)[1]['code'],'companion_audio_pending')
+            # The resumable transport keeps the same authentication and CSRF gates.
+            import hashlib
+            chunk=b'a'*(256*1024)
+            chunk_path=f'/api/workspace/imports/{short_id}/upload-audio-chunk'
+            chunk_headers={**owner_headers,'X-Upload-Filename':'short.mp3','X-Upload-File-Size':str(len(chunk)+5),'X-Upload-Chunk-Index':'0','X-Upload-Size':str(len(chunk)),'X-Upload-SHA256':hashlib.sha256(chunk).hexdigest()}
+            self.assertEqual(request('GET',f'/api/workspace/imports/{short_id}/audio-upload')[0],401)
+            self.assertEqual(request('POST',chunk_path,chunk,{key:value for key,value in chunk_headers.items() if key not in {'Cookie','X-CSRF-Token'}})[0],401)
+            self.assertEqual(request('POST',chunk_path,chunk,{key:value for key,value in chunk_headers.items() if key!='X-CSRF-Token'})[0],403)
+            self.assertEqual(request('POST',chunk_path,chunk,chunk_headers)[0],200)
+            self.assertEqual(request('POST',chunk_path,chunk,chunk_headers)[0],200)
+            status,staged,_=request('GET',f'/api/workspace/imports/{short_id}/audio-upload',headers=owner_headers)
+            self.assertEqual(status,200);self.assertEqual(list(staged['received']),['0'])
+            finish_path=f'/api/workspace/imports/{short_id}/complete-audio-upload'
+            payload=json.dumps({'filename':'short.mp3','totalBytes':len(chunk)+5,'chunkHashes':[hashlib.sha256(chunk).hexdigest(),'0'*64]})
+            self.assertEqual(request('POST',finish_path,payload,{key:value for key,value in owner_headers.items() if key!='X-CSRF-Token'})[0],403)
+            self.assertEqual(request('POST',finish_path,payload,owner_headers)[1]['code'],'companion_audio_pending')
             with self.accounts.transaction() as db:
                 with db.cursor() as cursor:
                     cursor.execute('SELECT COUNT(*) FROM asset_variants WHERE asset_id=(SELECT source_asset_id FROM workspace_import_tasks WHERE id=%s)',(short_id,))
