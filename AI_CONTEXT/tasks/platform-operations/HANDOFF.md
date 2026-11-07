@@ -7,7 +7,21 @@
 - “上传官方内容”只增量同步已登记的官方读物及关联媒体，不发布代码，也不覆盖远端用户数据。新增或变更内容需在线上审核后才公开。
 - 远程部署、重新部署、回滚、卸载和清理均需管理员确认；除非用户明确要求，不执行远程变更。
 
-## 当前实现（2026-11-05 核实）
+## 当前实现（2026-11-07 核实）
+
+### 2026-11-07 Linux 安装与升级补齐原音对齐
+
+- 首次部署、完整重装、程序升级共用 `ensure_remote_aligner`，不受可选 Whisper 录音开关影响。已通过校验的 `shared/.local/forced-aligner` 复用；缺失/损坏时，由部署端下载目标 Linux CPython 3.11 的 CPU wheels 和固定 SHA-256 模型，校验缓存、打包并上传，远程禁网离线安装，避免远端慢速模型下载导致导入卡住。
+- `tools/forced_aligner_setup.py` 与 `tools/install_forced_aligner.sh` 支持在线安装、`--offline-dir`、`--check`；固定 numpy 1.26.4、torch/torchaudio 2.2.2（Linux x86_64 为 +cpu），模型与当前生产一致。安装有文件锁、新环境通过后才替换 venv 链接，失败保留旧环境；模型下载/复制先校验再原子替换。发布包包含安装器和检查工具。
+- 候选服务上线前检查实际运行环境（含自定义 CTC 路径）、模型 SHA-256、FFmpeg 16kHz 解码、numpy/Torch 兼容、wav2vec2 CPU 推理与原生 forced_align 扩展。任一步失败即停止，不切换 current、不停旧站；无需额外 WebSocket 或新业务接口。
+- 验证：Linux x86_64 隔离目录首次离线安装、真实推理、实际部署 helper 复用检查通过；完整 CPU 依赖解析/593,930,240 字节模型包校验通过。Python 3.11 下 79 项部署、34 项上传/对齐/隔离 PostgreSQL 导入回归全部通过；构建、modern smoke、UI 22 项、JS、Python 编译与 diff 检查通过。ARM64 已提供平台包选择，尚无 ARM64 实机验收；未对任何生产节点执行完整重装。开发机默认 Python 3.9 的完整部署测试有 3 项因既有 `Path | None` 导入不兼容而失败，已在 Linux Python 3.11 全部重跑通过。
+- 新文件：`tools/deployment/alignment.py`、`tools/forced_aligner_setup.py`、`tools/test_deployment_alignment.py`、`tools/test_upload_integrity.py`。首次部署端下载需可访问 Python 包源/PyTorch，之后复用经校验缓存；远端安装本身不依赖公网包源。
+
+### 2026-11-07 导入故障定向修复
+
+- 实机基线为 `code-20261106-113458-43116bfb`。本轮按用户授权备份 PostgreSQL（pg_restore --list 校验）与原代码后，定向热修复导入上传启动、部分原音校验和前端导入组件；保留线上数据、RynEnglish 品牌、验证码与现有 CSS。备份 `/srv/shiyue/backups/saas/import-recovery-20261107/`。
+- 当前 release 目录未切换。后续定向修复加入前台代理/后端上传完整性校验，并撤回接受部分音频的临时方案；前端仅替换 ImportModal/LibraryPage 组件。后续完整升级必须保留线上 11 月 6 日源码变更，不能直接用本地旧品牌构建覆盖。
+- CPU 对齐环境与模型在既有持久化 `shared/.local/forced-aligner/`，不改容器挂载或全局配置。最终上传完整性修复已发布，前端入口 **`c03008a13c69`**；原任务已更正为完整音频 8,159,161 字节/1,011.947378 秒，2,073/2,098 词实测时间，原书 ID/学习记录保留。备份 `backups/saas/upload-integrity-20261107/` 含可读取 pgdump 和原代码，清单 `manifests/history/upload-integrity-20261107.json`；实际前台短读请求返回 400，后台/前台/Redis 健康。恢复详情见 `../import-media/HANDOFF.md`。
 
 ### 2026-11-05 验证码与 DirectMail 已发布
 
@@ -70,6 +84,7 @@ npm run build:modern
 npm run test:modern
 npm run test:ui
 PYTHONPATH=tools python3 -m unittest tools.test_deployment_release_pipeline
+PYTHONPATH=tools python3 -m unittest tools.test_deployment_alignment tools.test_upload_integrity tools.test_book_audio_alignment
 PYTHONPATH=tools python3 -m unittest tools.test_deployment_https_entry tools.test_deployment_https_integration
 PYTHONPATH=tools python3 -m unittest tools.test_deployment_https tools.test_deployment_nodes tools.test_deployment_docker_install tools.test_deployment_dioco_config tools.test_deployment_content_paths tools.test_deployment_grammar_content tools.test_saas_frontend_routes
 python3 -m py_compile tools/deployment/manager.py tools/deploy_remote.py tools/test_deployment_https.py tools/test_deployment_release_pipeline.py

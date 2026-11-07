@@ -26,6 +26,18 @@ export default function LibraryPage({ libraryBooks, importTasks, openReader, ope
   const [taskError, setTaskError] = useState('')
   const [taskReload, setTaskReload] = useState(0)
   const [deletingInvalid, setDeletingInvalid] = useState(false)
+  const [resumingTask, setResumingTask] = useState(null)
+
+  const resumeImport = async task => {
+    setResumingTask(task.id)
+    try {
+      await postJson(`/api/workspace/imports/${encodeURIComponent(task.id)}/complete`, {})
+      messageApi.success('已继续处理，进度会自动更新')
+      await onRefresh?.()
+      setTaskReload(value => value + 1)
+    } catch (error) { messageApi.error(error.message || '继续处理失败') }
+    finally { setResumingTask(null) }
+  }
 
   const persistUrl = useCallback(() => {
     const params = new URLSearchParams(location.search)
@@ -137,9 +149,11 @@ export default function LibraryPage({ libraryBooks, importTasks, openReader, ope
               </Text>
             </div>
             {isProcessing && task.progress > 0 && <Progress percent={task.progress} size="small" />}
+            {isProcessing && task.step && <Text type="secondary">{task.step}</Text>}
             {task.status === 'failed' && <Text type="danger">{task.error || '导入失败'}</Text>}
             {task.status === 'cancelled' && <Text type="secondary">导入过程中断，请重新导入</Text>}
           </div>
+          {task.status === 'queued' && task.sourceAssetId && <Button size="small" type="primary" loading={resumingTask === task.id} disabled={Boolean(resumingTask && resumingTask !== task.id)} onClick={() => resumeImport(task)}>继续处理</Button>}
           {isProcessing && <Button size="small" onClick={() => onCancelImport?.(task)}>取消</Button>}
           {task.status === 'failed' && <Button size="small" onClick={() => onRetryImport?.(task)}>重试</Button>}
           {task.status === 'cancelled' && <Button size="small" type="primary" onClick={openImport}>重新导入</Button>}

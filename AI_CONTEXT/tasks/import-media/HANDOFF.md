@@ -1,5 +1,20 @@
 # 导入与媒体交接
 
+## 2026-11-07 远程上传截断修复与完整原音恢复
+
+- 京东云基线实际为 `code-20261106-113458-43116bfb`，本轮按用户授权发布定向热修复，未重新初始化数据。备份 `/srv/shiyue/backups/saas/import-recovery-20261107/` 含可读取的 PostgreSQL dump 与原文件。保留线上 RynEnglish 品牌、验证码和其他功能。
+- 私人任务 `22070acdf05345d99acdaf9d4fc27010`（`The_Stars-Alphonse_Daudet.epub`）排查时为 `queued` / 15%。北京时间 2026-11-07 12:38:11 文档上传返回 200，12:40:17 配套音频上传返回 200；排查时没有该任务的 `/complete` 请求，也没有转写/对齐子进程。
+- 前台代理在音频上传响应 `self.wfile.write(data)` 时发生 `BrokenPipeError`，说明下游连接已断开。前一次同名任务也有音频上传响应断连，随后被取消。具体是浏览器离开/网络/外层代理超时，现有日志不足以区分，不能直接归因于某个固定超时。
+- 最终根因核实：本机 Downloads 的同名 MP3 为 **8,159,161 字节 / 1,011.947378 秒（16 分 52 秒）**，SHA-256 `e065fd63be99e495af3f1010672b6d49fdbd11a53966e1fe6e6b124993275a98`；远端 3,843,761 字节 / 472.522378 秒文件与本地文件的同长度前缀逐字节相同，确为传输截断。前台 `_proxy()` 未验证 `rfile.read(Content-Length)` 的实际长度，并由 HTTPConnection 按残片长度重新生成 Content-Length，后端又未校验短读，因此残片被登记成功。具体是哪层客户端/代理先中断，现有日志不能确定。不能再将其描述成用户本来只提供半本原音。
+- 修复：最后一次上传携带 `X-Import-Start-Processing: 1`，已鉴权的上传接口在响应前提交后台处理并返回 202；旧客户端无该头保持原行为。创建配套文档以 `metadata.awaitingAudioUpload` 阻止音频到齐前启动。断连/网关错误保留任务和源文件，私人导入记录新增“继续处理”及真实 step，沿用原所有者/CSRF/幂等检查。
+- 上传完整性：ImportModal 携带 `X-Upload-Size`；前台代理检查实际长度与 Content-Length/原文件大小一致才转发，后端文档与配套音频上传再次检查，短读/大小不符返回 `400 incomplete_upload`、关闭连接，不登记残片、不启动任务。旧客户端仍检查 Content-Length；认证、CSRF、所有者/管理员检查保留。
+- 按用户“音频不完整不能导入”，**已撤回接受部分音频方案**。正文声学覆盖至少 80%，并检查首尾缺失（只容许最多 2% 且不超过 50 词的未朗读标题/出版页脚）；错误音频、长缺头/缺尾拒绝，不编造缺词时间。完整本地原音实测 2,073/2,098 词（98.81%）、198 个计时句，故事末句完整匹配；未朗读的 THE END/网站宣传语与零星识别遗漏仍无时间。
+- 远程持久化 `/app/.local/forced-aligner/` 使用 numpy 1.26.4、torch/torchaudio 2.2.2+cpu 与 WAV2VEC2_ASR_BASE_960H，模型 SHA-256 `488fd4f16de84438ffc945334278c1b9fb9b7159a806c1080b16111a958c945d`。首次安装、重装、升级已自动准备依赖/模型并在候选上线前做真实推理检查，详见 `../platform-operations/HANDOFF.md`，不再要求部署后手工补装。
+- 前端定向发布只替换生产 bundle 的 ImportModal/LibraryPage 两组件（按 AST 绑定映射），其余线上源码字节保留。最终入口版本 **`c03008a13c69`**，CSS、RynEnglish 品牌与验证码保持线上版本；后端 reader_server 也从线上原文件定向补丁，避免覆盖 11 月 6 日源码。后续完整升级应从包含线上最新变更的完整源码构建，避免品牌回退。
+- 验证：构建、modern smoke/UI 22 项/JS、Python 编译及 diff 通过；Linux Python 3.11 下 **79 项部署 + 34 项上传/对齐/隔离 PostgreSQL 导入回归通过**，两个隔离测试库均已删除。真实 HTTP 短读与大小不符在文档、配套 MP3、前台代理均拒绝且不登记资产；完整上传后仅丢响应仍启动处理。Chrome 三场景通过，新增检查客户端发送原文件大小。Linux 独立目录禁网全新安装、真实 CPU 推理和部署 helper 复用检查通过；旧 import-source-plan 测试缺本机夹具，未列入通过项。
+- 原任务及读物 ID 保持不变：`22070acdf05345d99acdaf9d4fc27010` / `private-22070acdf05345d99acdaf9d4fc27010`。完整源文件和独立对齐结果保留在远程 `shared/.local/import-recovery-20261107/complete-audio-*`；修复原读物时仅替换音频变体与实测时间/时长，保留正文 ID、翻译、学习记录；同步修正媒体占用差额，旧残片留作故障证据。不得恢复此前部分原音成功结果。
+- 最终完整音源与时间轴已原位修复；真实所有者阅读/媒体服务校验通过，线上前台模拟截断请求为 `400 incomplete_upload`，后台、前台、Redis 健康。Chrome 通过 SSH 隧道访问实际生产 TLS 前台，RynEnglish 页面与健康 API 正常、无浏览器异常（使用 DOM 就绪判断，任务轮询页面不等待 networkidle）。修复前备份 `/srv/shiyue/backups/saas/upload-integrity-20261107/`，清单 `/srv/shiyue/manifests/history/upload-integrity-20261107.json`；详细结果 `shared/.local/import-recovery-20261107/complete-audio-result.json`。
+
 ## 2026-10-22 文档与配套原音对齐（等待用户自行验收）
 
 - `book_audio_alignment.py` 使用本机 wav2vec2 CTC 模型分窗口读取 16kHz 原音，通过全书单调文本匹配建立声学锚点，再对识别差异执行局部 forced alignment；保留 EPUB 句子 ID、正文和单词索引。没有匹配到的词保留无时间状态，不按长度分摊时间；静音/错误文本拒绝。

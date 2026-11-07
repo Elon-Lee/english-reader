@@ -45,7 +45,7 @@ export default function ImportModal({ open, onClose, onResume, onCreated, messag
       const filename = source === 'youtube' ? '' : file.name
       const key = `${kind}-import-${crypto.randomUUID?.() || Date.now()}`
       const title = values.title?.trim() || (source === 'youtube' ? '' : file.name.replace(/\.[^.]+$/, ''))
-      const created = await postJson(base, { kind, title, filename, sourceUrl: source === 'youtube' ? input : '', idempotencyKey: key, metadata: { series: values.series || '', level: values.level || '', topics: values.topics || [], matchedAudioFilename: matchedAudio?.filename || '', matchedAudioAssetId: matchedAudio?.assetId || '' } })
+      const created = await postJson(base, { kind, title, filename, sourceUrl: source === 'youtube' ? input : '', idempotencyKey: key, metadata: { series: values.series || '', level: values.level || '', topics: values.topics || [], matchedAudioFilename: matchedAudio?.filename || '', matchedAudioAssetId: matchedAudio?.assetId || '', awaitingAudioUpload: Boolean(localAudio) } })
       pendingTask = created.task.id
       if (source === 'file') {
         const uploads = [{ file, route: 'upload' }, ...(localAudio ? [{ file: localAudio, route: 'upload-audio' }] : [])]
@@ -56,13 +56,13 @@ export default function ImportModal({ open, onClose, onResume, onCreated, messag
           const request = new XMLHttpRequest()
           request.open('POST', `${base}/${encodeURIComponent(created.task.id)}/${item.route}`)
           request.withCredentials = true
-          const headers = csrfHeaders({ 'Content-Type': item.file.type || 'application/octet-stream', 'X-Upload-Filename': item.file.name })
+          const headers = csrfHeaders({ 'Content-Type': item.file.type || 'application/octet-stream', 'X-Upload-Filename': item.file.name, 'X-Upload-Size': String(item.file.size), ...(item === uploads[uploads.length - 1] ? { 'X-Import-Start-Processing': '1' } : {}) })
           Object.entries(headers).forEach(([key, value]) => request.setRequestHeader(key, value))
           request.upload.onprogress = event => { if (event.lengthComputable) setUploadProgress(Math.round((uploaded + event.loaded) / total * 100)) }
-          request.onerror = () => reject(new Error('网络中断，文件上传失败'))
+          request.onerror = () => reject(Object.assign(new Error('网络连接中断，任务和已上传文件已保留，请在导入记录中查看或继续处理'), { preserveTask: true }))
           request.onload = () => {
             let data = {}; try { data = JSON.parse(request.responseText || '{}') } catch {}
-            if (request.status < 200 || request.status >= 300) reject(Object.assign(new Error(data.error || '上传失败'), { code: data.code, payload: data }))
+            if (request.status < 200 || request.status >= 300) reject(Object.assign(new Error(data.error || '上传失败'), { code: data.code, payload: data, preserveTask: request.status >= 500 }))
             else resolve(data)
           }
           request.send(item.file)
@@ -73,12 +73,13 @@ export default function ImportModal({ open, onClose, onResume, onCreated, messag
       const taskId = created.task.id
       pendingTask = null
       onClose(); form.resetFields(); setFile(null); setLocalAudio(null); setMatchedAudio(null); setUploadProgress(0); await onCreated?.(); messageApi.success('导入任务已提交，后台处理进度会自动更新')
-      void postJson(`${base}/${encodeURIComponent(taskId)}/complete`, {}).then(async result => {
+      if (source === 'youtube') void postJson(`${base}/${encodeURIComponent(taskId)}/complete`, {}).then(async result => {
         await onCreated?.()
         if (result.task?.status === 'complete') messageApi.success(official ? '官方内容已导入，请审核后发布' : '内容已导入学习空间')
       }).catch(async error => { await onCreated?.(); if (official || !handleMembershipLimit(error, { onContinue: onResume })) messageApi.error(error.message || '导入处理失败') })
     } catch (error) {
-      if (pendingTask) await postJson(`${base}/${encodeURIComponent(pendingTask)}/cancel`, {}).catch(() => {})
+      if (pendingTask && error.preserveTask) { onClose(); await onCreated?.() }
+      else if (pendingTask) await postJson(`${base}/${encodeURIComponent(pendingTask)}/cancel`, {}).catch(() => {})
       if (official || !handleMembershipLimit(error, { onClose, onContinue: onResume })) messageApi.error(error.message || '导入失败')
     } finally { setSubmitting(false) }
   }

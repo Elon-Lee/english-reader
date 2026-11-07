@@ -44,6 +44,22 @@ def apply_timings(book, positions, timings):
     return book
 
 
+def validate_coverage(expected_count, heard_count, anchors, timings):
+    """Reject incomplete narration; sparse recognition errors may remain untimed."""
+    measured = set(anchors).intersection(timings)
+    audio_coverage = len(measured) / max(1, heard_count)
+    span = max(anchors)-min(anchors)+1 if anchors else 0
+    span_coverage = len(measured) / max(1, span)
+    # Allow short unspoken titles/publisher footers, but reject missing narration ends.
+    boundary_slack = max(2, min(50, math.ceil(expected_count * .02)))
+    missing_boundary = not timings or min(timings) > boundary_slack or max(timings) < expected_count - 1 - boundary_slack
+    if len(timings) / max(1, expected_count) < .8 or missing_boundary:
+        raise ValueError('Audio is incomplete or does not match the document; upload the complete original audio')
+    return {'validation': 'full-text-coverage',
+        'partialAudio': False, 'audioWordCoverage': round(audio_coverage,4),
+        'matchedTextCoverage': round(span_coverage,4)}
+
+
 def main():
     parser = argparse.ArgumentParser()
     for name in ('audio', 'input', 'output', 'model-home'):
@@ -119,7 +135,8 @@ def main():
     if len(anchors)<min(20,len(expected)*.3): raise ValueError('Book text does not match this audio')
     timings={}
     def record(index,left,right,confidence):
-        start=max(0,times[left]-.01); end=times[min(right-1,len(times)-1)]+.01
+        start=max(0,times[left]-.01)
+        end=min(duration,float(book.get('duration') or duration),times[min(right-1,len(times)-1)]+.01)
         if end>start and end-start<=2.5 and confidence>=.35:
             timings[index]={'start':round(start,3),'end':round(end,3),'confidence':round(confidence,4)}
     for index,di in anchors.items():
@@ -149,7 +166,8 @@ def main():
             confidence=sum(math.exp(float(s.score)) for s in selected)/len(selected)
             record(index,left+selected[0].start,left+selected[-1].end,confidence)
     result=apply_timings(book,positions,timings)
-    if result['audioAlignment']['coverage']<.5 and not args.cached_only: raise ValueError('Insufficient acoustic alignment coverage')
+    if not args.cached_only:
+        result['audioAlignment'].update(validate_coverage(len(expected),len(decoded),anchors,timings))
     if args.cached_only:result['audioAlignment']['diagnosticOnly']=True
     args.output.write_text(json.dumps(result,ensure_ascii=False))
     print('caption_progress=100',file=sys.stderr,flush=True)

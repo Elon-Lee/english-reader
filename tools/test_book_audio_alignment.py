@@ -1,10 +1,48 @@
 import copy
 import unittest
 
-from book_audio_alignment import apply_timings, match_anchors
+from book_audio_alignment import apply_timings, match_anchors, validate_coverage
 
 
 class BookAlignmentTests(unittest.TestCase):
+    def test_truncated_audio_must_not_be_accepted_as_verified_excerpt(self):
+        anchors={i:i-3 for i in range(3,903)}
+        timings={i:{'start':i/2,'end':i/2+.2} for i in anchors}
+        with self.assertRaisesRegex(ValueError,'incomplete'):
+            validate_coverage(2098,927,anchors,timings)
+
+    def test_incomplete_second_half_is_also_rejected(self):
+        with self.assertRaisesRegex(ValueError,'incomplete'):
+            validate_coverage(1000,600,{i:i for i in range(600)},{i:{} for i in range(600)})
+
+    def test_missing_intro_or_ending_is_rejected_even_above_coverage_threshold(self):
+        for indices in (range(900),range(100,1000)):
+            with self.subTest(indices=indices),self.assertRaisesRegex(ValueError,'incomplete'):
+                validate_coverage(1000,900,{i:i for i in indices},{i:{} for i in indices})
+
+    def test_complete_narration_may_leave_isolated_recognition_errors_untimed(self):
+        indices=[i for i in range(1000) if i%10!=5]
+        self.assertEqual(validate_coverage(1000,950,{i:i for i in indices},{i:{} for i in indices})['validation'],'full-text-coverage')
+
+    def test_short_unspoken_publisher_footer_does_not_reject_complete_original(self):
+        indices=range(2075)
+        self.assertFalse(validate_coverage(2098,2100,{i:i for i in indices},{i:{} for i in indices})['partialAudio'])
+
+    def test_excerpt_rejects_wrong_sparse_short_or_unmeasured_matches(self):
+        cases=[(1000,500,{},{}),
+            (1000,20,{i:i for i in range(20)},{i:{} for i in range(20)}),
+            (2000,400,{i*4:i for i in range(400)},{i*4:{} for i in range(400)}),
+            (1000,100,{i:i for i in range(100)},{i:{} for i in range(30)}),
+            (1000,500,{i:i for i in range(100)},{i:{} for i in range(100)})]
+        for expected,heard,anchors,timings in cases:
+            with self.subTest(expected=expected,heard=heard),self.assertRaises(ValueError):
+                validate_coverage(expected,heard,anchors,timings)
+
+    def test_full_book_validation_preserves_existing_short_document_rule(self):
+        report=validate_coverage(10,9,{i:i for i in range(8)},{i:{} for i in range(8)})
+        self.assertFalse(report['partialAudio'])
+        self.assertEqual(report['validation'],'full-text-coverage')
+
     def test_intro_and_omission_preserve_monotonic_canonical_indices(self):
         expected='CHAPTER ONE THE CITY HEAT WHEN WE GET HOME WE CAN REST'.split()
         heard='A PUBLISHER PRESENTS CHAPTER ONE WHEN WE GET HOME WE CAN REST'.split()

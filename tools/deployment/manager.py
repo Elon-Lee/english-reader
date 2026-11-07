@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import unquote
 from .https_entry import entry_paths, frontend_url, install_script, normalize_domain
 from .captcha import build_assets as build_captcha_assets, install_script as captcha_install_script
+from .alignment import ensure_remote as provision_remote_aligner, check_command as aligner_check_command
 
 ROOT=Path(__file__).resolve().parents[2]
 DB=ROOT/".local/library.sqlite3"
@@ -257,7 +258,7 @@ def release_metadata(release):
 
 def code_files():
     files=[ROOT/"reader",ROOT/"deployment",ROOT/"requirements-saas.txt",ROOT/"start-reader.sh",ROOT/"start-reader-https.sh",ROOT/"services/captcha"]
-    files += list((ROOT/"tools").glob("*.py"))+[ROOT/"tools/deployment",ROOT/"tools/saas_migrations",ROOT/"tools/vendor/ECDICT/lemma.en.txt"]
+    files += list((ROOT/"tools").glob("*.py"))+[ROOT/"tools/install_forced_aligner.sh",ROOT/"tools/deployment",ROOT/"tools/saas_migrations",ROOT/"tools/vendor/ECDICT/lemma.en.txt"]
     return files
 def build_code_package(job,release):
     metadata=release_metadata(release)
@@ -790,6 +791,9 @@ def ensure_remote_captcha(job,remote,target,release):
     output=remote.ssh(captcha_install_script(target,release,SAAS_IMAGE))
     if "SHIYUE_CAPTCHA_READY" not in output:raise ValueError("验证码服务未通过健康检查")
 
+def ensure_remote_aligner(job,remote,target,release):
+    provision_remote_aligner(job,remote,target,release,SAAS_IMAGE,RUNTIME)
+
 def sync_remote_smtp_config(job,remote,target):
     source=os.environ.get("SHIYUE_DEPLOY_SMTP_CONFIG","")
     if not source:return
@@ -1066,6 +1070,7 @@ def activate_saas_release(job,remote,target,release):
  done
  if [ "$healthy" -ne 1 ]; then docker logs --tail 200 shiyue-saas-candidate >&2 || true; docker logs --tail 200 shiyue-saas-frontend-candidate >&2 || true; exit 5; fi
  {saas_migration_check_command("shiyue-saas-candidate")}
+ {aligner_check_command("shiyue-saas-candidate")}
  docker exec shiyue-saas-frontend-candidate python3 -c {shlex.quote(root_check_code)}
  cat /tmp/shiyue-saas-candidate-health.json
  docker rm -f shiyue-saas-candidate shiyue-saas-frontend-candidate >/dev/null
@@ -1170,6 +1175,7 @@ def start_saas_upgrade(target_id):
         ensure_remote_saas_config(job,remote,target)
         sync_remote_smtp_config(job,remote,target)
         ensure_remote_captcha(job,remote,target,release)
+        ensure_remote_aligner(job,remote,target,release)
         job.update(70,"启动候选版本并执行 SaaS 健康检查")
         activation=activate_saas_release(job,remote,target,release)
         ensure_remote_https_entry(job,remote,target)
@@ -1244,6 +1250,7 @@ def start_saas_deploy(target_id,reinstall=False):
             if remote_hash!=local_hash:job.update(45,"上传 SaaS 录音模型");remote.scp(model,remote_model)
         certificate=ensure_remote_tls(job,remote,target)
         ensure_remote_saas_services(job,remote,target,release);sync_remote_smtp_config(job,remote,target);ensure_remote_captcha(job,remote,target,release)
+        ensure_remote_aligner(job,remote,target,release)
         restored=restore_remote_saas_database(job,remote,target,dump,dump_digest)
         if restored:prune_initial_database_to_published_content(job,remote,target)
         public=sync_saas_public_content(job,remote,target,f"{target['remote_root']}/releases/{release}",{"scan":70,"prepare":73,"package":76,"upload":79,"apply":82,"database":85,"merge":88},False)

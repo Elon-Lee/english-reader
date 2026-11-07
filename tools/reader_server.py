@@ -1162,6 +1162,17 @@ class Handler(SimpleHTTPRequestHandler):
             self.reply({"task":task} if task else {"code":"import_task_not_found","error":"导入任务不存在或你无权访问。"},200 if task else 404);return
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
         except (SaaSConfigurationError,ValueError) as exc:self.reply({"code":"workspace_unavailable","error":str(exc)},503)
+    def read_import_upload(self,length):
+        declared=self.headers.get('X-Upload-Size')
+        if declared is not None and (not declared.isdecimal() or int(declared)!=length):
+            self.close_connection=True
+            raise SaaSError('incomplete_upload','上传文件不完整，请重新上传完整文件。',400)
+        data=self.rfile.read(length)
+        if len(data)!=length:
+            self.close_connection=True
+            raise SaaSError('incomplete_upload','上传文件不完整，请重新上传完整文件。',400)
+        return data
+
     def workspace_import_post(self,route,service=None,base="/api/workspace/imports"):
         service=service or WORKSPACE_IMPORTS
         path,user_id=route.path,str(self._saas_session["id"])
@@ -1169,13 +1180,18 @@ class Handler(SimpleHTTPRequestHandler):
             if path.endswith('/upload-audio'):
                 task_id=unquote(path[len(base+'/'):-len('/upload-audio')].rstrip('/'));length=int(self.headers.get('Content-Length','0'))
                 if length<=0 or length>2*1024*1024*1024:raise SaaSError('upload_too_large','MP3 文件大小无效。',413)
-                self.reply({'task':service.upload_audio(user_id,task_id,self.headers.get('X-Upload-Filename',''),self.rfile.read(length))});return
+                data=self.read_import_upload(length)
+                task=service.upload_audio(user_id,task_id,self.headers.get('X-Upload-Filename',''),data)
+                result=service.submit_complete(user_id,task_id,background=True) if self.headers.get('X-Import-Start-Processing')=='1' else {'task':task}
+                self.reply(result,202 if result.get('asynchronous') else 200);return
             if path.endswith("/upload"):
                 task_id=unquote(path[len(base+"/"):-len("/upload")].rstrip("/"));length=int(self.headers.get("Content-Length","0"))
                 if length<=0 or length>20*1024*1024*1024:raise SaaSError("upload_too_large","上传文件大小无效。",413)
                 filename=self.headers.get("X-Upload-Filename","") or "source"
-                data=self.rfile.read(length)
-                self.reply({"task":service.upload(user_id,task_id,filename,data,self.headers.get("Content-Type","") or "application/octet-stream")});return
+                data=self.read_import_upload(length)
+                task=service.upload(user_id,task_id,filename,data,self.headers.get("Content-Type","") or "application/octet-stream")
+                result=service.submit_complete(user_id,task_id,background=True) if self.headers.get('X-Import-Start-Processing')=='1' else {'task':task}
+                self.reply(result,202 if result.get('asynchronous') else 200);return
             try:item=self.json_body()
             except Exception:raise SaaSError("invalid_payload","请求数据无效。",400)
             if not isinstance(item,dict):raise SaaSError("invalid_payload","请求数据无效。",400)

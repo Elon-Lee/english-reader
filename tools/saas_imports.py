@@ -73,6 +73,7 @@ class WorkspaceImportService:
         metadata={**(metadata or {}),"officialImport":self.official}
         kind=str(kind or "").strip().casefold();key=str(idempotency_key or "").strip();filename=Path(str(filename or "")).name
         if kind not in {"text","document","mp3","video","youtube"}:raise SaaSError("invalid_import_kind","不支持的导入类型。",400)
+        metadata['awaitingAudioUpload']=kind in {'text','document'} and metadata.get('awaitingAudioUpload') is True
         if not key or len(key)>255:raise SaaSError("invalid_idempotency_key","操作标识无效。",400)
         if kind=="youtube" and not self._valid_youtube_url(source_url):raise SaaSError("invalid_import_source","请输入有效的 YouTube 地址。",400)
         reservation=None
@@ -167,7 +168,9 @@ class WorkspaceImportService:
                         cursor.execute("SELECT sha256 FROM asset_variants WHERE asset_id=%s AND variant_name='audio' AND deleted_at IS NULL",(task['source_asset_id'],))
                         existing=self.accounts._one(cursor)
                         if existing:
-                            if existing['sha256']==hashlib.sha256(data).hexdigest():return self._public(task)
+                            if existing['sha256']==hashlib.sha256(data).hexdigest():
+                                cursor.execute("UPDATE workspace_import_tasks SET metadata_json=metadata_json || '{\"awaitingAudioUpload\":false}'::jsonb,updated_at=NOW() WHERE id=%s",(task_id,))
+                                return self._public(task)
                             raise SaaSError('audio_source_conflict','该任务已上传不同的配套音频。',409)
                 if not self.official:self.media.ensure_private_capacity(user_id,len(data))
                 target=source.parent/(new_id()+'.mp3');target.write_bytes(data)
@@ -181,7 +184,7 @@ class WorkspaceImportService:
                     with connection.cursor() as cursor:
                         current=self._task(cursor,user_id,task_id)
                         if current['status']!='queued':raise SaaSError('import_task_terminal','任务已取消或结束。',409)
-                        cursor.execute("UPDATE workspace_import_tasks SET metadata_json=metadata_json || %s::jsonb,updated_at=NOW() WHERE id=%s",(json.dumps({'matchedAudioFilename':filename}),task_id))
+                        cursor.execute("UPDATE workspace_import_tasks SET metadata_json=metadata_json || %s::jsonb,updated_at=NOW() WHERE id=%s",(json.dumps({'matchedAudioFilename':filename,'awaitingAudioUpload':False}),task_id))
                 return self._public(current)
 
     def _source_path(self,cursor:Any,user_id:str,task:dict[str,Any])->Path:
@@ -544,14 +547,16 @@ class WorkspaceImportService:
             with connection.cursor() as cursor:
                 cursor.execute("UPDATE workspace_import_tasks SET progress=%s,step=%s,updated_at=NOW() WHERE id=%s AND status='running'",(progress,step,task_id))
 
-    def submit_complete(self,user_id:str,task_id:str)->dict[str,Any]:
-        """Long document/audio alignment returns immediately; clients poll the task."""
+    def submit_complete(self,user_id:str,task_id:str,background:bool=False)->dict[str,Any]:
+        """Start processing before an upload response can be lost; clients poll."""
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 task=self._task(cursor,user_id,task_id)
+                if as_json(task['metadata_json']).get('awaitingAudioUpload'):
+                    raise SaaSError('companion_audio_pending','配套 MP3 尚未上传完成，请重新选择文档和音频上传。',409)
                 cursor.execute("SELECT 1 FROM asset_variants WHERE asset_id=%s AND variant_name='audio' AND deleted_at IS NULL",(task.get('source_asset_id'),))
                 paired=task['kind'] in {'text','document'} and (bool(cursor.fetchone()) or bool(as_json(task['metadata_json']).get('matchedAudioAssetId')))
-        if not paired or task['status'] not in {'queued','running'}:return self.complete(user_id,task_id)
+        if (not paired and not background) or task['status'] not in {'queued','running'}:return self.complete(user_id,task_id)
         def process():
             try:self.complete(user_id,task_id)
             except Exception:
@@ -575,6 +580,8 @@ class WorkspaceImportService:
             with self.accounts.transaction() as tx:
                 with tx.cursor() as cursor:
                     task=self._task(cursor,user_id,task_id)
+                    if as_json(task['metadata_json']).get('awaitingAudioUpload'):
+                        raise SaaSError('companion_audio_pending','配套 MP3 尚未上传完成，请重新选择文档和音频上传。',409)
                     if task["status"]=="running":
                         cursor.execute("UPDATE workspace_import_tasks SET status='queued',step='恢复中断的导入任务',updated_at=NOW() WHERE id=%s AND updated_at<NOW()-INTERVAL '80 minutes' RETURNING id",(task_id,))
                         if not cursor.fetchone():return {"task":self._public(task),"idempotent":True}

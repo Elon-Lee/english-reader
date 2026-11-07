@@ -50,6 +50,17 @@ class FrontendHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0") or 0)
         if length:
             body = self.rfile.read(length)
+        declared = self.headers.get('X-Upload-Size')
+        if (length and len(body) != length) or (declared is not None and (not declared.isdecimal() or int(declared) != length)):
+            self.close_connection = True
+            data = '{"code":"incomplete_upload","error":"上传文件不完整，请重新上传完整文件。"}'.encode('utf-8')
+            self.send_response(400)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            self.wfile.write(data)
+            return
         headers = {key: value for key, value in self.headers.items() if key.lower() not in {"host", "content-length", "connection"}}
         headers["Host"] = BACKEND.netloc
         # Overwrite internal identity headers on every ingress, including direct TLS.

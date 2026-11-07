@@ -84,7 +84,7 @@ class DeploymentHttpsTests(unittest.TestCase):
                     }
                     names = (*results, 'check_remote_saas_upgrade_target', 'prepare_remote_saas_release',
                              'backup_remote_saas_database', 'ensure_remote_saas_config',
-                             'ensure_remote_docker', 'ensure_remote_runtime', 'ensure_remote_saas_services', 'ensure_remote_captcha')
+                             'ensure_remote_docker', 'ensure_remote_runtime', 'ensure_remote_saas_services', 'ensure_remote_captcha', 'ensure_remote_aligner')
                     mocks = {}
                     for name in names:
                         def invoke(*args, _name=name, **kwargs):
@@ -98,7 +98,7 @@ class DeploymentHttpsTests(unittest.TestCase):
                     effective = mocks['activate_saas_release'].call_args.args[2]
                     self.assertEqual((effective['use_https'], effective['service_port']), (1, 5173))
                     self.assertEqual((target['use_https'], target['service_port']), (0, 8765))
-                    for name in ('ensure_remote_tls', 'ensure_remote_saas_config'):
+                    for name in ('ensure_remote_tls', 'ensure_remote_saas_config', 'ensure_remote_aligner'):
                         self.assertLess(calls.index(name), calls.index('activate_saas_release'))
                     result = job.complete.call_args.args[0]
                     self.assertEqual(result['frontendUrl'], 'https://192.0.2.1:5173')

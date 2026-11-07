@@ -143,6 +143,33 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
                 self.imports._align_document_audio({'sentences':[]},Path('unused.mp3'),'unused',str(self.owner['id']))
             self.assertEqual(error.exception.code,'alignment_unavailable')
 
+    def test_companion_upload_blocks_early_start_then_clears_on_audio_upload(self):
+        owner=str(self.owner['id'])
+        task=self.imports.create(owner,'text','Paired','paired.txt','waiting-audio',metadata={'awaitingAudioUpload':True})['task']['id']
+        self.imports.upload(owner,task,'paired.txt',b'A real sentence.','text/plain')
+        for start in (self.imports.submit_complete,self.imports.complete):
+            with self.assertRaises(SaaSError) as error:start(owner,task)
+            self.assertEqual(error.exception.code,'companion_audio_pending')
+        self.assertEqual(self.imports.list(owner)['tasks'][0]['status'],'queued')
+        with patch.object(self.imports,'audio_duration',return_value=4.2):
+            self.imports.upload_audio(owner,task,'paired.mp3',b'audio')
+        with patch('saas_imports.threading.Thread') as thread:
+            self.assertTrue(self.imports.submit_complete(owner,task,background=True)['asynchronous'])
+            thread.return_value.start.assert_called_once()
+
+    def test_upload_auto_start_runs_in_background_and_replay_is_idempotent(self):
+        owner=str(self.owner['id'])
+        task=self.imports.create(owner,'text','Auto','auto.txt','auto-upload')['task']['id']
+        self.imports.upload(owner,task,'auto.txt',b'Uploaded text survives disconnect.','text/plain')
+        with patch('saas_imports.threading.Thread') as thread:
+            submitted=self.imports.submit_complete(owner,task,background=True)
+            self.assertTrue(submitted['asynchronous'])
+            worker=thread.call_args.kwargs['target']
+        worker();worker()
+        done=self.imports.list(owner)['tasks'][0]
+        self.assertEqual(done['status'],'complete')
+        self.assertEqual(len(self.workspace.list_books(owner)['books']),1)
+
     def test_document_alignment_submission_is_async_and_worker_failure_is_pollable(self):
         owner,other=str(self.owner['id']),str(self.other['id'])
         task=self.imports.create(owner,'text','Async','async.txt','async-document')['task']['id']
@@ -497,6 +524,48 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
                     client.request(method,path,body,headers or {})
                     response=client.getresponse();return response.status,json.loads(response.read()),response.getheaders()
                 finally:client.close()
+            owner_headers={"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf}
+            status,short_task,_=request('POST','/api/workspace/imports',json.dumps({'kind':'text','title':'Short upload','filename':'short.txt','idempotencyKey':'http-short','metadata':{'awaitingAudioUpload':True}}),owner_headers)
+            self.assertEqual(status,201)
+            short_id=short_task['task']['id']
+            def short_upload(route,declared=None):
+                with socket.create_connection(('127.0.0.1',port),timeout=5) as client:
+                    headers={**owner_headers,'Content-Length':'100' if declared is None else '4','X-Upload-Filename':'short.mp3' if route=='upload-audio' else 'short.txt','X-Import-Start-Processing':'1','Connection':'close'}
+                    if declared is not None:headers['X-Upload-Size']=str(declared)
+                    raw=f'POST /api/workspace/imports/{short_id}/{route} HTTP/1.1\r\nHost: localhost\r\n'+''.join(f'{key}: {value}\r\n' for key,value in headers.items())+'\r\n'
+                    client.sendall(raw.encode()+b'part');client.shutdown(socket.SHUT_WR)
+                    response=http.client.HTTPResponse(client);response.begin()
+                    self.assertEqual(response.status,400)
+                    self.assertEqual(json.loads(response.read())['code'],'incomplete_upload')
+            short_upload('upload')
+            short_upload('upload',100)
+            state=request('GET',f'/api/workspace/imports/{short_id}',headers=owner_headers)[1]['task']
+            self.assertEqual(state['status'],'uploading');self.assertFalse(state.get('sourceAssetId'))
+            self.assertEqual(request('POST',f'/api/workspace/imports/{short_id}/upload',b'Complete text.',{**owner_headers,'X-Upload-Filename':'short.txt','X-Upload-Size':'14'})[0],200)
+            short_upload('upload-audio')
+            short_upload('upload-audio',100)
+            self.assertEqual(request('POST',f'/api/workspace/imports/{short_id}/complete','{}',owner_headers)[1]['code'],'companion_audio_pending')
+            with self.accounts.transaction() as db:
+                with db.cursor() as cursor:
+                    cursor.execute('SELECT COUNT(*) FROM asset_variants WHERE asset_id=(SELECT source_asset_id FROM workspace_import_tasks WHERE id=%s)',(short_id,))
+                    self.assertEqual(cursor.fetchone()[0],0)
+            status,created,_=request('POST','/api/workspace/imports',json.dumps({'kind':'text','title':'Disconnect','filename':'disconnect.txt','idempotencyKey':'http-disconnect'}),owner_headers)
+            self.assertEqual(status,201)
+            disconnected_id=created['task']['id']
+            upload_path=f'/api/workspace/imports/{disconnected_id}/upload'
+            upload_headers={**owner_headers,'Content-Type':'text/plain','X-Upload-Filename':'disconnect.txt','X-Import-Start-Processing':'1'}
+            self.assertEqual(request('POST',upload_path,b'Text stays safe.',{key:value for key,value in upload_headers.items() if key!='X-CSRF-Token'})[0],403)
+            # Lose the upload response: processing must not depend on a browser /complete.
+            disconnected=http.client.HTTPConnection('127.0.0.1',port,timeout=5)
+            disconnected.request('POST',upload_path,b'Text stays safe.',upload_headers)
+            disconnected.sock.shutdown(socket.SHUT_RDWR);disconnected.close()
+            deadline=time.monotonic()+10
+            while time.monotonic()<deadline:
+                status,state,_=request('GET',f'/api/workspace/imports/{disconnected_id}',headers=owner_headers)
+                if state.get('task',{}).get('status')=='complete':break
+                time.sleep(.05)
+            else:self.fail(f'Upload did not auto-start after disconnect: {state}')
+            self.assertEqual(request('POST',f'/api/workspace/imports/{disconnected_id}/complete','{}',owner_headers)[1]['task']['outputBookId'],state['task']['outputBookId'])
             self.assertEqual(request("GET","/api/admin/content-imports")[0],401)
             self.assertEqual(request("GET","/api/admin/content-imports",headers={"Cookie":cookies})[0],403)
             self.assertEqual(request("GET","/api/admin/media-assets",headers={"Cookie":cookies})[0],403)
@@ -509,8 +578,14 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
             self.assertEqual(request("POST","/api/admin/content-imports","{}",{"Content-Type":"application/json","Cookie":cookies})[0],403)
             status,created,_=request("POST","/api/admin/content-imports",json.dumps({"kind":"text","title":"Official HTTP","filename":"official.txt","idempotencyKey":"http-official"}),admin_headers)
             self.assertEqual(status,201,created);official_id=created["task"]["id"]
-            status,_,_=request("POST",f"/api/admin/content-imports/{official_id}/upload",b"Official upload.",{**admin_headers,"Content-Type":"text/plain","X-Upload-Filename":"official.txt"})
-            self.assertEqual(status,200)
+            status,_,_=request("POST",f"/api/admin/content-imports/{official_id}/upload",b"Official upload.",{**admin_headers,"Content-Type":"text/plain","X-Upload-Filename":"official.txt","X-Import-Start-Processing":"1"})
+            self.assertEqual(status,202)
+            deadline=time.monotonic()+10
+            while time.monotonic()<deadline:
+                state=request('GET',f'/api/admin/content-imports/{official_id}',headers=admin_headers)[1]
+                if state.get('task',{}).get('status')=='complete':break
+                time.sleep(.05)
+            else:self.fail(f'Official upload did not auto-start: {state}')
             status,done,_=request("POST",f"/api/admin/content-imports/{official_id}/complete","{}",admin_headers)
             self.assertEqual(status,200,done);self.assertEqual(done["task"]["status"],"complete")
             self.assertEqual(request("GET","/api/admin/content-imports",headers=admin_headers)[1]["total"],1)
