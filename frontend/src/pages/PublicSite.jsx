@@ -9,6 +9,8 @@ import { refreshJourney, updateJourney } from '../api/journey'
 import { PurchaseRecovery } from '../components/LearningJourney'
 import InteractiveDemo from '../components/InteractiveDemo'
 import TrustSection from '../components/TrustSection'
+import BrandLogo from '../components/BrandLogo'
+import { BRAND_SLOGAN } from '../config/brand.mjs'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -28,7 +30,7 @@ export function PriceDisplay({ product }) {
 
 export function PublicHeader({ authenticated, compact = false }) {
   return <header className={`public-header ${compact ? 'is-compact' : ''}`}>
-    <a className="public-brand" href="/"><span className="public-brand-mark">拾</span><span><b>拾页</b><small>ENGLISH WORKSPACE</small></span></a>
+    <a className="public-brand" href="/"><BrandLogo variant="public" /></a>
     <nav aria-label="公开站点导航"><a href="/#product">产品</a><a href="/pricing">套餐</a><a href="/support">支持</a></nav>
     <Space><Button href={authenticated ? '/app' : '/login'}>{authenticated ? '进入学习空间' : '登录'}</Button><Button type="primary" href={authenticated ? '/pricing' : '/register'}>{authenticated ? '查看套餐' : '免费注册'}</Button></Space>
   </header>
@@ -73,7 +75,7 @@ export function PricingSection({ authenticated, products, loading = false, error
 function PricingFAQ() {
   return <section className="public-faq"><Title level={2}>购买前，你可能想知道</Title><Collapse items={[
     { key: 'free', label: '可以先免费使用吗？', children: '可以。使用有效邀请码注册并验证邮箱后，即可使用免费方案。没有邀请码时，可联系支持页客服咨询。' },
-    { key: 'pay', label: '付款后如何开通？', children: '先登录拾页核对当前方案，再前往云猫付款。复制云猫发放的兑换码，回到拾页原弹窗兑换。只有兑换成功后，会员权益才会生效。' },
+    { key: 'pay', label: '付款后如何开通？', children: '先登录 RynEnglish 核对当前方案，再前往云猫付款。复制云猫发放的兑换码，回到 RynEnglish 原弹窗兑换。只有兑换成功后，会员权益才会生效。' },
     { key: 'renew', label: '会自动扣款吗？续费和升级怎么算？', children: '不会自动续费。同等级兑换立即延长有效期；升级时按剩余权益价值折算时长。购买前会显示预计到期日；当前不支持购买低于有效会员等级的方案。' },
     { key: 'capacity', label: '到期或达到收藏上限后怎么办？', children: '到期后按免费权益使用，已有超限内容不会自动删除；新增收藏或导入会受当前额度限制。移出官方收藏或删除不再需要的私人读物可释放名额，归档仍占名额。' },
     { key: 'help', label: '兑换、退款或账号有问题怎么办？', children: <span>保留购买订单号和时间，通过<a href="/support">支持页</a>联系咨询；具体处理见<a href="/refunds">退款规则</a>。不要向他人发送完整兑换码或账号密码。</span> },
@@ -282,7 +284,7 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
         {paymentMethod === 'alipay' && alipayOrder && <Card className="alipay-order-panel" size="small" title={<Space><span>支付宝订单</span><Tag color={alipayOrder.status === 'paid' ? 'success' : 'processing'}>{alipayOrder.status === 'paid' ? '已完成' : '待付款'}</Tag></Space>}>
           <div className="alipay-order-meta"><span>订单号</span><b>{alipayOrder.orderId}</b><span>应付金额</span><b>{formatPrice(alipayOrder.amountCents ?? product.amountCents)}</b></div>
           {alipayOrder.testMode && alipayOrder.status === 'pending' && <Alert showIcon type="warning" message="本地模拟支付，不会扣款" description="此订单不会连接支付宝或产生真实交易。" action={<Button type="primary" onClick={simulateAlipayPayment}>模拟付款成功</Button>} />}
-          {(alipayOrder.qrCode || alipayOrder.testMode) && alipayOrder.status === 'pending' && <Space className="alipay-qr" direction="vertical" align="center"><Text strong>{alipayOrder.testMode ? '本地模拟二维码预览' : '使用支付宝扫描付款'}</Text><QRCode value={alipayOrder.testMode ? `SHIYUE_LOCAL_TEST_PAYMENT:${alipayOrder.orderId}` : alipayOrder.qrCode} size={192} /><Text type="secondary">{alipayOrder.testMode ? '仅用于查看界面，不可用支付宝扫码付款。请使用“模拟付款成功”继续。' : '付款结果自动查询，请勿重复付款。'}</Text></Space>}
+          {(alipayOrder.qrCode || alipayOrder.testMode) && alipayOrder.status === 'pending' && <Space className="alipay-qr" direction="vertical" align="center"><Text strong>{alipayOrder.testMode ? '本地模拟二维码预览' : '使用支付宝扫描付款'}</Text><QRCode value={alipayOrder.testMode ? `RYNENGLISH_LOCAL_TEST_PAYMENT:${alipayOrder.orderId}` : alipayOrder.qrCode} size={192} /><Text type="secondary">{alipayOrder.testMode ? '仅用于查看界面，不可用支付宝扫码付款。请使用“模拟付款成功”继续。' : '付款结果自动查询，请勿重复付款。'}</Text></Space>}
           {alipayOrder.status === 'pending' && <Text className="alipay-pending-note" type="secondary">保持此页面打开，系统会自动查询订单状态。</Text>}
         </Card>}
         {paymentMethod === 'alipay' && alipayOrder?.status === 'paid' && <Alert showIcon type="success" message="支付宝付款成功，会员权益已开通。" />}
@@ -290,8 +292,8 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
         {paymentMethod === 'cloudcat' && product.redemptionEnabled !== false && <Button block type="link" disabled={!preview || Boolean(previewError)} onClick={() => redeemInput.current?.focus()}>已有兑换码，直接开通 ↓</Button>}
       </Space>}
       {!authenticated && <Button block type="primary" size="large" href={loginHref}>登录后核对方案</Button>}
-      {paymentMethod === 'alipay' && <Paragraph className="purchase-reassurance">支付宝付款由拾页服务端确认后开通；不自动续费。付款前请查看<a href="/refunds" target="_blank" rel="noreferrer">退款规则</a>。</Paragraph>}
-      {paymentMethod === 'cloudcat' && <Paragraph className="purchase-reassurance">云猫付款后取得兑换码，在拾页兑换开通；不自动续费。付款前请查看<a href="/refunds" target="_blank" rel="noreferrer">退款规则</a>。</Paragraph>}
+      {paymentMethod === 'alipay' && <Paragraph className="purchase-reassurance">支付宝付款由 RynEnglish 服务端确认后开通；不自动续费。付款前请查看<a href="/refunds" target="_blank" rel="noreferrer">退款规则</a>。</Paragraph>}
+      {paymentMethod === 'cloudcat' && <Paragraph className="purchase-reassurance">云猫付款后取得兑换码，在 RynEnglish 兑换开通；不自动续费。付款前请查看<a href="/refunds" target="_blank" rel="noreferrer">退款规则</a>。</Paragraph>}
       {(paymentMethod === 'cloudcat' || !methods.length) && !redeemResult && <div className="public-purchase-modal-redeem">
         {product.redemptionEnabled !== false && <Text strong>已有兑换码？</Text>}
         {product.redemptionEnabled !== false && authenticated
@@ -341,14 +343,14 @@ export default function PublicSite({ authenticated, page = 'home' }) {
   const pricingProps = { authenticated, loading, error: catalogError, onRetry: () => setCatalogRevision(value => value + 1), onPurchase: openPurchase }
 
   if (page === 'pricing') return <main className="public-site"><PublicHeader authenticated={authenticated} compact /><PurchaseRecovery authenticated={authenticated} /><PricingSection key={catalogRevision} {...pricingProps} products={catalog.products} headingLevel={1} title="按你的学习节奏，选择合适的空间" /><PricingFAQ />{purchaseDialog}<TrustFooter support={catalog.support} /></main>
-  if (page === 'support') return <main className="public-site"><PublicHeader authenticated={authenticated} compact /><section className="public-support"><Text>SUPPORT</Text><Title>购买前后，都有人回应</Title><Paragraph>套餐、支付、退款或账号问题，请联系 QQ <b>{catalog.support?.value || '289614546'}</b>。我们会在 1 个工作日内响应，并尽量在 3 个工作日内给出处理结论。</Paragraph><Row gutter={[20, 20]}><Col xs={24} md={8}><Card id="invitation"><CustomerServiceOutlined /><Title level={4}>邀请码与注册</Title><Paragraph>还没有邀请码？联系上方 QQ，说明你的学习需求，咨询当前开放情况。已有邀请码但注册失败，请附上错误提示。</Paragraph><Text type="secondary">获得有效邀请码并完成邮箱验证后，即可免费开始。</Text><Button href="/register">已有邀请码，去注册</Button></Card></Col><Col xs={24} md={8}><Card id="payment"><LockOutlined /><Title level={4}>付款后未开通？</Title><Paragraph>先查看云猫订单是否已发放兑换码，再回到拾页兑换；如果兑换失败，请提供订单号、注册邮箱、购买时间和错误提示。</Paragraph><Text type="secondary">请勿发送账号密码或完整兑换码。退款处理见退款规则。</Text><Button href="/app?screen=membership">已有兑换码，去开通</Button></Card></Col><Col xs={24} md={8}><Card><CheckCircleFilled /><Title level={4}>内容与版权</Title><Text>私人材料仅用于个人学习，官方内容仅使用公版或授权资源。</Text></Card></Col></Row></section><TrustFooter support={catalog.support} /></main>
+  if (page === 'support') return <main className="public-site"><PublicHeader authenticated={authenticated} compact /><section className="public-support"><Text>SUPPORT</Text><Title>购买前后，都有人回应</Title><Paragraph>套餐、支付、退款或账号问题，请联系 QQ <b>{catalog.support?.value || '289614546'}</b>。我们会在 1 个工作日内响应，并尽量在 3 个工作日内给出处理结论。</Paragraph><Row gutter={[20, 20]}><Col xs={24} md={8}><Card id="invitation"><CustomerServiceOutlined /><Title level={4}>邀请码与注册</Title><Paragraph>还没有邀请码？联系上方 QQ，说明你的学习需求，咨询当前开放情况。已有邀请码但注册失败，请附上错误提示。</Paragraph><Text type="secondary">获得有效邀请码并完成邮箱验证后，即可免费开始。</Text><Button href="/register">已有邀请码，去注册</Button></Card></Col><Col xs={24} md={8}><Card id="payment"><LockOutlined /><Title level={4}>付款后未开通？</Title><Paragraph>先查看云猫订单是否已发放兑换码，再回到 RynEnglish 兑换；如果兑换失败，请提供订单号、注册邮箱、购买时间和错误提示。</Paragraph><Text type="secondary">请勿发送账号密码或完整兑换码。退款处理见退款规则。</Text><Button href="/app?screen=membership">已有兑换码，去开通</Button></Card></Col><Col xs={24} md={8}><Card><CheckCircleFilled /><Title level={4}>内容与版权</Title><Text>私人材料仅用于个人学习，官方内容仅使用公版或授权资源。</Text></Card></Col></Row></section><TrustFooter support={catalog.support} /></main>
 
   return <main className="public-site public-landing">
     <PublicHeader authenticated={authenticated} />
     <PurchaseRecovery authenticated={authenticated} />
     <section className="public-hero">
-      <div className="public-hero-copy"><Text>原声听读 · 语境理解 · 生词复习</Text><Title><span>不是看过。</span><span>是终于读懂。</span></Title><Paragraph>用原声视频、音频和文章逐句学英语。查懂一个词，听清一句话，把每次理解留在自己的学习空间。</Paragraph><Space size={14}><Button type="primary" size="large" href={authenticated ? '/app' : '/register'}>{authenticated ? '继续学习' : '免费开始学习'}<ArrowRightOutlined /></Button><Button size="large" href="#product">了解学习方式</Button></Space>{!authenticated && <Text className="signup-note">注册需要邀请码 · 验证邮箱后开始 · 无需支付</Text>}<div className="public-hero-notes"><span><CheckCircleFilled /> 使用原始音视频</span><span><CheckCircleFilled /> 私人学习空间</span><span><CheckCircleFilled /> 自动保存学习进度</span></div></div>
-      <div className="public-hero-visual" aria-label="拾页逐句阅读器产品画面"><div className="public-device-frame"><img src="/product/reader-lookup-20261026.webp" width="2560" height="1338" alt="最新拾页阅读器：原声视频、逐句字幕与 confident 本句查词浮窗" fetchPriority="high" /></div><div className="public-visual-caption"><PlayCircleFilled /><span>原声、字幕与释义，在同一个阅读现场</span></div></div>
+      <div className="public-hero-copy"><Text>原声听读 · 语境理解 · 生词复习</Text><Title><span>不是看过。</span><span>是终于读懂。</span></Title><Paragraph className="ryn-hero-slogan">{BRAND_SLOGAN}</Paragraph><Paragraph>用原声视频、音频和文章逐句学英语。查懂一个词，听清一句话，把每次理解留在自己的学习空间。</Paragraph><Space size={14}><Button type="primary" size="large" href={authenticated ? '/app' : '/register'}>{authenticated ? '继续学习' : '免费开始学习'}<ArrowRightOutlined /></Button><Button size="large" href="#product">了解学习方式</Button></Space>{!authenticated && <Text className="signup-note">注册需要邀请码 · 验证邮箱后开始 · 无需支付</Text>}<div className="public-hero-notes"><span><CheckCircleFilled /> 使用原始音视频</span><span><CheckCircleFilled /> 私人学习空间</span><span><CheckCircleFilled /> 自动保存学习进度</span></div></div>
+      <div className="public-hero-visual" aria-label="RynEnglish 逐句阅读器产品画面"><div className="public-device-frame"><img src="/product/reader-lookup-20261026.webp" width="2560" height="1338" alt="最新 RynEnglish 阅读器：原声视频、逐句字幕与 confident 本句查词浮窗" fetchPriority="high" /></div><div className="public-visual-caption"><PlayCircleFilled /><span>原声、字幕与释义，在同一个阅读现场</span></div></div>
     </section>
 
     <section className="public-pain"><Text>真正的问题，不是缺少材料</Text><Title level={2}>而是每次学习都从零开始。</Title><Row gutter={[28, 28]}><Col xs={24} md={8}><div><b>读到一半就放弃</b><p>长文章和视频没有清晰切分，难点出现时只能来回拖动。</p></div></Col><Col xs={24} md={8}><div><b>查完的词又忘了</b><p>词典、上下文与复习彼此分离，知道意思却没有形成记忆。</p></div></Col><Col xs={24} md={8}><div><b>学了多久没有答案</b><p>零散工具不记录你的阅读位置、投入时间和真实进度。</p></div></Col></Row></section>
@@ -361,7 +363,7 @@ export default function PublicSite({ authenticated, page = 'home' }) {
     </section>
     <section className="public-product-story reverse">
       <div className="public-story-copy"><Text>KEEP THE THREAD</Text><Title level={2}>今天学到哪里，明天从那里继续。</Title><Paragraph>私人书架、阅读位置、学习时长和复习任务集中在一个空间。你的每一次投入，都能成为下一次学习的起点。</Paragraph></div>
-      <div className="public-screenshot-stage"><img src="/product/workspace-current.jpg" loading="lazy" alt="拾页个人英语学习空间：继续阅读、复习生词与每周学习记录" /></div>
+      <div className="public-screenshot-stage"><img src="/product/workspace-current.jpg" loading="lazy" alt="RynEnglish 个人英语学习空间：继续阅读、复习生词与每周学习记录" /></div>
     </section>
     <section className="public-product-story">
       <div className="public-story-copy"><Text>REVISIT YOUR WORDS</Text><Title level={2}>读过的生词，在复习中记住。</Title><Paragraph>从原文收藏生词，按自己的节奏回忆、对照释义，再巩固薄弱词。复习记录和下一次安排，让每一点积累都有迹可循。</Paragraph></div>
@@ -377,7 +379,7 @@ export default function PublicSite({ authenticated, page = 'home' }) {
 }
 
 function TrustFooter({ support }) {
-  return <footer className="public-footer"><div className="public-brand"><span className="public-brand-mark">拾</span><span><b>拾页</b><small>ENGLISH WORKSPACE</small></span></div><div><a href="/terms">用户协议</a><a href="/privacy">隐私政策</a><a href="/content-policy">内容规则</a><a href="/copyright">版权投诉</a><a href="/refunds">退款规则</a></div><Text>客服 QQ：{support?.value || '289614546'} · 固定期限权益，不自动续费</Text></footer>
+  return <footer className="public-footer"><div className="public-brand"><BrandLogo variant="public" /></div><div><a href="/terms">用户协议</a><a href="/privacy">隐私政策</a><a href="/content-policy">内容规则</a><a href="/copyright">版权投诉</a><a href="/refunds">退款规则</a></div><Text>客服 QQ：{support?.value || '289614546'} · 固定期限权益，不自动续费</Text></footer>
 }
 
 export function PurchasePage({ authenticated }) {

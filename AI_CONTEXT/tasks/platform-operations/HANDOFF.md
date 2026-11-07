@@ -9,6 +9,10 @@
 
 ## 当前实现（2026-11-07 核实）
 
+### 2026-11-07 品牌源码合并主分支
+
+- `feat/rynenglish-brand`（`7b65f78`）正式合并 main，保留 main 的上传完整性与 Linux 对齐安装修复；仅两处交接文档冲突，业务源码自动合并。此为 Git 源码交付，不执行生产部署。
+
 ### 2026-11-07 Linux 安装与升级补齐原音对齐
 
 - 首次部署、完整重装、程序升级共用 `ensure_remote_aligner`，不受可选 Whisper 录音开关影响。已通过校验的 `shared/.local/forced-aligner` 复用；缺失/损坏时，由部署端下载目标 Linux CPython 3.11 的 CPU wheels 和固定 SHA-256 模型，校验缓存、打包并上传，远程禁网离线安装，避免远端慢速模型下载导致导入卡住。
@@ -22,6 +26,15 @@
 - 实机基线为 `code-20261106-113458-43116bfb`。本轮按用户授权备份 PostgreSQL（pg_restore --list 校验）与原代码后，定向热修复导入上传启动、部分原音校验和前端导入组件；保留线上数据、RynEnglish 品牌、验证码与现有 CSS。备份 `/srv/shiyue/backups/saas/import-recovery-20261107/`。
 - 当前 release 目录未切换。后续定向修复加入前台代理/后端上传完整性校验，并撤回接受部分音频的临时方案；前端仅替换 ImportModal/LibraryPage 组件。后续完整升级必须保留线上 11 月 6 日源码变更，不能直接用本地旧品牌构建覆盖。
 - CPU 对齐环境与模型在既有持久化 `shared/.local/forced-aligner/`，不改容器挂载或全局配置。最终上传完整性修复已发布，前端入口 **`c03008a13c69`**；原任务已更正为完整音频 8,159,161 字节/1,011.947378 秒，2,073/2,098 词实测时间，原书 ID/学习记录保留。备份 `backups/saas/upload-integrity-20261107/` 含可读取 pgdump 和原代码，清单 `manifests/history/upload-integrity-20261107.json`；实际前台短读请求返回 400，后台/前台/Redis 健康。恢复详情见 `../import-media/HANDOFF.md`。
+### 2026-11-06 品牌第二轮与账号操作更新
+
+- 任务 #5 complete，当前版本 `code-20261106-113458-43116bfb`；数据库备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261106-113458-43116bfb.dump` 非空。调整 R/e 图标布局、购买提醒和设置入口，保留线上数据、容器技术标识与原访问链路；SaaS/Redis 健康、Cloudflare active。
+
+### 2026-11-06 RynEnglish 品牌已发布
+
+- 用户授权程序升级任务 #4 complete，当前版本 `code-20261106-111413-2385a2c5`；备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261106-111413-2385a2c5.dump`，保留远端数据、验证码开关、HTTPS/5173 和 Cloudflare。
+- R/e Logo、网站名称、slogan、favicon、邮件及法律文案更新；技术容器/目录/会话标识保留兼容。详见 `../brand-assets/HANDOFF.md`。
+- 候选/正式健康及迁移核验通过；服务器侧域名严格 TLS、新品牌首页、原公网 5173 严格 CA 验证200，Cloudflare active；Cloudflare 公网 Chrome 11 路由验收通过。本机直连正式域名443仍为既有 SSL 超时。
 
 ### 2026-11-05 验证码与 DirectMail 已发布
 

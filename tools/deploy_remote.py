@@ -49,7 +49,7 @@ def follow_job(job_id,timeout):
 
 
 def main():
-    parser=argparse.ArgumentParser(description="构建并部署拾页远程阅读节点")
+    parser=argparse.ArgumentParser(description="构建并部署 RynEnglish 远程阅读节点")
     parser.add_argument("--package-only",action="store_true",help="只构建发布包，不连接服务器")
     parser.add_argument("--target",help="部署节点 ID 或完整名称")
     mode=parser.add_mutually_exclusive_group()

@@ -146,7 +146,7 @@ export default function InteractiveDemo({ authenticated = false }) {
         <div className="demo-sentence"><p>Don't stop to {renderWord('correct')} yourself.<br />Just keep going and let the {renderWord('language')} flow.</p></div>
         <p className="demo-hint">悬停看简义，点击看本句含义 · 试试 correct 和 language</p>
       </div>
-      <p className="demo-footnote">这只是一句。在拾页，每篇文章、每个视频都能这样逐句理解。</p>
+      <p className="demo-footnote">这只是一句。在 RynEnglish，每篇文章、每个视频都能这样逐句理解。</p>
     </div>
   </section>
 }

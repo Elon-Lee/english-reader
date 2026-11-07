@@ -28,7 +28,7 @@ export default function TrustSection() {
   if (loading) {
     return (
       <section className="public-trust">
-        <h2>已经有学习者在用拾页建立习惯</h2>
+        <h2>已经有学习者在用 RynEnglish 建立习惯</h2>
         <div className="trust-stats">
           {[1, 2, 3].map(i => (
             <div className="trust-metric" key={i}>
@@ -55,7 +55,7 @@ export default function TrustSection() {
 
   return (
     <section className="public-trust">
-      <h2>已经有学习者在用拾页建立习惯</h2>
+      <h2>已经有学习者在用 RynEnglish 建立习惯</h2>
 
       <div className="trust-stats">
         {stats.totalSentences > 0 && (

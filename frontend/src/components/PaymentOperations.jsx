@@ -54,7 +54,7 @@ export function PaymentMethodSettings() {
       <Alert type={data.alipayRequirements?.testMode ? 'warning' : 'info'} showIcon message={data.alipayRequirements?.testMode ? '本地支付宝流程模拟已启用' : '支付宝尚未开放'} description={data.alipayRequirements?.testMode ? '模拟订单不会连接支付宝网关或产生真实扣款，仅用于验证订单、会员开通和后台管理流程。' : '支付宝应用号、RSA2 密钥和异步通知地址由服务端环境安全配置。当前后台不接收或展示密钥；获批具体支付产品并完成部署配置后，才能开启支付宝。'} />
       <Space align="start" size={18} style={{ width: '100%', justifyContent: 'space-between' }}><div><Text strong>支付宝扫码付款</Text><Paragraph type="secondary">付款确认和会员开通由服务端查单处理，不自动续费。</Paragraph>{data.alipayRequirements && <Text type="secondary">{data.alipayRequirements.testMode ? '本地模拟模式已就绪' : `服务端参数：${data.alipayRequirements.configured ? '已配置' : '未完整配置'}`}</Text>}</div><Switch checked={data.alipayEnabled} disabled={!data.alipayReady || saving} loading={saving} onChange={() => save('alipayEnabled')} aria-label="启用支付宝支付" /></Space>
       <Space align="start" size={18} style={{ width: '100%', justifyContent: 'space-between' }}><div><Text strong>云猫购买</Text><Paragraph type="secondary">用户前往对应云猫商品页付款并取得兑换码。</Paragraph></div><Switch checked={data.cloudcatEnabled} disabled={saving} loading={saving} onChange={() => save('cloudcatEnabled')} aria-label="启用云猫购买" /></Space>
-      <Space align="start" size={18} style={{ width: '100%', justifyContent: 'space-between' }}><div><Text strong>兑换码开通</Text><Paragraph type="secondary">允许用户提交已取得的拾页兑换码开通会员。</Paragraph></div><Switch checked={data.redemptionEnabled} disabled={saving} loading={saving} onChange={() => save('redemptionEnabled')} aria-label="启用兑换码开通" /></Space>
+      <Space align="start" size={18} style={{ width: '100%', justifyContent: 'space-between' }}><div><Text strong>兑换码开通</Text><Paragraph type="secondary">允许用户提交已取得的 RynEnglish 兑换码开通会员。</Paragraph></div><Switch checked={data.redemptionEnabled} disabled={saving} loading={saving} onChange={() => save('redemptionEnabled')} aria-label="启用兑换码开通" /></Space>
     </Space>}
   </Card>
 }
@@ -138,7 +138,7 @@ export function RedemptionRecordsAdmin() {
     { title: '会员订阅', dataIndex: 'subscriptionId', width: 190, render: value => value ? <Text code>{value}</Text> : '—' },
   ]
   return <Card title="兑换记录" extra={<Button onClick={reload}>刷新</Button>}>
-    <Paragraph type="secondary">查询拾页兑换码的生成、核销和作废状态。云猫侧付款与退款订单需在云猫商户后台核对；拾页不展示未同步的云猫订单。</Paragraph>
+    <Paragraph type="secondary">查询 RynEnglish 兑换码的生成、核销和作废状态。云猫侧付款与退款订单需在云猫商户后台核对；RynEnglish 不展示未同步的云猫订单。</Paragraph>
     <Space wrap style={{ marginBottom: 16 }}><Input.Search allowClear placeholder="记录号、批次、前缀、邮箱或套餐" value={query} onChange={event => { setQuery(event.target.value); setPage(1) }} style={{ width: 330 }} /><Select allowClear placeholder="全部状态" value={status || undefined} onChange={value => { setStatus(value || ''); setPage(1) }} style={{ width: 150 }} options={Object.entries(redemptionStatus).map(([value, label]) => ({ value, label }))} /></Space>
     {error && <Alert type="error" showIcon message={error} action={<Button onClick={reload}>重试</Button>} style={{ marginBottom: 16 }} />}
     <Table rowKey="id" size="small" loading={loading} columns={columns} dataSource={data.records || []} pagination={false} scroll={{ x: 1400 }} locale={{ emptyText: error ? '记录加载失败' : '暂无兑换记录' }} />

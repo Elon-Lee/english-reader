@@ -149,7 +149,7 @@ class CommerceService:
             "products": products,
             "support": {"type": "QQ", "value": "289614546", "response": "1 个工作日内响应"},
             "payment": {**payment, "configured": bool(payment["methods"]),
-                "notice": "支付宝付款成功后由拾页确认开通；云猫购买后使用兑换码开通。均为单次购买，不自动续费。"},
+                "notice": "支付宝付款成功后由 RynEnglish 确认开通；云猫购买后使用兑换码开通。均为单次购买，不自动续费。"},
         }
 
     def product(self, slug: str) -> dict[str, Any]:

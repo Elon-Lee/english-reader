@@ -399,7 +399,7 @@ source_image=$(docker inspect -f '{{{{.Config.Image}}}}' shiyue-reader 2>/dev/nu
 if [ -z "$source_image" ]; then
   source_image=$(docker images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' | grep '^shiyue-reader:' | head -1 || true)
 fi
-[ -n "$source_image" ] || {{ echo '远程没有可导出的拾页运行镜像' >&2; exit 3; }}
+[ -n "$source_image" ] || {{ echo '远程没有可导出的 RynEnglish 运行镜像' >&2; exit 3; }}
 docker tag "$source_image" {shlex.quote(RUNTIME_IMAGE)}
 docker save {shlex.quote(RUNTIME_IMAGE)} | gzip -1 > {shlex.quote(remote_temp)}
 """
@@ -1217,7 +1217,7 @@ sha256sum "$backup" | awk '{{print "SHIYUE_REDEPLOY_BACKUP_READY " $1}}'
     backup_result=remote.ssh(backup_script)
     if "SHIYUE_REDEPLOY_BACKUP_READY" not in backup_result:raise ValueError("重新部署前的远程数据库备份未完成")
     job.write(f"远程数据库备份已保存到节点目录之外：{backup}")
-    job.update(34,"卸载远程拾页服务")
+    job.update(34,"卸载远程 RynEnglish 服务")
     uninstall_script=f"""set -euo pipefail
 docker rm -f shiyue-saas shiyue-saas-frontend shiyue-postgres shiyue-redis shiyue-reader shiyue-captcha shiyue-captcha-candidate shiyue-captcha-previous >/dev/null 2>&1 || true
 rm -rf -- {root}
@@ -1335,7 +1335,7 @@ def start_uninstall(target_id,confirmation):
     root=str(target["remote_root"]).strip()
     if root in {"","/","/root","/home","/srv"} or len(Path(root).parts)<3:raise ValueError("远程目录范围过大，拒绝卸载")
     def worker(job,remote,target):
-        job.update(20,"停止并删除拾页容器")
+        job.update(20,"停止并删除 RynEnglish 容器")
         quoted=shlex.quote(root)
         script=f"""set -e
 if command -v systemctl >/dev/null 2>&1; then systemctl disable --now shiyue-reader >/dev/null 2>&1 || true; fi
@@ -1353,7 +1353,7 @@ echo SHIYUE_UNINSTALLED
         output=remote.ssh(script)
         if "SHIYUE_UNINSTALLED" not in output:raise ValueError("远程卸载未完成")
         db=connect();db.execute("UPDATE deployment_releases SET status='uninstalled' WHERE target_id=?",(target["id"],));db.commit();db.close()
-        job.complete({"targetId":target["id"],"remoteRoot":root,"dockerPreserved":True},"远程拾页已卸载")
+        job.complete({"targetId":target["id"],"remoteRoot":root,"dockerPreserved":True},"远程 RynEnglish 已卸载")
     return run_task("remote_uninstall",worker,target_id)
 
 def job_info(job_id,offset=0):

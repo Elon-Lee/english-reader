@@ -1,6 +1,6 @@
 # 京东云生产部署架构
 
-核实日期：2026-11-05（Asia/Shanghai）。本文记录该日期实机核对的部署状态；后续调整入口、服务或目录时同步更新。
+核实日期：2026-11-06（Asia/Shanghai）。本文记录该日期实机核对的部署状态；后续调整入口、服务或目录时同步更新。
 
 ## 环境概况
 
@@ -12,9 +12,11 @@
 | 容器引擎 | Docker 26.1.4 |
 | 服务管理 | Docker 容器 + 宿主机 systemd 219 |
 | 应用安装目录 | `/srv/shiyue/` |
-| 当前代码版本 | `code-20261105-173117-956a2f49` |
+| 当前代码版本 | `code-20261106-113458-43116bfb` |
 
 2026-11-05 已增加标准 HTTPS 入口，随后发布旋转验证码开关与 DirectMail 发信；保留数据库、媒体、5173 入口及 Cloudflare Tunnel。生产验证码已开启，运营后台 → 认证安全可切换。
+
+2026-11-06 发布 RynEnglish 品牌、右上角 e 的 R/e Logo 与 slogan `Every Page, A Deeper Understanding.`，应用技术标识和目录继续使用 `shiyue` 以保持兼容；当前升级任务 #5 complete，数据库备份位于 `/srv/shiyue/backups/saas/pre-upgrade-code-20261106-113458-43116bfb.dump`。
 
 服务器侧标准域名访问正常；本机公网域名 80/443 核验出现 JDTP403/超时，外部访问原因待确认。原公网 5173 与 Cloudflare 公网 API 返回 200，不能仅凭服务器自访问判断公网 80/443 已通过验收。
 
@@ -88,7 +90,7 @@ Nginx 镜像为 `nginx:1.28-alpine`，核实时版本为 1.28.3。Certbot 使用
 核实时，`current` 指向：
 
 ```text
-/srv/shiyue/releases/code-20261105-173117-956a2f49
+/srv/shiyue/releases/code-20261106-113458-43116bfb
 ```
 
 代码目录和共享数据目录分离。后台挂载当前版本的 `reader/`、`tools/`，以及共享数据、缓存、书籍、模型和备份目录；前台挂载 `reader/site/`、`tools/` 和原 5173 证书目录。
