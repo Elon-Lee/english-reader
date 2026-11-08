@@ -1,16 +1,61 @@
+import os
+import shutil
 import subprocess
 import shlex
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from deployment.captcha import install_script
+from deployment.captcha import build_assets, install_script
 from deployment import manager
 
 
 class CaptchaDeploymentTests(unittest.TestCase):
+    def run_jdk_check(self, root, version=None, managed=False):
+        script = root / 'services/captcha/build.sh'
+        script.parent.mkdir(parents=True)
+        shutil.copyfile(manager.ROOT / 'services/captcha/build.sh', script)
+        java_home = root / ('.local/captcha-tools/jdk' if managed else 'test jdk')
+        if version is not None:
+            (java_home / 'bin').mkdir(parents=True)
+            for command in ('java', 'javac'):
+                executable = java_home / 'bin' / command
+                executable.write_text(f'#!/bin/sh\nprintf "%s\\n" "{command} {version}.0.1"\n')
+                executable.chmod(0o700)
+        environment = {**os.environ, 'JAVA_HOME': str(java_home), 'MAVEN_BIN': str(root / 'maven-must-not-run')}
+        if managed:
+            environment.pop('JAVA_HOME')
+        return subprocess.run(['sh', str(script), '--check'], env=environment, capture_output=True, text=True)
+
+    def test_missing_jdk_fails_before_maven_download_or_execution(self):
+        with tempfile.TemporaryDirectory() as folder:
+            result = self.run_jdk_check(Path(folder))
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('CAPTCHA_JDK_ERROR:', result.stderr)
+            self.assertIn('java 和 javac', result.stderr)
+            self.assertNotIn('Maven:', result.stdout)
+
+    def test_old_jdk_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            result = self.run_jdk_check(Path(folder), 8)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('版本过低', result.stderr)
+
+    def test_explicit_and_managed_jdk_pass_without_running_maven(self):
+        for version, managed in ((17, False), (21, True)):
+            with self.subTest(version=version, managed=managed), tempfile.TemporaryDirectory() as folder:
+                result = self.run_jdk_check(Path(folder), version, managed)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f'JDK: javac {version}', result.stdout)
+
+    def test_job_failure_shows_missing_jdk_reason(self):
+        result = subprocess.CompletedProcess([], 2, '', 'CAPTCHA_JDK_ERROR: 请安装 JDK 17 或以上版本\n')
+        with patch('deployment.captcha.subprocess.run', return_value=result):
+            with self.assertRaisesRegex(ValueError, '请安装 JDK 17'):
+                build_assets(Mock(), manager.ROOT)
+
     def test_saas_environment_is_data_not_shell(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

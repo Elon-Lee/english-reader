@@ -10,7 +10,9 @@
 java -Xms32m -Xmx192m -Djava.awt.headless=true -jar services/captcha/target/shiyue-captcha-1.0.0.jar
 ```
 
-`build.sh` 运行 `clean verify`，优先使用 `MAVEN_BIN` 或现有 Maven；否则下载并校验固定 Maven 3.9.9 到项目忽略目录 `.local/captcha-tools/`。macOS 本机可自动选择已安装的 Corretto 21，其余机器使用 `JAVA_HOME`/PATH。产物为 `services/captcha/target/shiyue-captcha-1.0.0.jar`，不提交构建产物。
+`build.sh` 先检查 Java 与 javac（JDK 17 或以上），再运行 `clean verify`；`build.sh --check` 仅检查 JDK，不下载 Maven或构建。JDK 优先使用显式 `JAVA_HOME`，其次项目忽略目录 `.local/captcha-tools/jdk`，然后 macOS 已安装的 JDK 21/17 或 PATH。项目内目录应直接包含 `bin/java` 和 `bin/javac`，macOS 解压包可将此路径链接到 `Contents/Home`。缺失时在部署任务中给出明确错误，并在前端构建、上传和远程切换前停止。
+
+Maven 优先使用 `MAVEN_BIN` 或现有 Maven；否则下载并校验固定 Maven 3.9.9 到 `.local/captcha-tools/`。产物为 `services/captcha/target/shiyue-captcha-1.0.0.jar`，不提交构建产物。
 
 Docker 使用预先从源码构建的 JAR：
 

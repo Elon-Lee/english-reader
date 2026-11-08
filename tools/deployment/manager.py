@@ -7,6 +7,7 @@ from urllib.parse import unquote
 from .https_entry import entry_paths, frontend_url, install_script, normalize_domain
 from .captcha import build_assets as build_captcha_assets, install_script as captcha_install_script
 from .alignment import ensure_remote as provision_remote_aligner, check_command as aligner_check_command
+from .runtime import build as build_remote_runtime, prepare_model as prepare_whisper_model
 
 ROOT=Path(__file__).resolve().parents[2]
 DB=ROOT/".local/library.sqlite3"
@@ -138,7 +139,12 @@ class Remote:
         lines=[]
         for line in process.stdout:lines.append(line);self.job.write(line.rstrip())
         code=process.wait()
-        if code:raise RuntimeError(f"远程命令失败，返回码 {code}")
+        if code:
+            output="".join(lines)
+            if re.search(r"^SHIYUE_HTTPS_CERTIFICATE_FAILED:", output, re.MULTILINE):
+                detail="（验证地址返回 HTTP 403，请检查云厂商域名拦截）" if re.search(r"Invalid response from http[^\n]+: 403",output) else ""
+                raise RuntimeError("Let's Encrypt 域名验证失败"+detail+"；现有应用服务保留，检查域名解析、80 端口及云厂商域名放行后，可单独补装 HTTPS，无需重新部署数据库")
+            raise RuntimeError(f"远程命令失败，返回码 {code}")
         return "".join(lines)
     def ssh(self,script):return self.execute([*self.base_ssh(),"bash","-lc",shlex.quote(script)])
     def scp(self,local,remote):
@@ -267,8 +273,8 @@ def code_files():
     return files
 def build_code_package(job,release):
     metadata=release_metadata(release)
-    build_frontend_assets(job)
     build_captcha_assets(job,ROOT)
+    build_frontend_assets(job)
     target=STATE/f"{release}.tar.gz";STATE.mkdir(parents=True,exist_ok=True)
     def archive_filter(info):
         if "__pycache__" in info.name or info.name.endswith((".pyc",".pyo",".DS_Store")):return None
@@ -395,30 +401,20 @@ def ensure_remote_runtime(job,remote,oci_arch):
     remote_ready="SHIYUE_RUNTIME_READY" in output;archive=runtime_archive(oci_arch);archive.parent.mkdir(parents=True,exist_ok=True)
     if remote_ready and archive.exists():
         job.write(f"远程运行镜像和本机离线缓存均已存在：{RUNTIME_IMAGE}");return archive
-    created_on_target=False
+    if remote_ready:
+        job.write("远程运行镜像已就绪，直接复用，不阻塞部署等待本机离线缓存")
+        return None
     if not archive.exists():
-        job.update(13,"从现有远程镜像制作本机离线运行包")
-        remote_temp=f"/tmp/{archive.name}"
-        script=f"""set -e
-source_image=$(docker inspect -f '{{{{.Config.Image}}}}' shiyue-reader 2>/dev/null || true)
-if [ -z "$source_image" ]; then
-  source_image=$(docker images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' | grep '^shiyue-reader:' | head -1 || true)
-fi
-[ -n "$source_image" ] || {{ echo '远程没有可导出的 RynEnglish 运行镜像' >&2; exit 3; }}
-docker tag "$source_image" {shlex.quote(RUNTIME_IMAGE)}
-docker save {shlex.quote(RUNTIME_IMAGE)} | gzip -1 > {shlex.quote(remote_temp)}
-"""
-        remote.ssh(script);remote.scp_from(remote_temp,archive);remote.ssh(f"rm -f {shlex.quote(remote_temp)}");created_on_target=True
+        build_remote_runtime(job,remote,ROOT,RUNTIME,RUNTIME_IMAGE,oci_arch)
+        job.write("Linux 运行镜像已从源码构建并验证，直接继续安装，不回传镜像")
+        return None
     if archive.stat().st_size<20*1024*1024:raise ValueError("本机离线运行镜像异常，文件过小")
     with gzip.open(archive,"rb") as source:
-        if not source.read(512):raise ValueError("本机离线运行镜像无法读取")
+        while source.read(1024*1024):pass
     job.write(f"本机离线运行镜像：{archive.name} · {archive.stat().st_size/1024/1024:.1f} MiB")
-    if remote_ready or created_on_target:
-        job.write("运行镜像已在当前服务器生成，同时缓存到本机，跳过重复上传")
-    else:
-        job.update(18,"上传完整Docker运行镜像")
-        remote_temp=f"/tmp/{archive.name}";remote.scp(archive,remote_temp)
-        remote.ssh(f"set -e; gzip -dc {shlex.quote(remote_temp)} | docker load; docker image inspect {shlex.quote(RUNTIME_IMAGE)} >/dev/null; rm -f {shlex.quote(remote_temp)}")
+    job.write("上传已验证的本机离线运行镜像")
+    remote_temp=f"/tmp/{archive.name}";remote.scp(archive,remote_temp)
+    remote.ssh(f"set -euo pipefail; gzip -dc {shlex.quote(remote_temp)} | docker load; docker image inspect {shlex.quote(RUNTIME_IMAGE)} >/dev/null; rm -f {shlex.quote(remote_temp)}")
     return archive
 
 def valid_tls_certificate(root_cert,server_cert,host):
@@ -1134,8 +1130,7 @@ def start_deploy(target_id):
         job.update(26,"生成代码发布包");package,digest=build_code_package(job,release);job.update(31,"上传代码版本");remote.scp(package,f"/tmp/{package.name}")
         certificate=""
         if target["install_recording"]:
-            model=ROOT/"tools/vendor/whisper.cpp/models/ggml-base.en.bin"
-            if not model.exists():raise ValueError("本地缺少 ggml-base.en.bin，无法安装远程录音模型")
+            model=prepare_whisper_model(job,ROOT)
             remote_model=f"{target['remote_root']}/shared/whisper/ggml-base.en.bin";local_hash=hashlib.sha256(model.read_bytes()).hexdigest();remote.ssh(f"mkdir -p {shlex.quote(target['remote_root'])}/shared/whisper")
             output=remote.ssh(f"command -v sha256sum >/dev/null 2>&1 && test -f {shlex.quote(remote_model)} && sha256sum {shlex.quote(remote_model)} | cut -d' ' -f1 || true").strip().splitlines();remote_hash=output[-1] if output else ""
             if remote_hash!=local_hash:job.update(37,"上传服务器端录音模型（约141MiB）");remote.scp(model,remote_model)
@@ -1146,7 +1141,7 @@ def start_deploy(target_id):
         job.update(50,"激活代码版本并启动运行容器");health=remote.ssh(bootstrap_script(target,release,package.name,digest))
         content=sync_content(job,remote,target,{"scan":58,"prepare":62,"generate":65,"package":68,"upload":72,"apply":80,"database":86,"merge":91})
         job.update(96,"验证远程词典与语境接口");dioco_ready=remote_dioco_check(job,remote,target)
-        job.update(97,"最终健康检查");final_health=remote.ssh(health_check_command(target));db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close();job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"initialHealth":health,"contentRevision":content["contentRevision"],"media":content["media"],"runtimeArchive":str(runtime),"rootCertificate":str(certificate) if certificate else "","diocoConfigured":dioco["configured"],"diocoReady":dioco_ready},"一键完整部署完成")
+        job.update(97,"最终健康检查");final_health=remote.ssh(health_check_command(target));db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health}),now()));db.commit();db.close();job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"initialHealth":health,"contentRevision":content["contentRevision"],"media":content["media"],"runtimeArchive":str(runtime) if runtime else "","rootCertificate":str(certificate) if certificate else "","diocoConfigured":dioco["configured"],"diocoReady":dioco_ready},"一键完整部署完成")
     return run_task("code_deploy",worker,target_id)
 def start_upgrade(target_id):
     def worker(job,remote,target):
@@ -1183,9 +1178,10 @@ def start_saas_upgrade(target_id):
         ensure_remote_aligner(job,remote,target,release)
         job.update(70,"启动候选版本并执行 SaaS 健康检查")
         activation=activate_saas_release(job,remote,target,release)
+        job.update(97,"安装 HTTPS 入口、Let's Encrypt 证书及自动续期")
         ensure_remote_https_entry(job,remote,target)
         health=remote.ssh(saas_health_check_command(target["service_port"]))
-        job.update(95,"核对线上版本指针与运行容器")
+        job.update(98,"核对线上版本指针与运行容器")
         root=shlex.quote(target["remote_root"])
         verification=remote.ssh(f"""set -euo pipefail
 current_release=$(readlink -f {root}/current)
@@ -1204,62 +1200,57 @@ echo SHIYUE_SAAS_RELEASE_ACTIVE
     return run_task("saas_upgrade",worker,target_id)
 
 def uninstall_saas_for_redeploy(job,remote,target):
-    backup_release=new_release_id("code")
-    backup=f"/var/backups/shiyue/deployment-target-{target['id']}/pre-redeploy-{backup_release}.dump"
+    remote_root=str(target["remote_root"]).strip()
+    if remote_root in {"","/","/root","/home","/srv"} or not remote_root.startswith("/") or len(Path(remote_root).parts)<3 or ".." in Path(remote_root).parts:raise ValueError("远程目录范围过大或无效，拒绝重新部署卸载")
     root=shlex.quote(target["remote_root"])
-    job.update(30,"备份远程 SaaS 数据库",release_id=backup_release)
-    backup_script=f"""set -euo pipefail
-umask 077
-backup={shlex.quote(backup)}
-mkdir -p "$(dirname "$backup")"
-chmod 700 "$(dirname "$backup")"
-{saas_shell_environment(target['remote_root'])}
-docker exec shiyue-postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc > "$backup"
-test -s "$backup"
-chmod 600 "$backup"
-sha256sum "$backup" | awk '{{print "SHIYUE_REDEPLOY_BACKUP_READY " $1}}'
-"""
-    backup_result=remote.ssh(backup_script)
-    if "SHIYUE_REDEPLOY_BACKUP_READY" not in backup_result:raise ValueError("重新部署前的远程数据库备份未完成")
-    job.write(f"远程数据库备份已保存到节点目录之外：{backup}")
-    job.update(34,"卸载远程 RynEnglish 服务")
+    job.update(34,"卸载远程 RynEnglish 服务（不备份远程数据）")
     uninstall_script=f"""set -euo pipefail
-docker rm -f shiyue-saas shiyue-saas-frontend shiyue-postgres shiyue-redis shiyue-reader shiyue-captcha shiyue-captcha-candidate shiyue-captcha-previous >/dev/null 2>&1 || true
+test ! -L {root}
+if command -v docker >/dev/null 2>&1; then
+  docker info >/dev/null
+  for container in shiyue-saas shiyue-saas-frontend shiyue-postgres shiyue-redis shiyue-reader shiyue-captcha shiyue-captcha-candidate shiyue-captcha-previous shiyue-saas-candidate shiyue-saas-frontend-candidate; do
+    if docker container inspect "$container" >/dev/null 2>&1; then docker rm -f "$container" >/dev/null; fi
+  done
+fi
 rm -rf -- {root}
+if command -v docker >/dev/null 2>&1; then
 docker images --format '{{{{.Repository}}}}:{{{{.Tag}}}}' 2>/dev/null | while read image; do
-  case "$image" in shiyue-saas:*|shiyue-captcha:*|shiyue-reader:*|shiyue-reader-runtime:*) docker image rm "$image" >/dev/null 2>&1 || true ;; esac
+  case "$image" in shiyue-saas:*|shiyue-captcha:*|shiyue-reader:*) docker image rm "$image" >/dev/null 2>&1 || true ;; esac
 done
+fi
 test ! -e {root}
 echo SHIYUE_UNINSTALLED
 """
     uninstall_result=remote.ssh(uninstall_script)
     if "SHIYUE_UNINSTALLED" not in uninstall_result:raise ValueError("重新部署前的远程卸载未完成")
-    job.write("远程服务已卸载，保留 PostgreSQL 备份")
-    return backup
+    job.write("远程项目服务及安装目录已清理，未备份远程数据；继续完整安装")
 
 def start_saas_deploy(target_id,reinstall=False):
     def worker(job,remote,target):
         target=saas_https_target(remote,target)
         release=new_release_id("code");job.update(2,"准备本机发布包与数据库快照",release_id=release)
         package,digest=build_code_package(job,release);dump,dump_digest=build_saas_database_dump(job,release)
+        if target["install_recording"]:model=prepare_whisper_model(job,ROOT)
         if reinstall:uninstall_saas_for_redeploy(job,remote,target)
         job.update(36,"检查远程 SaaS 运行环境",release_id=release);_,oci_arch=remote_arch(remote)
         ensure_remote_docker(job,remote);ensure_remote_runtime(job,remote,oci_arch)
         job.update(38,"上传 SaaS 程序版本");remote.scp(package,f"/tmp/{package.name}")
         ensure_remote_saas_config(job,remote,target);prepare_remote_saas_release(remote,target,release,package.name,digest)
         if target["install_recording"]:
-            model=ROOT/"tools/vendor/whisper.cpp/models/ggml-base.en.bin"
-            if not model.exists():raise ValueError("本地缺少 ggml-base.en.bin，无法安装 SaaS 录音转写")
             remote_model=f"{target['remote_root']}/shared/whisper/ggml-base.en.bin";local_hash=hashlib.sha256(model.read_bytes()).hexdigest();remote.ssh(f"mkdir -p {shlex.quote(target['remote_root'])}/shared/whisper")
             output=remote.ssh(f"test -f {shlex.quote(remote_model)} && sha256sum {shlex.quote(remote_model)} | cut -d' ' -f1 || true").strip().splitlines();remote_hash=output[-1] if output else ""
             if remote_hash!=local_hash:job.update(45,"上传 SaaS 录音模型");remote.scp(model,remote_model)
         certificate=ensure_remote_tls(job,remote,target)
-        ensure_remote_saas_services(job,remote,target,release);sync_remote_smtp_config(job,remote,target);ensure_remote_captcha(job,remote,target,release)
+        ensure_remote_saas_services(job,remote,target,release);sync_remote_smtp_config(job,remote,target)
+        job.update(58,"安装并验证旋转验证码服务")
+        ensure_remote_captcha(job,remote,target,release)
+        job.update(60,"安装并验证原音 CPU 对齐环境")
         ensure_remote_aligner(job,remote,target,release)
         restored=restore_remote_saas_database(job,remote,target,dump,dump_digest)
         if restored:prune_initial_database_to_published_content(job,remote,target)
         public=sync_saas_public_content(job,remote,target,f"{target['remote_root']}/releases/{release}",{"scan":70,"prepare":73,"package":76,"upload":79,"apply":82,"database":85,"merge":88},False)
         activation=activate_saas_release(job,remote,target,release)
+        job.update(97,"安装 HTTPS 入口、Let's Encrypt 证书及自动续期")
         ensure_remote_https_entry(job,remote,target)
         final_health=remote.ssh(saas_health_check_command(target["service_port"]))
         db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":final_health,"mode":"saas"}),now()));db.commit();db.close()

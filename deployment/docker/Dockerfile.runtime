@@ -1,0 +1,25 @@
+FROM debian:bookworm-slim AS whisper-builder
+ARG DEBIAN_MIRROR=http://deb.debian.org
+ARG DEBIAN_SECURITY_MIRROR=http://deb.debian.org/debian-security
+RUN sed -i "s|http://deb.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g; s|http://deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+ && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update \
+ && apt-get install -y --no-install-recommends cmake build-essential git \
+ && rm -rf /var/lib/apt/lists/*
+COPY whisper.cpp/ /src/whisper.cpp/
+RUN cmake -S /src/whisper.cpp -B /src/whisper.cpp/build \
+    -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF \
+    -DGGML_OPENMP=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF \
+ && cmake --build /src/whisper.cpp/build --target whisper-cli -j2
+
+FROM python:3.11-slim-bookworm
+ARG DEBIAN_MIRROR=http://deb.debian.org
+ARG DEBIAN_SECURITY_MIRROR=http://deb.debian.org/debian-security
+RUN sed -i "s|http://deb.debian.org/debian-security|${DEBIAN_SECURITY_MIRROR}|g; s|http://deb.debian.org|${DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+ && apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update \
+ && apt-get install -y --no-install-recommends ffmpeg curl sqlite3 ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=whisper-builder /src/whisper.cpp/build/bin/whisper-cli /opt/shiyue/whisper/whisper-cli
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1
+ENV SHIYUE_WHISPER_CLI=/opt/shiyue/whisper/whisper-cli SHIYUE_WHISPER_MODEL=/opt/shiyue/models/ggml-base.en.bin
+CMD ["python3", "tools/reader_server.py"]

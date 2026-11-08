@@ -1,6 +1,12 @@
-# 京东云生产部署架构
+# 京东云节点状态与原部署架构
 
-核实日期：2026-11-07（Asia/Shanghai）。本文记录当前实机核对的部署状态；后续调整入口、服务或目录时同步更新。
+核实日期：2026-11-08（Asia/Shanghai）。节点 `117.72.209.44` 清空后已恢复应用版本 `code-20261108-092017-f197eeaa`；恢复任务 #89 因证书签发受阻保持 failed，不能视作完整上线。PostgreSQL、Redis、验证码、SaaS 后台、前台及 HTTP bootstrap Nginx 共 6 个容器运行，迁移至 0043，API/Redis/PG/验证码健康和 5173 首页/TLS 已验收。
+
+当前访问入口为 **`https://10ye.cc`**：原 Cloudflare Tunnel 已恢复，`cloudflared.service` active/enabled，4 条可用连接；云端回源 `http://localhost:5173`，到前台再代理 API 8790。公网首页/API 使用 Cloudflare 证书并通过严格 TLS 校验，后台 `APP_BASE_URL=https://10ye.cc`。凭据仅在服务器 `/etc/cloudflared/rynenglish.token`（0600），metrics 回环 20241，日常运维见 [HANDOFF.md](HANDOFF.md)。
+
+备案后待办：`rynenglish.com` 公网 ACME 路径返回京东云 `JDTP 403`；当前没有该域名证书、443 监听及续期 timer。用户要求等备案完成后再补装，节点 #1 直连域名暂置空，延期记录 `/srv/shiyue/shared/config/https-deferred.json`。届时按 HANDOFF 的独立 HTTPS 命令处理，无需清空数据库。当前 5173 自建证书入口独立保留。
+
+**以下为清理前架构参考，表格中的“当前”均指 2026-11-07。** 原业务数据、证书、隧道及备份已删除，下文版本号/证书有效期/续期状态/回滚路径均不能用于当前恢复；服务目录结构可供参考，当前状态以上文和 HANDOFF 为准。外部 DNS 与 Cloudflare 云端配置未更改。
 
 ## 环境概况
 

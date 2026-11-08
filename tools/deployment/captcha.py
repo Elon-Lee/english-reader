@@ -8,6 +8,10 @@ def build_assets(job, root):
                             text=True, capture_output=True, timeout=900)
     if result.returncode:
         job.write((result.stdout + result.stderr)[-5000:])
+        prerequisite = next((line.split("CAPTCHA_JDK_ERROR:", 1)[1].strip()
+                             for line in (result.stdout + result.stderr).splitlines() if "CAPTCHA_JDK_ERROR:" in line), "")
+        if prerequisite:
+            raise ValueError(prerequisite)
         raise ValueError("验证码服务构建或测试失败")
     artifact = root / "services/captcha/target/shiyue-captcha-1.0.0.jar"
     if not artifact.is_file():

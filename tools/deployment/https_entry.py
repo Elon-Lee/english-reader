@@ -313,7 +313,7 @@ SHIYUE_HTTP_CONFIG
     fi
 fi
 # Existing TLS configuration remains active while certbot obtains/reuses a cert.
-docker run --rm --network host \
+if ! docker run --rm --network host \
     -v "$state/letsencrypt:/etc/letsencrypt:z" \
     -v "$state/webroot:/var/www/acme:z" \
     -v "$state/work:/var/lib/letsencrypt:z" \
@@ -321,7 +321,10 @@ docker run --rm --network host \
     "$certbot_image" certonly --webroot --webroot-path /var/www/acme \
     --cert-name "$domain" --domain "$domain" --keep-until-expiring \
     --server https://acme-v02.api.letsencrypt.org/directory \
-    --non-interactive --agree-tos @EMAIL_ARGS@
+    --non-interactive --agree-tos @EMAIL_ARGS@; then
+    echo "SHIYUE_HTTPS_CERTIFICATE_FAILED: Let's Encrypt domain validation failed; check public DNS, port 80 and provider domain restrictions. Application services remain running." >&2
+    exit 10
+fi
 test -s "$state/letsencrypt/live/$domain/fullchain.pem"
 test -s "$state/letsencrypt/live/$domain/privkey.pem"
 cat > "$state/nginx/candidate.tmp" <<'SHIYUE_HTTPS_CONFIG'

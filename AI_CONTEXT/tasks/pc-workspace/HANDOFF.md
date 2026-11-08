@@ -4,15 +4,15 @@
 
 - PC SaaS 前端使用 React 18、Ant Design 5 和 Vite；页面源码位于 `frontend/src/`。
 - 生产根路径 `/` 使用 `reader/site/` 构建产物。开发时由 Vite 提供前端，`/api` 和 `/books` 代理至本地 SaaS 后台。
-- Vite 默认代理目标为 `http://127.0.0.1:8790`，可由 `SHIYUE_API_PROXY_TARGET` 覆盖。开发入口是 `http://127.0.0.1:5173/`，不要把生产兼容路径 `/modern.html` 或 `/modern-assets/` 当成 Vite 开发入口。
+- Vite API / 媒体代理固定为 `http://127.0.0.1:8790`，不允许环境变量覆盖为远程地址。开发入口为 `http://127.0.0.1:4173/`，统一由 `./start-reader.sh --saas-local` 启动；安装、登录和排错见 [本地开发指南](../../../docs/LOCAL_DEVELOPMENT.md)。
 - 前端覆盖公开首页、学习空间、书城、书架、学习记录、生词复习、奖励、会员、运营后台、平台部署、设置和阅读器。业务数据通过真实 API 加载，不使用静态数据替代。
 - 优先完成 PC 验收，再开始移动端优化。不要把 SaaS 操作改回旧 `reader/index.html` 或 `reader/app.js`。
 
-## 当前状态（2026-10-25）
+## 当前状态（2026-11-08 更新）
 
 - PC 主要页面与 API 流程已实现；移动端正式优化尚未开始。
-- 本地开发服务已启动：Vite `5173`、SaaS 后台 `8790`。后台健康接口返回 200；未登录访问 `/api/auth/me` 返回 401 `authentication_required` 是预期行为。
-- 本次排查发现 Vite 进程曾带有过时的 `SHIYUE_API_PROXY_TARGET=http://127.0.0.1:8765`，请求因此落到旧后台并返回 `saas_disabled`。已将 Vite 以 `SHIYUE_API_PROXY_TARGET=http://127.0.0.1:8790` 重启并验证代理返回正确后台的 401。仓库配置无需修改；若问题复现，先检查 Vite 进程启动环境并重启，不要先改 API 路由。
+- 本地开发服务已启动：Vite `4173`、SaaS 后台 `8790`，数据库、Redis、验证码均独立在本机。后台健康接口返回 200；未登录访问 `/api/auth/me` 返回 401 `authentication_required` 是预期行为。
+- 已移除 Vite API / 媒体远程覆盖变量与远程调试启动器，避免旧会话环境影响本地请求；具体运行状态见 local-development 交接。
 
 ## 后续事项
 

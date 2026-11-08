@@ -1,6 +1,6 @@
 # RynEnglish AI 共享上下文
 
-更新时间：2026-11-07（Asia/Shanghai）
+更新时间：2026-11-08（Asia/Shanghai）
 
 这是后续 AI 的最小全局上下文。只读取与当前任务相关的任务文档。
 
@@ -14,16 +14,23 @@
 - 媒体访问：SaaS 使用鉴权 `/api/media/{asset_id}` 和媒体变体。
 - 认证：数据库会话 Cookie + CSRF；未登录时 React 渲染登录页。
 - 长任务：导入和部署使用任务 API + 前端轮询，不依赖 WebSocket。
-- 本地服务：后台 `127.0.0.1:8790`；Vite `http://127.0.0.1:4173`（启用 strictPort）。当前使用 `tools/run_remote_dev.py` 通过 SSH 连接远程数据库/Redis/验证码与媒体，隧道常驻监督并自动重连，启动检查真实依赖；操作与验证见 platform-operations、auth-captcha。普通独立 Vite 仍可用 `npm run dev:modern`。
-- 京东云生产：入口 `https://rynenglish.com`，Docker Nginx 提供 80 → 443 跳转、Let's Encrypt 证书和每日两次自动续期检查；代理现有前台 5173，后台仅 `127.0.0.1:8790`。Docker 运行 SaaS、前台、PostgreSQL 16、Redis 7；数据库/Redis 只监听回环。原 IP:5173 自建证书入口保留兼容，详见 platform-operations。
+- 本地开发：唯一入口 `./start-reader.sh --saas-local`（无参数也等同），一键运行本机 PostgreSQL 55432、Redis 56379、Java 验证码 18080、API 8790、SMTP 1025 和 Vite 4173。独立本地数据、原媒体和密钥，不读取旧 `.env`，远程调试启动器/SSH 转发/远程代理已删除；管理员主动远程部署能力保留。首次安装、新会话启动、登录、启停与排错统一见 [`docs/LOCAL_DEVELOPMENT.md`](../docs/LOCAL_DEVELOPMENT.md)，实现状态见 local-development。
+- 京东云节点：`117.72.209.44` 当前版本 `code-20261108-092017-f197eeaa`，应用、PostgreSQL、Redis、验证码及原音处理已验收。原 Cloudflare Tunnel 已恢复并开机自启，当前公网入口 `https://10ye.cc`，后台基础地址已同步。`rynenglish.com` 的 Let's Encrypt/443/续期按用户要求列入备案后待办；节点直连域名暂置空，升级不再尝试申请证书。#89 保留原失败记录；详见 platform-operations。
 
 ## 全局完成状态
+
+- 2026-11-08 京东云整项目清理完成：6 个项目容器、项目镜像、安装目录、外置备份及 HTTPS/隧道服务已移除；重新 SSH 验证项目端口关闭、sshd/Docker 正常。本地卸载任务 #62 完成，发布记录标记 uninstalled，本地开发数据与节点密钥保留。以下上线记录均为清理前历史，不代表当前在线状态。
+- 2026-11-08 “重新部署”不再备份远程数据库；空节点运行镜像和模型准备已修复，数据库/缓存/验证码/应用已恢复，95 项部署回归和真实 CPU 转写通过。随后恢复原 Cloudflare Tunnel，`10ye.cc` 首页/API 严格 TLS 通过；直连域名证书延期至用户备案完成后补装，#89 保留原失败状态。程序升级仍保留远程备份行为；详见 platform-operations。
+
+- 2026-11-08 本地调试已完全独立：项目内安装 PostgreSQL 16.15 / Redis 7.4.7 / Node 22 / Python venv，使用项目 JDK21 启动真实验证码；原远程调试代码及旧启动指引已删除。一键启停、默认入口、固定本地 API 代理、跨会话配置和完整安装文档已统一；真实 Chrome 验证码登录/管理员权限、隔离库 HTTP smoke、Java8项、相关集成及启停持久化通过。跨系统安装分支尚待目标机器验证；详见 local-development。
+
+- 2026-11-07 程序升级任务#6因本机无JDK导致验证码构建失败，未上传或切换生产。已准备经校验的项目内JDK21、补充构建依赖检查和明确错误，完整升级包本地构建/Java8项/部署43项/UI22项等验证通过；本地后台已重载，可重新启动升级。详见platform-operations。
 
 - 2026-11-07 品牌提交 `7b65f78` 已通过合并提交 `d1ca8d9` 正式合入并推送 main，远程 `feat/rynenglish-brand` 已删除，本地无同名分支。合并保留 main 的上传完整性与 Linux 对齐部署修复；隔离构建、modern/UI、38 项相关回归、JS/Python/diff 通过。原工作区阅读器/导入及额外品牌打包门禁和回归改动独立保留、尚未提交，用户数据和 SSH 调试保持；详见 brand-assets、platform-operations。
 
 - 2026-11-07 阅读界面细节已定向发布入口 `7b99f4600df6`：翻页放慢为 900ms、原书背景覆盖书页、紧凑页码与居中进度保存提示、PC 精读图片铺满列宽。本地标题/图标已同步 RynEnglish 官方品牌。构建、相关测试、本地与生产候选 Chrome 验证通过；发布哈希、248 个保留文件与源站 HTTPS/SaaS/Redis 健康通过，详见 reader、brand-assets、platform-operations。
 
-- 2026-11-07 阅读交互修复已定向发布入口 `596c367b06f6`：普通模式改称精读模式，原 EPUB/PDF 查词悬停背景与指针、翻书动效，EPUB 2/3 原目录与正文标题兜底，同一文件内两章节可准确跳转。本地 4173/8790 已通过 SSH 连接远程 PostgreSQL/Redis 并保留调试，后续先本地验证再发布。无数据库或后台变更；详见 reader、platform-operations。
+- 2026-11-07 阅读交互修复已定向发布入口 `596c367b06f6`：普通模式改称精读模式，原 EPUB/PDF 查词悬停背景与指针、翻书动效，EPUB 2/3 原目录与正文标题兜底，同一文件内两章节可准确跳转。该轮使用的远程数据调试现已撤除，后续在独立本地环境验证再发布。无数据库或后台变更；详见 reader、platform-operations。
 
 - 2026-11-07 泛读原文件方案已定向发布京东云，入口版本 `abd3103b9d5f`：PDF 直接显示原页；新导入 EPUB 保存原文件的 spine/版式索引，阅读时加载原 XHTML/CSS/字体/插图，固定版式等比显示、流式版式按窗口分页。精确原文位置独立于原音；试读不暴露全文源索引，旧书不回填。保留 RynEnglish/验证码/分段补传及 237 个既有文件哈希，生产备份与健康校验通过；Linux 隔离库 61 项、候选和生产静态文件的 Chrome 回归通过。详见 reader、import-media、platform-operations。
 
@@ -107,7 +114,7 @@
 - 移动端展示、底部操作区、手势和弹层交互尚未进入正式优化阶段。
 - 云猫商品上架、库存与购买链接配置已完成；真实资金支付 → 云猫自动发码 → 正式账号兑换的整链路尚需商户本人完成一笔购买验收。
 - 配套 MP3 已支持可恢复分段上传；独立音视频和文档源文件仍使用原上传方式，后续可按资源策略独立扩展。
-- 京东云 SaaS 完整部署和公开资源增量同步已验收；生产回滚、卸载等高风险动作尚未执行。
+- 京东云当前通过 Cloudflare Tunnel 正常服务；`rynenglish.com` 直连 HTTPS 待用户完成备案及云端放行后补装，生产回滚未验收。
 - Dioco 完整词典接口 `base_dict_getFullDict_8` 尚未按用户提供的请求正式接入；当前词汇 AI 走 `/api/word-context`。
 - 旧 UI 文件仍物理保留用于兼容和行为参考；不能删除，SaaS 路由不得再使用它们。
 - `frontend/src/main.jsx` 仍包含部分已停用的旧 React 内联组件，后续可在不改变行为的前提下清理。
@@ -127,6 +134,7 @@
 | 公开官网、商品版本、折扣、云猫寄售、套餐兑换 | `tasks/public-commerce/HANDOFF.md` |
 | 支付方式配置、支付宝订单/退款、兑换记录管理 | `tasks/payments/HANDOFF.md` |
 | 文件/YouTube 导入、任务进度、媒体处理 | `tasks/import-media/HANDOFF.md` |
+| 本地独立环境安装、启动、启停、登录、排错 | `tasks/local-development/HANDOFF.md` |
 | 运营后台、AI 配置、远程部署 | `tasks/platform-operations/HANDOFF.md` |
 | 移动端适配与触摸交互 | `tasks/mobile/HANDOFF.md` |
 

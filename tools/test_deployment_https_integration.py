@@ -17,6 +17,30 @@ import deploy_remote
 
 
 class HttpsEntryIntegrationTests(unittest.TestCase):
+    def test_remote_certificate_failure_reports_recovery_without_database_reinstall(self):
+        remote = object.__new__(manager.Remote)
+        remote.password = ''
+        remote.job = Mock()
+        process = Mock(stdout=io.StringIO(
+            'Invalid response from http://example.test/.well-known/acme-challenge/test: 403\n'
+            'SHIYUE_HTTPS_CERTIFICATE_FAILED: validation failed\n'))
+        process.wait.return_value = 10
+        with patch.object(manager.subprocess, 'Popen', return_value=process):
+            with self.assertRaisesRegex(RuntimeError, 'HTTP 403.*单独补装 HTTPS.*无需重新部署数据库'):
+                remote.execute(['ssh', 'test'])
+
+    def test_remote_echoed_script_does_not_misclassify_unrelated_failure(self):
+        remote = object.__new__(manager.Remote)
+        remote.password = ''
+        remote.job = Mock()
+        process = Mock(stdout=io.StringIO(
+            'echo "SHIYUE_HTTPS_CERTIFICATE_FAILED: validation failed" >&2\n'
+            'HTTPS container ownership conflict\n'))
+        process.wait.return_value = 1
+        with patch.object(manager.subprocess, 'Popen', return_value=process):
+            with self.assertRaisesRegex(RuntimeError, '远程命令失败，返回码 1'):
+                remote.execute(['ssh', 'test'])
+
     def test_target_domain_is_validated_saved_and_preserved_for_old_clients(self):
         with tempfile.TemporaryDirectory() as temp, \
                 patch.object(library_db, 'LOCAL_ROOT', Path(temp)), \

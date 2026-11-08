@@ -1,4 +1,4 @@
-// Exercise the real local SDK/backend/SSH/Java/Redis chain, without logging in or sending mail.
+// Exercise the real local SDK/Python/Java/Redis chain, without logging in or sending mail.
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright-core')
@@ -14,7 +14,7 @@ assert.ok(['127.0.0.1', 'localhost'].includes(new URL(base).hostname), 'Local de
     for (const mode of ['login', 'register', 'forgot']) {
       await page.goto(base + (mode === 'register' ? '/register' : '/login'), { waitUntil: 'domcontentloaded' })
       if (mode === 'forgot') await page.getByText('找回密码', { exact: true }).click()
-      await page.getByLabel('邮箱', { exact: true }).fill('remote-dev-check@example.invalid')
+      await page.getByLabel('邮箱', { exact: true }).fill('local-dev-check@example.invalid')
       if (mode !== 'forgot') await page.getByLabel('密码', { exact: true }).fill('unused-local-ui-test-password')
       if (mode === 'register') await page.getByLabel('邀请码', { exact: true }).fill('unused-local-ui-test-code')
       const generated = page.waitForResponse(response => response.url().endsWith('/api/auth/captcha/gen'))
@@ -31,8 +31,8 @@ assert.ok(['127.0.0.1', 'localhost'].includes(new URL(base).hostname), 'Local de
       })
       assert.equal(await page.locator('.auth-captcha-status[role="alert"]').count(), 0)
       if (mode === 'login') {
-        fs.mkdirSync('.local/remote-dev/debug', { recursive: true })
-        await page.screenshot({ path: '.local/remote-dev/debug/captcha-loaded.png' })
+        fs.mkdirSync('.local/local-dev', { recursive: true })
+        await page.screenshot({ path: '.local/local-dev/captcha-loaded.png' })
       }
       await page.keyboard.press('Escape')
       await page.locator('.auth-captcha-dialog').waitFor({ state: 'detached' })

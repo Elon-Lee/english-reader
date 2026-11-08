@@ -55,7 +55,7 @@ def ensure_remote(job, remote, target, release, image, cache):
             options.append('-v ' + shlex.quote(root + '/shared/aligner-artifacts/' + digest + ':/artifacts:ro,z'))
         return ' '.join(options + [shlex.quote(image), 'python3 /app/tools/forced_aligner_setup.py --root /app', arguments])
     job.write('检查持久化原音对齐环境和模型，执行真实 CPU 推理')
-    output = remote.ssh('if ' + run('--check') + '; then echo SHIYUE_ALIGNER_REUSED; fi')
+    output = remote.ssh('if ' + run('--check') + ' >/dev/null 2>&1; then echo SHIYUE_ALIGNER_REUSED; else echo SHIYUE_ALIGNER_INSTALL_REQUIRED; fi')
     if 'SHIYUE_ALIGNER_REUSED' in output:
         return
     arch = remote.ssh('uname -m').strip().splitlines()[-1]

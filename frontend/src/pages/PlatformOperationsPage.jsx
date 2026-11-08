@@ -101,9 +101,9 @@ export default function PlatformOperationsPage({ messageApi }) {
     const content = action === 'sync'
       ? `目标节点：${target?.name || selectedTarget}。仅上传本地新增或变更的官方内容；新增或变更内容会设为未审核，需在线上运营后台审核后才会发布。`
       : reinstall
-        ? `目标节点：${target?.name || selectedTarget}。将先从当前本机工作区构建前端和首页截图，并创建本机数据库快照；然后备份远程数据库，再卸载并完整安装。重装会以本机数据库快照重新初始化远端数据；如需保留远端数据，请使用“程序升级”。`
+        ? `目标节点：${target?.name || selectedTarget}。将构建当前本机代码并创建用于初始化的本机数据库快照，然后直接清空远程项目并完整安装，不备份远程数据。安装包含 PostgreSQL、Redis、验证码及网站服务；配置域名后自动申请 Let's Encrypt HTTPS 证书并设置自动续期。远端数据将以本机快照初始化，原远程数据会被删除。`
         : `目标节点：${target?.name || selectedTarget}。发布来源是当前本机工作区；首次部署会安装 SaaS 服务并初始化线上数据。`
-    Modal.confirm({ title: `确认启动${labels[action] || action}？`, content, okText: reinstall ? '备份并重新部署' : '启动任务', okButtonProps: { danger: danger || reinstall }, onOk: async () => { const endpoint = action === 'upgrade' ? 'saas-upgrade' : action; const result = await postJson(`/api/deployment/${endpoint}`, { targetId: selectedTarget, ...payload, ...(action === 'deploy' ? { reinstall } : {}) }); messageApi.success(`任务 #${result.jobId} 已启动`); await loadPlatform() } })
+    Modal.confirm({ title: `确认启动${labels[action] || action}？`, content, okText: reinstall ? '清空并重新部署' : '启动任务', okButtonProps: { danger: danger || reinstall }, onOk: async () => { const endpoint = action === 'upgrade' ? 'saas-upgrade' : action; const result = await postJson(`/api/deployment/${endpoint}`, { targetId: selectedTarget, ...payload, ...(action === 'deploy' ? { reinstall } : {}) }); messageApi.success(`任务 #${result.jobId} 已启动`); await loadPlatform() } })
   }
   const rollback = releaseId => {
     if (!releaseId) return

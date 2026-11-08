@@ -57,15 +57,12 @@ export default defineConfig({
     port: 4173,
     strictPort: true,
     proxy: {
-      ...(process.env.SHIYUE_MEDIA_PROXY_TARGET ? {
-        '/api/media/': { target: process.env.SHIYUE_MEDIA_PROXY_TARGET, changeOrigin: false },
-      } : {}),
       '/api': {
-        target: process.env.SHIYUE_API_PROXY_TARGET || 'http://127.0.0.1:8790',
+        target: 'http://127.0.0.1:8790',
         changeOrigin: false,
       },
       '/books': {
-        target: process.env.SHIYUE_API_PROXY_TARGET || 'http://127.0.0.1:8790',
+        target: 'http://127.0.0.1:8790',
         changeOrigin: false,
       },
     },

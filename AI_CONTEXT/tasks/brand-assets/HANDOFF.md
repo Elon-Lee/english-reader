@@ -30,7 +30,7 @@
 
 - 本次 Git 合并在隔离工作区验证：构建、modern smoke、UI 22 项、邮件/部署/对齐/上传完整性 38 项、JS 检查、11 个变更 Python 文件编译和 diff 检查通过；两份交接文档冲突保留双方内容。切换 main 前后原工作区 673 个文件状态/内容指纹一致，随后仅更新本轮交接状态。
 - 构建、modern smoke、UI 22 项、阅读器 Node 7 项/Python 15 项、JS 检查、相关 Python 编译、diff 检查通过。
-- `PYTHONPATH=tools .local/remote-dev/venv/bin/python -m unittest tools.test_saas_mail tools.test_deployment_release_pipeline`：19 项通过。邮件主题/签名/原令牌链接用 mock 验证，无真实发信。
+- `PYTHONPATH=tools .local/saas-venv/bin/python -m unittest tools.test_saas_mail tools.test_deployment_release_pipeline`：19 项通过。邮件主题/签名/原令牌链接用 mock 验证，无真实发信。当前统一使用独立本地环境的 venv，启动见本地开发指南。
 - `tools/test_brand_browser.cjs`：生产构建预览的首页/登录/注册/套餐/支持/五个法律页/重置/验证共 12 路由；正式标志/标语、标题、Open Graph、截图原字节、无旧文案/溢出通过。隔离业务 API 验证账号操作、“不再提醒”原 POST、失败重试，无真实账号写入。
 - 本地真实登录/注册/找回验证码 SDK 出图通过；后台已重新加载，4173 前端及受监督 SSH 隧道保留。
 - 合并后的生产构建另复验 EPUB 2/3/目录兜底/最新真实两章共四组，900ms 翻页、背景与页脚对齐、横竖原图两布局通过；临时 4176 构建预览已关闭。

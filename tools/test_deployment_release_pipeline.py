@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import inspect,json,shlex,subprocess,sys,tarfile,tempfile,unittest
+import inspect,json,os,shlex,subprocess,sys,tarfile,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,6 +23,14 @@ class SyntaxRemote:
 
 
 class DeploymentReleasePipelineTests(unittest.TestCase):
+    def test_jdk_failure_stops_before_frontend_build_and_packaging(self):
+        with patch.object(manager, 'release_metadata', return_value={}), \
+                patch.object(manager, 'build_captcha_assets', side_effect=ValueError('请安装 JDK 17')), \
+                patch.object(manager, 'build_frontend_assets') as frontend:
+            with self.assertRaisesRegex(ValueError, '请安装 JDK 17'):
+                manager.build_code_package(Job(), 'code-test-jdk')
+        frontend.assert_not_called()
+
     def brand_fixture(self,root):
         names=("rynenglish-mark.svg","rynenglish-favicon.ico","rynenglish-apple-touch.png","rynenglish-icon-320.png","rynenglish-icon-512.png")
         for name in names:
@@ -144,18 +152,45 @@ class DeploymentReleasePipelineTests(unittest.TestCase):
         self.assertIn("saas.env",manager.saas_app_run_command(target,"/srv/shiyue/candidate"))
         self.assertIn("ensure_migrated",manager.saas_migration_check_command())
 
-    def test_saas_redeploy_backs_up_outside_install_root_before_uninstall(self):
-        class RedeployRemote(SyntaxRemote):
-            def ssh(self,script):
-                subprocess.run(["bash","-n"],input=script,text=True,check=True);self.scripts.append(script)
-                return "SHIYUE_REDEPLOY_BACKUP_READY deadbeef\n" if "SHIYUE_REDEPLOY_BACKUP_READY" in script else "SHIYUE_UNINSTALLED\n"
-        target={"id":4,"remote_root":"/srv/shiyue-prod"};remote=RedeployRemote();job=Job()
-        backup=manager.uninstall_saas_for_redeploy(job,remote,target)
-        self.assertTrue(backup.startswith("/var/backups/shiyue/deployment-target-4/"))
-        self.assertEqual(len(remote.scripts),2)
-        self.assertIn("pg_dump",remote.scripts[0]);self.assertIn("chmod 600",remote.scripts[0])
-        self.assertIn("SHIYUE_UNINSTALLED",remote.scripts[1]);self.assertIn("docker rm -f shiyue-saas shiyue-saas-frontend shiyue-postgres shiyue-redis",remote.scripts[1]);self.assertIn("rm -rf -- /srv/shiyue-prod",remote.scripts[1])
-        self.assertNotIn("/srv/shiyue-prod/",backup)
+    def test_redeploy_clears_empty_existing_or_partial_project_without_backup(self):
+        for existing,database_exists,daemon_error in ((False,False,False),(True,True,False),(True,False,False),(False,False,True),(True,True,True)):
+            with self.subTest(existing=existing,database_exists=database_exists,daemon_error=daemon_error),tempfile.TemporaryDirectory() as temp:
+                root=Path(temp);project=root/'project'
+                if existing:project.mkdir();(project/'old-data.txt').write_text('old remote data')
+                executable=root/'docker'
+                executable.write_text('#!/bin/bash\ncase "$1" in\ninfo) exit '+('1' if daemon_error else '0')+';;\ncontainer) test "$REMOTE_DB_EXISTS" = yes;;\nrm) echo "$3" >> "$REMOVAL_LOG";;\nimages) echo shiyue-reader-runtime:20260930-1; echo shiyue-captcha:old;;\nimage) echo "$3" >> "$IMAGE_REMOVAL_LOG";;\n*) exit 9;;\nesac\n')
+                executable.chmod(0o755)
+                env={**os.environ,'PATH':str(root)+os.pathsep+os.environ['PATH'],'REMOTE_DB_EXISTS':'yes' if database_exists else 'no','REMOVAL_LOG':str(root/'removed.txt'),'IMAGE_REMOVAL_LOG':str(root/'removed-images.txt')}
+                scripts=[]
+                def ssh(script):
+                    scripts.append(script)
+                    return subprocess.run(['bash','-s'],input=script,env=env,text=True,capture_output=True,check=True).stdout
+                remote=type('Remote',(),{})();remote.ssh=ssh
+                if daemon_error:
+                    with self.assertRaises(subprocess.CalledProcessError):manager.uninstall_saas_for_redeploy(Job(),remote,{'id':1,'remote_root':str(project)})
+                else:
+                    manager.uninstall_saas_for_redeploy(Job(),remote,{'id':1,'remote_root':str(project)})
+                    self.assertFalse(project.exists())
+                    self.assertEqual((root/'removed-images.txt').read_text().strip(),'shiyue-captcha:old')
+                    if database_exists:
+                        removed=(root/'removed.txt').read_text()
+                        for name in ('shiyue-postgres','shiyue-redis','shiyue-saas','shiyue-captcha'):self.assertIn(name,removed)
+                self.assertEqual(len(scripts),1)
+                self.assertNotIn('pg_dump',scripts[0]);self.assertNotIn('/var/backups',scripts[0])
+                if existing and daemon_error:self.assertEqual((project/'old-data.txt').read_text(),'old remote data')
+
+    def test_redeploy_rejects_unsafe_root_before_remote_mutation(self):
+        from unittest.mock import Mock
+        remote=Mock()
+        for root in ('/','/srv','/root','/srv/project/../','relative/project'):
+            with self.subTest(root=root),self.assertRaises(ValueError):manager.uninstall_saas_for_redeploy(Job(),remote,{'id':1,'remote_root':root})
+        remote.ssh.assert_not_called()
+
+    def test_redeploy_uninstall_failure_stops_installation(self):
+        from unittest.mock import Mock
+        remote=Mock(ssh=Mock(return_value='uninstall incomplete'))
+        with self.assertRaisesRegex(ValueError,'卸载未完成'):
+            manager.uninstall_saas_for_redeploy(Job(),remote,{'id':1,'remote_root':'/srv/shiyue'})
 
     def test_post_activation_verification_resolves_symlinked_mount(self):
         source=inspect.getsource(manager.start_saas_upgrade)

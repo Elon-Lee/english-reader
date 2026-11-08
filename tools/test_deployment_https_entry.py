@@ -195,6 +195,8 @@ class InstallExecutionTests(unittest.TestCase):
         self.assertFalse(Path(self.paths['manifest']).exists())
         self.assertFalse(Path(self.paths['renew_script']).exists())
         self.assertFalse((self.root/'systemctl-calls').exists())
+        self.assertEqual(result.returncode,10)
+        self.assertIn('SHIYUE_HTTPS_CERTIFICATE_FAILED:',result.stderr)
 
     def test_failed_new_config_rolls_back_existing_file(self):
         self.assertEqual(self.install().returncode,0)
