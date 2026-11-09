@@ -24,7 +24,7 @@ def parse_expiry(value: str) -> datetime | None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="RynEnglish SaaS PostgreSQL migration utility")
+    parser = argparse.ArgumentParser(description="纸间微光 SaaS PostgreSQL migration utility")
     parser.add_argument("--migrate", action="store_true", help="应用尚未执行的 PostgreSQL migration")
     parser.add_argument("--bootstrap-admin", action="store_true", help="按环境变量创建或确认管理员")
     parser.add_argument("--reset-admin-password", action="store_true", help="用 BOOTSTRAP_ADMIN_PASSWORD 重设已有管理员密码")

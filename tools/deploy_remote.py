@@ -49,7 +49,7 @@ def follow_job(job_id,timeout):
 
 
 def main():
-    parser=argparse.ArgumentParser(description="构建并部署 RynEnglish 远程阅读节点")
+    parser=argparse.ArgumentParser(description="构建并部署纸间微光远程阅读节点")
     parser.add_argument("--package-only",action="store_true",help="只构建发布包，不连接服务器")
     parser.add_argument("--target",help="部署节点 ID 或完整名称")
     mode=parser.add_mutually_exclusive_group()
@@ -58,7 +58,7 @@ def main():
     mode.add_argument("--saas",action="store_true",help="完整部署 SaaS、PostgreSQL、Redis 和公共资源；启用已配置的 HTTPS 入口")
     mode.add_argument("--sync-public",action="store_true",help="只增量同步 SaaS 公共书目与媒体")
     mode.add_argument("--https-entry",action="store_true",help="仅安装/更新标准 HTTPS 入口及域名，不发布业务代码或替换数据库")
-    parser.add_argument("--domain",help="标准 HTTPS 域名，例如 rynenglish.com（不带协议或路径）")
+    parser.add_argument("--domain",help="标准 HTTPS 域名，例如 example.com（不带协议或路径）")
     parser.add_argument("--host",help="仅入口模式的 SSH 地址，可替代 --target")
     parser.add_argument("--identity-file",help="现有 SSH 私钥文件；使用已验证的默认 known_hosts")
     parser.add_argument("--smtp-config",help="可选的 0600 SMTP 配置文件，安全合并到远端 saas.env")

@@ -1,7 +1,7 @@
 {
   "name": "english",
   "version": "1.0.0",
-  "description": "RynEnglish 英语学习平台前端组件层",
+  "description": "纸间微光个人阅读空间前端组件层",
   "private": true,
   "main": "index.js",
   "scripts": {
@@ -14,7 +14,7 @@
     "test:extensive": "node --test frontend/src/utils/extensiveReading.test.mjs frontend/src/utils/epubSource.test.mjs && python3 -m unittest discover -s tools -p test_reading_document.py && python3 -m unittest discover -s tools -p test_epub_document.py && python3 -m unittest discover -s tools -p test_source_reading.py",
     "test:extensive:browser": "node tools/test_extensive_reader_browser.cjs",
     "test:epub-source:browser": "node tools/test_epub_source_browser.cjs",
-    "test:ui": "python3 tools/test_mobile_reader_presentation.py && python3 tools/test_membership_presentation.py && python3 tools/test_remote_reader_presentation.py && python3 tools/test_reader_performance.py",
+    "test:ui": "python3 tools/test_mobile_reader_presentation.py && python3 tools/test_private_site_presentation.py && python3 tools/test_remote_reader_presentation.py && python3 tools/test_reader_performance.py",
     "check:js": "node --check reader/app.js"
   },
   "keywords": [],

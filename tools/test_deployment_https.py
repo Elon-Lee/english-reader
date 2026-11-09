@@ -53,7 +53,10 @@ class DeploymentHttpsTests(unittest.TestCase):
                 manager.ensure_remote_saas_config(Mock(), remote, {
                     'remote_root': str(root), 'host': '192.0.2.1', 'use_https': 1,
                 })
-                self.assertEqual(env.read_text(), original + f'APP_BASE_URL={expected}\n')
+                self.assertEqual(dict(line.split('=',1) for line in env.read_text().splitlines()), {
+                    'SESSION_SECRET':'test-session-secret','DATABASE_URL':'test-database',
+                    'APP_BASE_URL':expected,'SMTP_FROM_NAME':'纸间微光',
+                })
                 self.assertEqual(env.stat().st_mode & 0o777, 0o600)
                 remote.scp.assert_not_called()
 

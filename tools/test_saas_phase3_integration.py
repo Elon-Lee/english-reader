@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
 from saas_catalog import CatalogService
-from saas_membership import MembershipService
+from saas_resources import ResourceService
 
 TEST_URL=os.environ.get("SHIYUE_SAAS_TEST_DATABASE_URL","")
 
@@ -29,13 +29,14 @@ class PhaseThreePostgresTests(unittest.TestCase):
     def setUpClass(cls):
         assert_safe_database(TEST_URL)
         cls.environment={"DATABASE_URL":TEST_URL,"SHIYUE_SAAS_ENABLED":"1","SESSION_SECRET":"test-only-session-secret-that-is-at-least-32-characters","BOOTSTRAP_ADMIN_EMAIL":"admin@local.test","BOOTSTRAP_ADMIN_PASSWORD":"phase3 admin password"}
-        cls.accounts=SaaSService(TEST_URL,cls.environment);cls.accounts.migrate();cls.memberships=MembershipService(cls.accounts);cls.catalog=CatalogService(cls.accounts,cls.memberships)
+        cls.accounts=SaaSService(TEST_URL,cls.environment);cls.accounts.migrate();cls.resources=ResourceService(cls.accounts);cls.catalog=CatalogService(cls.accounts,cls.resources)
 
     def setUp(self):
+        self.resources.limits = dict(__import__("saas_resources").DEFAULT_LIMITS)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("""TRUNCATE TABLE official_book_unlocks,user_library,catalog_book_tags,catalog_books,catalog_tags,catalog_series,
-                membership_audit,usage_ledger,quota_reservations,usage_periods,subscriptions,manual_orders,assets,
+                resource_audit,usage_ledger,quota_reservations,usage_periods,subscriptions,manual_orders,assets,
                 content_sentence_grammar,content_learning_daily,content_word_annotations,content_vocabulary,content_books,
                 invitation_uses,invitations,password_reset_tokens,email_verifications,user_sessions,devices,user_roles,users,roles RESTART IDENTITY CASCADE""")
         self.admin=self.accounts.bootstrap_admin();assert self.admin
@@ -92,7 +93,7 @@ class PhaseThreePostgresTests(unittest.TestCase):
         self.assertEqual(len(self.catalog.library(str(self.bob["id"]))["items"]),0)
         self.assertNotEqual(first,second)
 
-    def test_archive_and_restore_preserve_membership_and_user_isolation(self):
+    def test_archive_and_restore_preserve_access_and_user_isolation(self):
         book_id=self.publish(30)
         alice_id=str(self.alice["id"]);bob_id=str(self.bob["id"])
         self.catalog.add_or_unlock(alice_id,book_id,False)
@@ -143,9 +144,7 @@ class PhaseThreePostgresTests(unittest.TestCase):
         first=self.catalog.add_or_unlock(user_id,chosen,True);self.assertTrue(first["unlocked"])
         self.catalog.remove(user_id,chosen)
         readd=self.catalog.add_or_unlock(user_id,chosen,True);self.assertTrue(readd["unlocked"])
-        membership=self.memberships.usage(user_id)
-        unlock=next(row for row in membership["usage"] if row["feature"]=="official_unlocks")
-        self.assertEqual(unlock["used"],0)
+        self.assertNotIn("official_unlocks", {row["feature"] for row in self.resources.usage(user_id)["usage"]})
 
     def test_multiple_public_materials_can_be_unlocked_without_a_count_cap(self):
         books=[self.publish(index) for index in range(30,33)];user_id=str(self.alice["id"])
@@ -173,7 +172,7 @@ class PhaseThreePostgresTests(unittest.TestCase):
                     if response.status==200:break
                 except OSError:time.sleep(.1)
             else:self.fail("catalog test server did not start: "+(process.stderr.read() if process.stderr else ""))
-            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection);connection.request("GET","/api/catalog?q=Reader%2050");response=connection.getresponse();public=json.loads(response.read());self.assertEqual(response.status,200);self.assertEqual(public["books"][0]["id"],book_id);connection.close();connections.remove(connection)
+            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection);connection.request("GET","/api/catalog?q=Reader%2050");response=connection.getresponse();public=json.loads(response.read());self.assertEqual(response.status,401);self.assertNotIn("books",public);connection.close();connections.remove(connection)
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection);connection.request("POST","/api/auth/login",json.dumps({"email":"alice@local.test","password":"alice password phase three"}),{"Content-Type":"application/json","X-Device-Id":"phase3-http-alice-01"});response=connection.getresponse();self.assertEqual(response.status,200);headers=response.getheaders();response.read();connection.close();connections.remove(connection)
             values=[value.split(";",1)[0] for name,value in headers if name.lower()=="set-cookie"];cookies="; ".join(values);csrf=next(value.split("=",1)[1] for value in values if value.startswith("shiyue_csrf="))
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection)

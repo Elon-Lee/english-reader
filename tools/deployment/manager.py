@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Versioned code deployment and finished-resource synchronization."""
-import gzip,hashlib,io,ipaddress,json,os,re,secrets,shlex,shutil,sqlite3,subprocess,tarfile,tempfile,threading,time
+import gzip,hashlib,io,ipaddress,json,os,re,secrets,shlex,shutil,sqlite3,subprocess,sys,tarfile,tempfile,threading,time
 from datetime import datetime,timedelta
 from pathlib import Path
 from urllib.parse import unquote
@@ -247,14 +247,18 @@ def build_frontend_assets(job):
     if result.returncode!=0:
         if output:job.write(output[-4000:])
         raise ValueError("React 前端构建失败")
-    required=(ROOT/"reader/site/index.html",ROOT/"reader/site/assets/index.js",ROOT/"reader/site/assets/index.css",ROOT/"reader/site/product/reader-word-panel.jpg",ROOT/"reader/site/product/workspace-current.jpg",ROOT/"reader/site/product/learning-insights.png")
-    brand_assets=("rynenglish-mark.svg","rynenglish-favicon.ico","rynenglish-apple-touch.png","rynenglish-icon-320.png","rynenglish-icon-512.png")
+    required=(ROOT/"reader/site/index.html",ROOT/"reader/site/assets/index.js",ROOT/"reader/site/assets/index.css")
+    brand_assets=("paper-glow-mark.svg",)
     required+=tuple(ROOT/"reader/site/brand"/name for name in brand_assets)
     missing=[str(path.relative_to(ROOT)) for path in required if not path.is_file() or path.stat().st_size==0]
     if missing:raise ValueError("React 前端构建产物不完整："+", ".join(missing))
     html=(ROOT/"reader/site/index.html").read_text(encoding="utf-8")
-    if "<title>RynEnglish" not in html or any("/brand/"+name not in html for name in brand_assets[:3]):
-        raise ValueError("React 前端品牌入口不完整：缺少 RynEnglish 标题或图标引用")
+    if "<title>纸间微光" not in html or any("/brand/"+name not in html for name in brand_assets):
+        raise ValueError("React 前端品牌入口不完整：缺少纸间微光标题或图标引用")
+    retired_routes=("/api/payments/","/api/commerce/","/api/billing/","/api/membership","/api/admin/payment-","/api/admin/commerce/","/api/admin/subscriptions","/api/admin/manual-orders")
+    for bundle in (ROOT/"reader/site/assets").glob("*.js"):
+        if any(route in bundle.read_text(encoding="utf-8") for route in retired_routes):
+            raise ValueError("React 前端构建仍包含已移除接口："+bundle.name)
     summary=next((line for line in reversed(output.splitlines()) if line.strip()),"构建完成")
     job.write(f"React 生产前端已构建：{summary[:500]}")
 
@@ -269,7 +273,7 @@ def release_metadata(release):
 
 def code_files():
     files=[ROOT/"reader",ROOT/"deployment",ROOT/"requirements-saas.txt",ROOT/"start-reader.sh",ROOT/"start-reader-https.sh",ROOT/"services/captcha"]
-    files += list((ROOT/"tools").glob("*.py"))+[ROOT/"tools/install_forced_aligner.sh",ROOT/"tools/deployment",ROOT/"tools/saas_migrations",ROOT/"tools/vendor/ECDICT/lemma.en.txt"]
+    files += [path for path in (ROOT/"tools").glob("*.py") if not path.name.startswith("test_")]+[ROOT/"tools/install_forced_aligner.sh",ROOT/"tools/deployment",ROOT/"tools/saas_migrations",ROOT/"tools/vendor/ECDICT/lemma.en.txt"]
     return files
 def build_code_package(job,release):
     metadata=release_metadata(release)
@@ -277,7 +281,8 @@ def build_code_package(job,release):
     build_frontend_assets(job)
     target=STATE/f"{release}.tar.gz";STATE.mkdir(parents=True,exist_ok=True)
     def archive_filter(info):
-        if "__pycache__" in info.name or info.name.endswith((".pyc",".pyo",".DS_Store")):return None
+        if "__pycache__" in info.name or info.name.endswith((".pyc",".pyo",".DS_Store",".map")):return None
+        if info.name=="reader/README.md":return None
         if info.name.startswith("services/captcha/target/") and info.name!="services/captcha/target/shiyue-captcha-1.0.0.jar":return None
         if info.name=="reader/modern.html" or info.name=="reader/modern-assets" or info.name.startswith("reader/modern-assets/"):return None
         return info
@@ -647,7 +652,10 @@ def ensure_remote_saas_config(job,remote,target):
         code=f"""from pathlib import Path
 from urllib.parse import urlsplit
 path=Path('/config/saas.env')
-lines=path.read_text().splitlines(keepends=True)
+lines=[line for line in path.read_text().splitlines(keepends=True) if not line.lstrip().startswith(('ALIPAY_','PADDLE_','MBDPAY_','MBD_','CLOUDCAT_'))]
+lines=[line for line in lines if not line.startswith('SMTP_FROM_NAME=')]
+if lines and not lines[-1].endswith('\\n'):lines[-1]+='\\n'
+lines.append('SMTP_FROM_NAME=纸间微光\\n')
 fallback={frontend_url(target)!r}
 explicit_domain={bool(domain)!r}
 found=False
@@ -669,7 +677,7 @@ path.write_text(''.join(lines))
     values={
       "POSTGRES_DB":"shiyue","POSTGRES_USER":"shiyue","POSTGRES_PASSWORD":postgres_password,
       "DATABASE_URL":f"postgresql://shiyue:{postgres_password}@127.0.0.1:5432/shiyue","REDIS_PASSWORD":redis_password,"REDIS_URL":f"redis://:{redis_password}@127.0.0.1:6379/0",
-      "SESSION_SECRET":session_secret,"APP_BASE_URL":frontend_url(target),"SHIYUE_SAAS_AUTO_MIGRATE":"1","BOOTSTRAP_ADMIN_EMAIL":"","BOOTSTRAP_ADMIN_PASSWORD":"",
+      "SESSION_SECRET":session_secret,"APP_BASE_URL":frontend_url(target),"SHIYUE_SAAS_AUTO_MIGRATE":"1","BOOTSTRAP_ADMIN_EMAIL":"","BOOTSTRAP_ADMIN_PASSWORD":"","SMTP_FROM_NAME":"纸间微光",
     }
     with tempfile.TemporaryDirectory(prefix="shiyue-saas-env-") as temp:
         path=Path(temp)/"saas.env";path.write_text("".join(f"{key}={value}\n" for key,value in values.items()),encoding="utf-8");os.chmod(path,0o600)
@@ -1203,7 +1211,7 @@ def uninstall_saas_for_redeploy(job,remote,target):
     remote_root=str(target["remote_root"]).strip()
     if remote_root in {"","/","/root","/home","/srv"} or not remote_root.startswith("/") or len(Path(remote_root).parts)<3 or ".." in Path(remote_root).parts:raise ValueError("远程目录范围过大或无效，拒绝重新部署卸载")
     root=shlex.quote(target["remote_root"])
-    job.update(34,"卸载远程 RynEnglish 服务（不备份远程数据）")
+    job.update(34,"卸载远程纸间微光服务（不备份远程数据）")
     uninstall_script=f"""set -euo pipefail
 test ! -L {root}
 if command -v docker >/dev/null 2>&1; then
@@ -1331,7 +1339,7 @@ def start_uninstall(target_id,confirmation):
     root=str(target["remote_root"]).strip()
     if root in {"","/","/root","/home","/srv"} or len(Path(root).parts)<3:raise ValueError("远程目录范围过大，拒绝卸载")
     def worker(job,remote,target):
-        job.update(20,"停止并删除 RynEnglish 容器")
+        job.update(20,"停止并删除纸间微光容器")
         quoted=shlex.quote(root)
         script=f"""set -e
 if command -v systemctl >/dev/null 2>&1; then systemctl disable --now shiyue-reader >/dev/null 2>&1 || true; fi
@@ -1349,7 +1357,7 @@ echo SHIYUE_UNINSTALLED
         output=remote.ssh(script)
         if "SHIYUE_UNINSTALLED" not in output:raise ValueError("远程卸载未完成")
         db=connect();db.execute("UPDATE deployment_releases SET status='uninstalled' WHERE target_id=?",(target["id"],));db.commit();db.close()
-        job.complete({"targetId":target["id"],"remoteRoot":root,"dockerPreserved":True},"远程 RynEnglish 已卸载")
+        job.complete({"targetId":target["id"],"remoteRoot":root,"dockerPreserved":True},"远程纸间微光已卸载")
     return run_task("remote_uninstall",worker,target_id)
 
 def job_info(job_id,offset=0):

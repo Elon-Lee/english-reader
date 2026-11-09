@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
 from saas_catalog import CatalogService
-from saas_membership import MembershipService
+from saas_resources import ResourceService
 from saas_rewards import RewardService, local_day
 
 TEST_URL=os.environ.get("SHIYUE_SAAS_TEST_DATABASE_URL","")
@@ -29,13 +29,13 @@ class PhaseFourPostgresTests(unittest.TestCase):
     def setUpClass(cls):
         assert_safe_database(TEST_URL)
         cls.environment={"DATABASE_URL":TEST_URL,"SHIYUE_SAAS_ENABLED":"1","SESSION_SECRET":"test-only-session-secret-that-is-at-least-32-characters","BOOTSTRAP_ADMIN_EMAIL":"admin@local.test","BOOTSTRAP_ADMIN_PASSWORD":"phase4 admin password"}
-        cls.accounts=SaaSService(TEST_URL,cls.environment);cls.accounts.migrate();cls.memberships=MembershipService(cls.accounts);cls.catalog=CatalogService(cls.accounts,cls.memberships);cls.rewards=RewardService(cls.accounts,cls.memberships)
+        cls.accounts=SaaSService(TEST_URL,cls.environment);cls.accounts.migrate();cls.resources=ResourceService(cls.accounts);cls.catalog=CatalogService(cls.accounts,cls.resources);cls.rewards=RewardService(cls.accounts,cls.resources)
 
     def setUp(self):
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("""TRUNCATE TABLE member_invite_rewards,member_invites,member_invite_allowances,reward_activity_events,reward_daily_activity,reward_redemptions,reward_ledger,checkins,
-                official_book_unlocks,user_library,catalog_book_tags,catalog_books,catalog_tags,catalog_series,membership_audit,usage_ledger,quota_reservations,usage_periods,subscriptions,manual_orders,assets,
+                official_book_unlocks,user_library,catalog_book_tags,catalog_books,catalog_tags,catalog_series,resource_audit,usage_ledger,quota_reservations,usage_periods,subscriptions,manual_orders,assets,
                 content_sentence_grammar,content_learning_daily,content_word_annotations,content_vocabulary,content_books,invitation_uses,invitations,password_reset_tokens,email_verifications,user_sessions,devices,user_roles,users,roles RESTART IDENTITY CASCADE""")
         self.admin=self.accounts.bootstrap_admin();assert self.admin
         invitation=self.accounts.create_invitation("REWARD-TEST",max_uses=30,created_by=str(self.admin["id"]))
@@ -83,12 +83,12 @@ class PhaseFourPostgresTests(unittest.TestCase):
         review=self.rewards.activity(user_id,0,0,1,"review-a");self.assertEqual(review["pointsGranted"],2)
         duplicate=self.rewards.activity(user_id,0,0,1,"review-a");self.assertTrue(duplicate["idempotent"])
 
-    def test_redemption_credits_membership_quota_once(self):
+    def test_learning_reward_credits_daily_resource_once(self):
         user_id=str(self.user["id"]);self.award(user_id,20,"context-funds")
         first=self.rewards.redeem(user_id,"ai_context_10","context-redemption")
         second=self.rewards.redeem(user_id,"ai_context_10","context-redemption")
         self.assertFalse(first["idempotent"]);self.assertTrue(second["idempotent"])
-        usage=self.memberships.usage(user_id);context=next(row for row in usage["usage"] if row["feature"]=="ai_context_generations")
+        usage=self.resources.usage(user_id);context=next(row for row in usage["usage"] if row["feature"]=="ai_context_generations")
         self.assertEqual(context["available"],60)
         self.assertEqual(self.rewards.status(user_id)["balance"],0)
 
@@ -105,23 +105,6 @@ class PhaseFourPostgresTests(unittest.TestCase):
         self.assertEqual(self.rewards.complete_book(user_id,book_id)["pointsGranted"],0)
         self.assertEqual(self.rewards.status(user_id)["balance"],10)
 
-    def test_member_invite_rewards_effective_learning_and_first_paid(self):
-        inviter_id=str(self.user["id"])
-        self.memberships.create_manual_order(str(self.admin["id"]),inviter_id,"advanced-v1",utcnow()-timedelta(minutes=1),utcnow()+timedelta(days=30))
-        with self.accounts.transaction() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("INSERT INTO member_invite_allowances(id,user_id,quantity_remaining,source,created_by) VALUES(%s,%s,1,'test',%s)",(new_id(),inviter_id,self.admin["id"]))
-        invite=self.rewards.issue_invite(inviter_id)
-        invitee=self.accounts.register("invitee@local.test","invitee password phase four",invite["code"])["user"]
-        invitee_id=str(invitee["id"]);self.verify(invitee_id)
-        self.rewards.activity(invitee_id,600,5,0,"invitee-effective")
-        self.memberships.create_manual_order(str(self.admin["id"]),invitee_id,"advanced-v1",utcnow()-timedelta(minutes=1),utcnow()+timedelta(days=30))
-        self.rewards.on_first_paid(invitee_id);self.rewards.on_first_paid(invitee_id)
-        status=self.rewards.status(inviter_id);self.assertEqual(status["balance"],40)
-        self.assertEqual(status["invites"][0]["status"],"paid")
-        self.assertEqual(status["inviteAllowance"],0)
-        with self.assertRaises(SaaSError) as no_more:self.rewards.issue_invite(inviter_id)
-        self.assertEqual(no_more.exception.code,"invite_not_available")
 
     def test_http_checkin_status_catalog_and_redemption(self):
         user_id=str(self.user["id"]);self.award(user_id,20,"http-funds")

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real PostgreSQL acceptance tests for plans, manual orders, and quotas."""
+"""Real PostgreSQL acceptance tests for uniform resource accounting."""
 from __future__ import annotations
 
 import http.client
@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
-from saas_membership import MembershipService
+from saas_resources import ResourceService
 
 
 TEST_URL = os.environ.get("SHIYUE_SAAS_TEST_DATABASE_URL", "")
@@ -28,6 +28,59 @@ def assert_safe_database(url: str) -> None:
 
 
 class PhaseTwoPostgresTests(unittest.TestCase):
+    def test_limits_do_not_read_or_mutate_historical_tier(self):
+        user_id = str(self.user["id"])
+        for tier in ("free-v2", "pro-v1"):
+            with self.accounts.transaction() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("UPDATE users SET plan_version=%s WHERE id=%s", (tier, user_id))
+            status = self.resources.usage(user_id)
+            self.assertNotIn("plan", status)
+            self.assertNotIn("subscription", status)
+            self.assertEqual(status["limits"]["storage_bytes"], 20 * 1024**3)
+            self.assertEqual(status["limits"]["video_library_capacity"], 100)
+            self.assertEqual(status["limits"]["audio_library_capacity"], 200)
+            self.assertEqual(status["limits"]["ai_context_generations"], 50)
+            with self.accounts.transaction() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT plan_version FROM users WHERE id=%s", (user_id,))
+                    self.assertEqual(cursor.fetchone()[0], tier)
+                    cursor.execute("SELECT plan_version_id,subscription_id FROM usage_periods WHERE user_id=%s", (user_id,))
+                    self.assertTrue(all(row == (None, None) for row in cursor.fetchall()))
+
+    def test_daily_limit_release_idempotency_and_tenant_boundary(self):
+        user_id = str(self.user["id"])
+        reservations = [self.resources.reserve(user_id, "ai_grammar_generations", f"daily-{i}")["reservation"] for i in range(20)]
+        with self.assertRaises(SaaSError) as exhausted:
+            self.resources.reserve(user_id, "ai_grammar_generations", "overflow")
+        self.assertEqual(exhausted.exception.code, "quota_exceeded")
+        self.assertEqual(exhausted.exception.details["limit"], 20)
+        self.assertNotIn("recommendedPlan", exhausted.exception.details)
+        with self.assertRaises(SaaSError):
+            self.resources.settle(str(self.admin["id"]), reservations[0]["id"])
+        self.resources.release(user_id, reservations[0]["id"])
+        self.resources.reserve(user_id, "ai_grammar_generations", "replacement")
+        self.resources.settle(user_id, reservations[1]["id"])
+        self.resources.settle(user_id, reservations[1]["id"])
+        with self.assertRaises(SaaSError):
+            self.resources.release(user_id, reservations[1]["id"])
+        status = self.resources.usage(user_id)
+        grammar = next(row for row in status["usage"] if row["feature"] == "ai_grammar_generations")
+        self.assertEqual((grammar["used"], grammar["reserved"], grammar["available"]), (1, 19, 0))
+
+    def test_invalid_quantity_and_conflict_do_not_consume(self):
+        user_id = str(self.user["id"])
+        with self.assertRaises(SaaSError):
+            self.resources.reserve(user_id, "ai_context_generations", "bad", 0)
+        first = self.resources.reserve(user_id, "ai_context_generations", "same", 1)
+        with self.assertRaises(SaaSError) as conflict:
+            self.resources.reserve(user_id, "ai_context_generations", "same", 2)
+        self.assertEqual(conflict.exception.code, "idempotency_conflict")
+        replay = self.resources.reserve(user_id, "ai_context_generations", "same", 1)
+        self.assertEqual(replay["reservation"]["id"], first["reservation"]["id"])
+        context = next(row for row in self.resources.usage(user_id)["usage"] if row["feature"] == "ai_context_generations")
+        self.assertEqual(context["reserved"], 1)
+
     @classmethod
     def setUpClass(cls):
         assert_safe_database(TEST_URL)
@@ -40,13 +93,13 @@ class PhaseTwoPostgresTests(unittest.TestCase):
         }
         cls.accounts = SaaSService(TEST_URL, cls.environment)
         cls.accounts.migrate()
-        cls.memberships = MembershipService(cls.accounts)
+        cls.resources = ResourceService(cls.accounts)
 
     def setUp(self):
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    """TRUNCATE TABLE membership_audit, usage_ledger, quota_reservations, usage_periods, subscriptions,
+                    """TRUNCATE TABLE resource_audit, usage_ledger, quota_reservations, usage_periods, subscriptions,
                     manual_orders, assets, content_sentence_grammar, content_learning_daily, content_word_annotations,
                     content_vocabulary, content_books, invitation_uses, invitations, password_reset_tokens,
                     email_verifications, user_sessions, devices, user_roles, users, roles RESTART IDENTITY CASCADE"""
@@ -67,23 +120,13 @@ class PhaseTwoPostgresTests(unittest.TestCase):
                 )
         self.accounts.verify_email(raw)
 
-    def test_default_plan_and_period_are_immutable_snapshot(self):
-        membership = self.memberships.membership(str(self.user["id"]), include_usage=True)
-        self.assertEqual(membership["plan"]["id"], "free-v2")
-        self.assertEqual(membership["plan"]["quotas"]["ai_context_generations"], 50)
-        self.assertEqual(len(membership["usage"]), 11)
-        self.assertEqual(next(item for item in membership["usage"] if item["feature"] == "storage_bytes")["limit"], 1024**3)
-        with self.accounts.transaction() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT limits_json->>'ai_context_generations' FROM usage_periods WHERE user_id=%s", (self.user["id"],))
-                self.assertEqual(cursor.fetchone()[0], "50")
 
     def test_concurrent_reservation_cannot_overspend_and_duplicate_is_idempotent(self):
         user_id = str(self.user["id"])
 
         def reserve(index: int):
             try:
-                result = self.memberships.reserve(user_id, "ai_context_generations", f"parallel-{index}")
+                result = self.resources.reserve(user_id, "ai_context_generations", f"parallel-{index}")
                 return result["reservation"]
             except SaaSError as exc:
                 return exc
@@ -97,199 +140,31 @@ class PhaseTwoPostgresTests(unittest.TestCase):
         self.assertTrue(all(item.code == "quota_exceeded" for item in errors))
         self.assertTrue(all(item.details["limit"] == 50 and item.details["used"] == 0 for item in errors))
         first = reservations[0]
-        repeated = self.memberships.reserve(user_id, "ai_context_generations", first["idempotencyKey"])
+        repeated = self.resources.reserve(user_id, "ai_context_generations", first["idempotencyKey"])
         self.assertTrue(repeated["idempotent"])
         self.assertEqual(repeated["reservation"]["id"], first["id"])
-        self.memberships.settle(user_id, first["id"])
-        self.memberships.settle(user_id, first["id"])
-        usage = self.memberships.usage(user_id)
+        self.resources.settle(user_id, first["id"])
+        self.resources.settle(user_id, first["id"])
+        usage = self.resources.usage(user_id)
         context = next(item for item in usage["usage"] if item["feature"] == "ai_context_generations")
         self.assertEqual(context["used"], 1)
         self.assertEqual(context["reserved"], 24)
 
-    def test_free_ai_limits_are_daily_and_paid_ai_is_unlimited(self):
-        user_id = str(self.user["id"])
-        for index in range(50):
-            self.memberships.reserve(user_id, "ai_context_generations", f"daily-context-{index}")
-        with self.assertRaises(SaaSError) as exceeded:
-            self.memberships.reserve(user_id, "ai_context_generations", "daily-context-50")
-        self.assertEqual(exceeded.exception.code, "quota_exceeded")
-        self.assertEqual(exceeded.exception.details["limit"], 50)
-        self.assertTrue(str(exceeded.exception.details["resetAt"]).endswith("+08:00"))
-        with self.accounts.transaction() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT COUNT(*) FROM usage_periods WHERE user_id=%s AND period_key LIKE 'ai-day:%%'", (user_id,))
-                self.assertEqual(cursor.fetchone()[0], 1)
-        self.memberships.create_manual_order(str(self.admin["id"]), user_id, "advanced-v1", utcnow(), utcnow() + timedelta(days=30), "paid AI unlimited", 1900)
-        paid = self.memberships.membership(user_id, include_usage=True)
-        context = next(item for item in paid["usage"] if item["feature"] == "ai_context_generations")
-        grammar = next(item for item in paid["usage"] if item["feature"] == "ai_grammar_generations")
-        self.assertTrue(context["unlimited"])
-        self.assertTrue(grammar["unlimited"])
-        for index in range(60):
-            result = self.memberships.reserve(user_id, "ai_context_generations", f"paid-context-{index}")["reservation"]
-            self.assertEqual(result["state"], "settled")
 
-    def test_release_returns_reserved_quota_and_credit_is_atomic(self):
+    def test_release_returns_reserved_quota(self):
         user_id = str(self.user["id"])
-        reservation = self.memberships.reserve(user_id, "ai_context_generations", "cancelled-context")["reservation"]
-        self.memberships.release(user_id, reservation["id"])
-        again = self.memberships.reserve(user_id, "ai_context_generations", "second-context")["reservation"]
+        reservation = self.resources.reserve(user_id, "ai_context_generations", "cancelled-context")["reservation"]
+        self.resources.release(user_id, reservation["id"])
+        again = self.resources.reserve(user_id, "ai_context_generations", "second-context")["reservation"]
         self.assertEqual(again["state"], "reserved")
-        before = self.memberships.credit(user_id, "ai_grammar_generations", 5, "support-credit-1", str(self.admin["id"]), "support")
-        duplicate = self.memberships.credit(user_id, "ai_grammar_generations", 5, "support-credit-1", str(self.admin["id"]), "support")
-        self.assertEqual(before["available"], 25)
-        self.assertEqual(duplicate["available"], 25)
+        context = next(row for row in self.resources.usage(user_id)["usage"] if row["feature"] == "ai_context_generations")
+        self.assertEqual((context["reserved"], context["available"]), (1, 49))
 
-    def test_legacy_paid_media_migration_repairs_existing_and_future_periods(self):
-        user_id = str(self.user["id"])
-        created = self.memberships.create_manual_order(
-            str(self.admin["id"]), user_id, "pro-v1", utcnow() - timedelta(minutes=1),
-            utcnow() + timedelta(days=365), "legacy media regression", 0,
-        )
-        reservation = self.memberships.reserve(user_id, "storage_bytes", "legacy-storage", 1024)["reservation"]
-        self.memberships.settle(user_id, reservation["id"])
-        migration = (Path(__file__).with_name("saas_migrations") / "0034_legacy_paid_media_capacity.sql").read_text()
-        with self.accounts.transaction() as connection:
-            try:
-                with connection.cursor() as cursor:
-                    cursor.execute("""UPDATE plan_versions SET quotas_json=quotas_json
-                        - 'video_library_capacity' - 'audio_library_capacity'
-                        WHERE id IN ('advanced-v1','pro-v1')""")
-                    cursor.execute("""UPDATE usage_periods SET limits_json=limits_json
-                        - 'video_library_capacity' - 'audio_library_capacity' WHERE user_id=%s""", (user_id,))
-                    context = self.memberships._context(cursor, user_id)
-                    period_id = context["period"]["id"]
-                    before = self.memberships._public_context(cursor, context, True)
-                    self.assertEqual(before["mediaCapacity"]["video"]["limit"], 0)
-                    with self.assertRaises(SaaSError):
-                        self.memberships.assert_media_capacity(cursor, user_id, context, "video")
-                    cursor.execute(migration)
-                    cursor.execute(migration)  # Safe to reapply after an interrupted rollout.
-                    context = self.memberships._context(cursor, user_id)
-                    repaired = self.memberships._public_context(cursor, context, True)
-                    self.assertEqual(repaired["period"]["id"], period_id)
-                    self.assertEqual(repaired["subscription"], before["subscription"])
-                    self.assertEqual(datetime.fromisoformat(repaired["subscription"]["endsAt"]),
-                                     datetime.fromisoformat(created["subscription"]["endsAt"]))
-                    for kind, limit in (("video", 100), ("audio", 200)):
-                        self.assertEqual(repaired["mediaCapacity"][kind]["limit"], limit)
-                        usage = next(item for item in repaired["usage"] if item["feature"] == f"{kind}_library_capacity")
-                        self.assertEqual(usage["limit"], limit)
-                        self.assertEqual(self.memberships.assert_media_capacity(cursor, user_id, context, kind)["limit"], limit)
-                    storage = next(item for item in repaired["usage"] if item["feature"] == "storage_bytes")
-                    self.assertEqual((storage["used"], storage["limit"]), (1024, 100 * 1024 ** 3))
-                    cursor.execute("SELECT quotas_json FROM plan_versions WHERE id='advanced-v1'")
-                    advanced = cursor.fetchone()[0]
-                    self.assertEqual((advanced["video_library_capacity"], advanced["audio_library_capacity"]), (20, 50))
-                    # A new cycle must inherit the repaired plan as well.
-                    cursor.execute("UPDATE usage_periods SET period_key=period_key || ':old' WHERE id=%s", (period_id,))
-                    future = self.memberships._public_context(cursor, self.memberships._context(cursor, user_id), True)
-                    self.assertNotEqual(future["period"]["id"], period_id)
-                    self.assertEqual(future["mediaCapacity"]["video"]["limit"], 100)
-                    self.assertEqual(future["mediaCapacity"]["audio"]["limit"], 200)
-            finally:
-                connection.rollback()  # Do not alter shared plan fixtures for other tests.
 
-    def test_legacy_media_migration_preserves_explicit_limits(self):
-        migration = (Path(__file__).with_name("saas_migrations") / "0034_legacy_paid_media_capacity.sql").read_text()
-        user_id = str(self.user["id"])
-        self.memberships.create_manual_order(
-            str(self.admin["id"]), user_id, "pro-v1", utcnow() - timedelta(minutes=1),
-            utcnow() + timedelta(days=30), "explicit media limits regression", 0,
-        )
-        with self.accounts.transaction() as connection:
-            try:
-                with connection.cursor() as cursor:
-                    cursor.execute("""UPDATE plan_versions SET quotas_json=(quotas_json - 'audio_library_capacity')
-                        || '{"video_library_capacity":0}'::jsonb WHERE id='pro-v1'""")
-                    cursor.execute("""UPDATE usage_periods SET limits_json=(limits_json - 'video_library_capacity')
-                        || '{"audio_library_capacity":7}'::jsonb WHERE user_id=%s AND plan_version_id='pro-v1'""", (user_id,))
-                    cursor.execute(migration)
-                    context = self.memberships._context(cursor, user_id)
-                    self.assertEqual(context["plan"]["quotas_json"]["video_library_capacity"], 0)
-                    self.assertEqual(context["plan"]["quotas_json"]["audio_library_capacity"], 200)
-                    self.assertEqual(context["period"]["limits_json"]["video_library_capacity"], 0)
-                    self.assertEqual(context["period"]["limits_json"]["audio_library_capacity"], 7)
-            finally:
-                connection.rollback()
 
-    def test_manual_order_updates_membership_and_suspend_reverts_to_free(self):
-        user_id = str(self.user["id"])
-        start, end = utcnow() - timedelta(minutes=1), utcnow() + timedelta(days=30)
-        created = self.memberships.create_manual_order(str(self.admin["id"]), user_id, "advanced-v1", start, end, "local manual opening", 3900)
-        self.assertEqual(created["order"]["planVersion"], "advanced-v1")
-        self.assertEqual(created["membership"]["plan"]["id"], "advanced-v1")
-        self.assertEqual(created["membership"]["plan"]["quotas"]["youtube_imports"], 5)
-        orders = self.memberships.orders(user_id)
-        self.assertEqual(len(orders), 1)
-        self.assertEqual(orders[0]["amountCents"], 3900)
-        suspended = self.memberships.update_subscription(str(self.admin["id"]), created["subscription"]["id"], "suspend", note="manual pause")
-        self.assertEqual(suspended["subscription"]["status"], "suspended")
-        self.assertEqual(suspended["membership"]["plan"]["id"], "free-v2")
-        activated = self.memberships.update_subscription(str(self.admin["id"]), created["subscription"]["id"], "activate")
-        self.assertEqual(activated["membership"]["plan"]["id"], "advanced-v1")
-        extended = self.memberships.update_subscription(str(self.admin["id"]), created["subscription"]["id"], "extend", utcnow() + timedelta(days=60))
-        self.assertGreater(extended["subscription"]["endsAt"], created["subscription"]["endsAt"])
 
-    def test_paid_plan_device_limit_is_read_from_immutable_plan_version(self):
-        user_id=str(self.user["id"])
-        self.memberships.create_manual_order(str(self.admin["id"]),user_id,"advanced-v1",utcnow()-timedelta(minutes=1),utcnow()+timedelta(days=30))
-        self.accounts.login("member@local.test","member password for phase two","advanced-device-000001","Phase2 test")
-        self.accounts.login("member@local.test","member password for phase two","advanced-device-000002","Phase2 test")
-        with self.assertRaises(SaaSError) as limited:
-            self.accounts.login("member@local.test","member password for phase two","advanced-device-000003","Phase2 test")
-        self.assertEqual(limited.exception.code,"device_limit_exceeded")
-        self.assertEqual(limited.exception.details["limit"],2)
 
-    def test_expired_subscription_is_marked_expired_and_falls_back_to_free(self):
-        user_id=str(self.user["id"])
-        created=self.memberships.create_manual_order(str(self.admin["id"]),user_id,"pro-v1",utcnow()-timedelta(days=40),utcnow()-timedelta(days=1),"expired acceptance")
-        membership=self.memberships.membership(user_id)
-        self.assertEqual(membership["plan"]["id"],"free-v2")
-        with self.accounts.transaction() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT status FROM subscriptions WHERE id=%s",(created["subscription"]["id"],))
-                self.assertEqual(cursor.fetchone()[0],"expired")
 
-    def test_http_membership_and_admin_manual_order_endpoints(self):
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            port = probe.getsockname()[1]
-        environment = {**os.environ, **self.environment, "READER_HOST": "127.0.0.1", "READER_PORT": str(port)}
-        server_path = os.path.join(os.path.dirname(__file__), "reader_server.py")
-        process = subprocess.Popen([sys.executable, server_path], cwd=os.path.dirname(__file__), env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-        connections: list[http.client.HTTPConnection] = []
-        try:
-            deadline = time.time() + 10
-            while time.time() < deadline:
-                try:
-                    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1); connections.append(connection)
-                    connection.request("GET", "/api/health")
-                    response = connection.getresponse(); response.read(); connection.close(); connections.remove(connection)
-                    if response.status == 200: break
-                except OSError: time.sleep(.1)
-            else: self.fail("SaaS membership test server did not start: " + (process.stderr.read() if process.stderr else ""))
-            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5); connections.append(connection)
-            connection.request("POST", "/api/auth/login", json.dumps({"email":"admin@local.test","password":"phase2 admin password"}), {"Content-Type":"application/json","X-Device-Id":"phase2-admin-device-1"})
-            response = connection.getresponse(); self.assertEqual(response.status, 200); headers=response.getheaders(); response.read(); connection.close(); connections.remove(connection)
-            cookie_values=[value.split(";",1)[0] for name,value in headers if name.lower()=="set-cookie"]
-            cookies="; ".join(cookie_values);csrf=next(value.split("=",1)[1] for value in cookie_values if value.startswith("shiyue_csrf="))
-            start,end=utcnow()-timedelta(minutes=1),utcnow()+timedelta(days=30)
-            payload={"userId":self.user["id"],"planVersion":"pro-v1","startsAt":start.isoformat(),"endsAt":end.isoformat(),"amountCents":7900,"note":"HTTP manual opening"}
-            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection)
-            connection.request("POST","/api/admin/manual-orders",json.dumps(payload),{"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf})
-            response=connection.getresponse();created=json.loads(response.read());self.assertEqual(response.status,201);self.assertEqual(created["membership"]["plan"]["id"],"pro-v1");connection.close();connections.remove(connection)
-            login=self.accounts.login("member@local.test","member password for phase two","phase2-member-device-1","Phase2 test")
-            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection)
-            connection.request("GET","/api/membership/usage",headers={"Cookie":f"shiyue_session={login['sessionToken']}"})
-            response=connection.getresponse();membership=json.loads(response.read());self.assertEqual(response.status,200);self.assertEqual(membership["plan"]["id"],"pro-v1");self.assertEqual(next(row for row in membership["usage"] if row["feature"]=="youtube_imports")["limit"],20);connection.close();connections.remove(connection)
-        finally:
-            for connection in connections: connection.close()
-            process.terminate()
-            try: process.wait(timeout=5)
-            except subprocess.TimeoutExpired: process.kill()
-            if process.stderr: process.stderr.close()
 
 
 if __name__ == "__main__":

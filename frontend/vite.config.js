@@ -4,8 +4,6 @@ import { resolve } from 'node:path'
 import { readFileSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
-const homepageImages = ['reader-lookup-20261026.webp', 'reader-tools-20261026.webp', 'workspace-current.jpg', 'vocabulary-review-20261026.webp']
-
 // Self-host PDF fonts, CMaps and image decoders, including offline Linux installs.
 function pdfResources() {
   const version = JSON.parse(readFileSync(resolve(process.cwd(), 'node_modules/pdfjs-dist/package.json'), 'utf8')).version
@@ -33,14 +31,6 @@ export default defineConfig({
     name: 'shiyue-entry-cache-version',
     enforce: 'post',
     generateBundle(_, bundle) {
-      for (const asset of Object.values(bundle)) {
-        if (asset.type !== 'chunk') continue
-        for (const filename of homepageImages) {
-          const imagePath = resolve(process.cwd(), 'frontend/public/product', filename)
-          const version = createHash('sha256').update(readFileSync(imagePath)).digest('hex').slice(0, 12)
-          asset.code = asset.code.replaceAll(`/product/${filename}`, `/product/${filename}?v=${version}`)
-        }
-      }
       const entry = bundle['index.html']
       if (!entry) return
       entry.source = String(entry.source).replace(/(\/assets\/(?:index\.js|index\.css))(?=["'])/g, (url) => {

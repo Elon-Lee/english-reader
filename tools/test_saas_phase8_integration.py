@@ -23,7 +23,7 @@ from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
 from saas_catalog import CatalogService
 from saas_imports import WorkspaceImportService
 from saas_media import MediaService
-from saas_membership import MembershipService
+from saas_resources import ResourceService
 from saas_workspace import WorkspaceService
 from manual_caption_alignment import MODEL_FILE
 
@@ -54,7 +54,7 @@ target=Path(str(template).replace('%(ext)s','mp4'));target.parent.mkdir(parents=
 subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=320x180:d=2','-f','lavfi','-i','sine=frequency=500:duration=2','-shortest','-c:v','mpeg4','-c:a','aac',str(target)],check=True)
 """,encoding="utf-8");cls.fake_ytdlp.chmod(0o755)
         cls.failing_ytdlp=Path(cls.temp.name)/"failing_ytdlp.py";cls.failing_ytdlp.write_text("#!/usr/bin/env python3\nimport sys\nprint('ERROR: simulated yt-dlp failure',file=sys.stderr)\nraise SystemExit(2)\n",encoding="utf-8");cls.failing_ytdlp.chmod(0o755)
-        cls.accounts=SaaSService(TEST_URL,cls.environment);cls.accounts.migrate();cls.memberships=MembershipService(cls.accounts);cls.media=MediaService(cls.accounts,cls.memberships,cls.root);cls.imports=WorkspaceImportService(cls.accounts,cls.memberships,cls.media);cls.pdf_imports=WorkspaceImportService(cls.accounts,cls.memberships,cls.media,cls.fake_ocr);cls.mp3_imports=WorkspaceImportService(cls.accounts,cls.memberships,cls.media,whisper_cli=cls.fake_whisper,whisper_model=cls.fake_model,audio_duration=lambda path:4.2);cls.video_imports=WorkspaceImportService(cls.accounts,cls.memberships,cls.media,whisper_cli=cls.fake_whisper,whisper_model=cls.fake_model,audio_duration=lambda path:2.0);cls.youtube_imports=WorkspaceImportService(cls.accounts,cls.memberships,cls.media,whisper_cli=cls.fake_whisper,whisper_model=cls.fake_model,audio_duration=lambda path:2.0,yt_dlp=cls.fake_ytdlp,node=Path(sys.executable));cls.failing_youtube_imports=WorkspaceImportService(cls.accounts,cls.memberships,cls.media,whisper_cli=cls.fake_whisper,whisper_model=cls.fake_model,audio_duration=lambda path:2.0,yt_dlp=cls.failing_ytdlp,node=Path(sys.executable));cls.workspace=WorkspaceService(cls.accounts)
+        cls.accounts=SaaSService(TEST_URL,cls.environment);cls.accounts.migrate();cls.resources=ResourceService(cls.accounts);cls.media=MediaService(cls.accounts,cls.resources,cls.root);cls.imports=WorkspaceImportService(cls.accounts,cls.resources,cls.media);cls.pdf_imports=WorkspaceImportService(cls.accounts,cls.resources,cls.media,cls.fake_ocr);cls.mp3_imports=WorkspaceImportService(cls.accounts,cls.resources,cls.media,whisper_cli=cls.fake_whisper,whisper_model=cls.fake_model,audio_duration=lambda path:4.2);cls.video_imports=WorkspaceImportService(cls.accounts,cls.resources,cls.media,whisper_cli=cls.fake_whisper,whisper_model=cls.fake_model,audio_duration=lambda path:2.0);cls.youtube_imports=WorkspaceImportService(cls.accounts,cls.resources,cls.media,whisper_cli=cls.fake_whisper,whisper_model=cls.fake_model,audio_duration=lambda path:2.0,yt_dlp=cls.fake_ytdlp,node=Path(sys.executable));cls.failing_youtube_imports=WorkspaceImportService(cls.accounts,cls.resources,cls.media,whisper_cli=cls.fake_whisper,whisper_model=cls.fake_model,audio_duration=lambda path:2.0,yt_dlp=cls.failing_ytdlp,node=Path(sys.executable));cls.workspace=WorkspaceService(cls.accounts)
 
     @classmethod
     def tearDownClass(cls):cls.temp.cleanup()
@@ -68,7 +68,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
             with connection.cursor() as cursor:
                 cursor.execute("""TRUNCATE TABLE workspace_import_tasks,workspace_activity_events,workspace_progress,workspace_settings,security_events,account_deletion_requests,asset_usage,asset_variants,media_assets,admin_audit_logs,platform_settings,
                 member_invite_rewards,member_invites,member_invite_allowances,reward_activity_events,reward_daily_activity,reward_redemptions,reward_ledger,checkins,
-                official_book_unlocks,user_library,catalog_book_tags,catalog_books,catalog_tags,catalog_series,membership_audit,usage_ledger,quota_reservations,usage_periods,subscriptions,manual_orders,assets,
+                official_book_unlocks,user_library,catalog_book_tags,catalog_books,catalog_tags,catalog_series,resource_audit,usage_ledger,quota_reservations,usage_periods,subscriptions,manual_orders,assets,
                 content_sentence_grammar,content_learning_daily,content_word_annotations,content_vocabulary,content_books,invitation_uses,invitations,password_reset_tokens,email_verifications,user_sessions,devices,user_roles,users,roles RESTART IDENTITY CASCADE""")
         self.admin=self.accounts.bootstrap_admin();assert self.admin
         invite=self.accounts.create_invitation("IMPORT-TEST",max_uses=10,created_by=str(self.admin["id"]))
@@ -86,7 +86,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         owner,other=str(self.owner["id"]),str(self.other["id"])
         created=self.imports.create(owner,"text","我的测试文本","lesson.md","text-task-1")
         duplicate=self.imports.create(owner,"text","ignored","lesson.md","text-task-1")
-        self.assertFalse(created["idempotent"]);self.assertTrue(duplicate["idempotent"]);self.assertEqual(created["task"]["id"],duplicate["task"]["id"]);self.assertEqual(created["task"]["planVersion"],"free-v2")
+        self.assertFalse(created["idempotent"]);self.assertTrue(duplicate["idempotent"]);self.assertEqual(created["task"]["id"],duplicate["task"]["id"]);self.assertNotIn("planVersion",created["task"])
         task_id=created["task"]["id"]
         uploaded=self.imports.upload(owner,task_id,"lesson.md",b"First private sentence.\n\nSecond private sentence!","text/markdown")
         self.assertEqual(uploaded["status"],"queued")
@@ -251,11 +251,11 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         owner=str(self.owner["id"])
         created=self.imports.create(owner,"mp3","试听","sample.mp3","mp3-task-1")
         task_id=created["task"]["id"]
-        usage=self.memberships.usage(owner);mp3=next(row for row in usage["usage"] if row["feature"]=="mp3_imports");self.assertEqual(mp3["reserved"],0)
+        usage=self.resources.usage(owner);
         self.imports.upload(owner,task_id,"sample.mp3",b"not-a-real-mp3","audio/mpeg")
         cancelled=self.imports.cancel(owner,task_id);self.assertEqual(cancelled["task"]["status"],"cancelled")
-        usage=self.memberships.usage(owner);mp3=next(row for row in usage["usage"] if row["feature"]=="mp3_imports");storage=next(row for row in usage["usage"] if row["feature"]=="storage_bytes")
-        self.assertEqual(mp3["reserved"],0);self.assertEqual(storage["used"],0)
+        usage=self.resources.usage(owner);storage=next(row for row in usage["usage"] if row["feature"]=="storage_bytes")
+        self.assertEqual(storage["used"],0)
 
     def test_mp3_native_whisper_processor_creates_timed_private_audio_book(self):
         owner=str(self.owner["id"])
@@ -275,8 +275,8 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
                 stored=self.accounts._one(cursor)["data_json"]
         self.assertEqual(stored["whisper"]["timestampMethod"],"segment-estimate")
         self.assertEqual(stored["whisper"]["timingVersion"],3)
-        usage=self.memberships.usage(owner);mp3=next(row for row in usage["usage"] if row["feature"]=="mp3_imports")
-        self.assertEqual(mp3["used"],0);self.assertEqual(mp3["reserved"],0)
+        usage=self.resources.usage(owner)
+
         self.assertEqual(next(row for row in usage["usage"] if row["feature"]=="audio_library_capacity")["used"],1)
 
     def test_pdf_document_uses_native_ocr_processor_and_creates_private_book(self):
@@ -302,7 +302,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         completed=self.video_imports.complete(owner,task_id);self.assertEqual(completed["task"]["status"],"complete")
         asset_id=completed["task"]["sourceAssetId"];reader=self.workspace.reader(owner,completed["task"]["outputBookId"])["book"]
         self.assertEqual(reader["resourceType"],"video");self.assertEqual(round(reader["duration"],1),2.0)
-        self.assertFalse(reader["canWatchHdVideo"])
+        self.assertTrue(reader["canWatchHdVideo"])
         self.assertEqual([sentence["text"] for sentence in reader["sentences"]],["Hello private audio."])
         self.assertTrue(all(word["end"]<=reader["duration"] for sentence in reader["sentences"] for word in sentence["words"]))
         with self.accounts.transaction() as connection:
@@ -312,22 +312,14 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         self.assertEqual(stored["segmentation"]["wordsOutsideMedia"],3)
         self.assertTrue(self.media.stream(owner,asset_id,"audio")["path"].is_file());self.assertTrue(self.media.stream(owner,asset_id,"cover")["path"].is_file())
         self.assertTrue(self.media.stream(owner,asset_id,"low")["path"].is_file())
-        with self.assertRaises(SaaSError) as high:self.media.stream(owner,asset_id)
-        self.assertEqual(high.exception.code,"video_quality_membership_required")
-        self.memberships.create_manual_order(str(self.admin["id"]),owner,"advanced-v1",utcnow()-timedelta(minutes=1),utcnow()+timedelta(days=30))
-        self.assertTrue(self.workspace.reader(owner,completed["task"]["outputBookId"])["book"]["canWatchHdVideo"])
         self.assertTrue(self.media.stream(owner,asset_id)["path"].is_file())
-        with self.accounts.transaction() as connection:
-            with connection.cursor() as cursor:cursor.execute("UPDATE subscriptions SET ends_at=NOW()-INTERVAL '1 second' WHERE user_id=%s",(owner,))
-        with self.assertRaises(SaaSError) as expired:self.media.stream(owner,asset_id)
-        self.assertEqual(expired.exception.code,"video_quality_membership_required")
         with self.assertRaises(SaaSError) as denied:self.media.stream(other,asset_id,"audio")
         self.assertEqual(denied.exception.code,"media_access_denied")
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT variant_name FROM asset_variants WHERE asset_id=%s AND deleted_at IS NULL ORDER BY variant_name",(asset_id,));self.assertEqual([row["variant_name"] for row in self.accounts._many(cursor)],["audio","cover","low"])
-        usage=self.memberships.usage(owner);video=next(row for row in usage["usage"] if row["feature"]=="video_imports");storage=next(row for row in usage["usage"] if row["feature"]=="storage_bytes")
-        self.assertEqual(video["used"],0);self.assertEqual(video["reserved"],0);self.assertGreater(storage["used"],sample.stat().st_size)
+        usage=self.resources.usage(owner);storage=next(row for row in usage["usage"] if row["feature"]=="storage_bytes")
+        self.assertGreater(storage["used"],sample.stat().st_size)
         self.assertEqual(next(row for row in usage["usage"] if row["feature"]=="video_library_capacity")["used"],1)
 
     def test_video_processing_failure_releases_reservation_and_preserves_retry_source(self):
@@ -339,8 +331,8 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT status FROM media_assets WHERE id=%s",(uploaded["sourceAssetId"],));self.assertEqual((self.accounts._one(cursor)or{})["status"],"active")
-        usage=self.memberships.usage(owner);video=next(row for row in usage["usage"] if row["feature"]=="video_imports");storage=next(row for row in usage["usage"] if row["feature"]=="storage_bytes")
-        self.assertEqual(video["used"],0);self.assertEqual(video["reserved"],0);self.assertEqual(storage["used"],len(b"not-a-video"))
+        usage=self.resources.usage(owner);storage=next(row for row in usage["usage"] if row["feature"]=="storage_bytes")
+        self.assertEqual(storage["used"],len(b"not-a-video"))
 
     @unittest.skipUnless(shutil.which("ffmpeg"),"FFmpeg is required for the native YouTube acceptance test")
     def test_youtube_native_downloader_reuses_video_processor_and_preserves_captions(self):
@@ -353,7 +345,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         summary=self.workspace.list_books(owner)["books"][0]
         self.assertEqual(summary["series"],"Test Channel")
         self.assertEqual(summary["coverUrl"],f"/api/media/{asset_id}?variant=cover")
-        catalog=CatalogService(self.accounts,self.memberships)
+        catalog=CatalogService(self.accounts,self.resources)
         with self.assertRaises(SaaSError) as denied:
             catalog.review(str(self.admin["id"]),summary["id"],"licensed","published")
         self.assertEqual(denied.exception.code,"private_content")
@@ -393,8 +385,8 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         self.assertFalse(any(s.get("translation") for s in stored["sentences"]))
         self.media.stream(owner,asset_id,"subtitles-zh-CN")["path"].unlink()
         self.assertFalse(any(s.get("translation") for s in self.workspace.reader(owner,completed["task"]["outputBookId"])["book"]["sentences"]))
-        usage=self.memberships.usage(owner);youtube=next(row for row in usage["usage"] if row["feature"]=="youtube_imports");video=next(row for row in usage["usage"] if row["feature"]=="video_imports")
-        self.assertEqual(youtube["used"],0);self.assertEqual(youtube["reserved"],0);self.assertEqual(video["used"],0)
+        usage=self.resources.usage(owner)
+
 
     @unittest.skipUnless(shutil.which("ffmpeg"),"FFmpeg required")
     def test_verified_manual_caption_import_persists_measured_words_without_whisper(self):
@@ -436,7 +428,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
     @unittest.skipUnless(shutil.which("ffmpeg"),"FFmpeg required")
     def test_official_import_review_storage_and_permanent_delete(self):
         admin,owner=str(self.admin["id"]),str(self.owner["id"])
-        official=WorkspaceImportService(self.accounts,self.memberships,self.media,whisper_cli=self.fake_whisper,whisper_model=self.fake_model,audio_duration=lambda path:2.0,yt_dlp=self.fake_ytdlp,node=Path(sys.executable),official=True)
+        official=WorkspaceImportService(self.accounts,self.resources,self.media,whisper_cli=self.fake_whisper,whisper_model=self.fake_model,audio_duration=lambda path:2.0,yt_dlp=self.fake_ytdlp,node=Path(sys.executable),official=True)
         with self.assertRaises(SaaSError) as denied:
             official.create(owner,"text","Denied","test.txt","official-denied")
         self.assertEqual(denied.exception.code,"admin_required")
@@ -451,7 +443,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         self.assertIn("height<=480",download_args[download_args.index("-f")+1])
         self.assertNotIn("720",download_args[download_args.index("-f")+1])
         book_id,asset_id=completed["outputBookId"],completed["sourceAssetId"]
-        catalog=CatalogService(self.accounts,self.memberships)
+        catalog=CatalogService(self.accounts,self.resources)
         sources=catalog.review_sources()["sources"]
         self.assertEqual([row["sourceBookId"] for row in sources],[book_id])
         self.assertEqual(sources[0]["publicationStatus"],"draft")
@@ -468,7 +460,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
                 cursor.execute(migration);cursor.execute(migration)
         self.assertEqual(self.workspace.list_books(owner)["books"][0]["id"],private_book)
         self.assertEqual([row["sourceBookId"] for row in catalog.review_sources()["sources"]],[book_id])
-        usage=self.memberships.usage(admin)["usage"]
+        usage=self.resources.usage(admin)["usage"]
         self.assertEqual(next(row for row in usage if row["feature"]=="storage_bytes")["used"],0)
         self.assertEqual(next(row for row in usage if row["feature"]=="video_library_capacity")["used"],0)
         detail=self.media.user_storage(admin)
@@ -505,7 +497,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         created=self.failing_youtube_imports.create(owner,"youtube","Failure","","failed-youtube-task",url)
         with self.assertRaises(SaaSError) as failed:self.failing_youtube_imports.complete(owner,created["task"]["id"])
         self.assertEqual(failed.exception.code,"youtube_download_failed")
-        usage=self.memberships.usage(owner);youtube=next(row for row in usage["usage"] if row["feature"]=="youtube_imports");self.assertEqual(youtube["used"],0);self.assertEqual(youtube["reserved"],0)
+        usage=self.resources.usage(owner);
 
     def test_paginated_history_and_delete_invalid_are_owner_scoped(self):
         owner,other=str(self.owner["id"]),str(self.other["id"])

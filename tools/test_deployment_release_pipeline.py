@@ -32,16 +32,16 @@ class DeploymentReleasePipelineTests(unittest.TestCase):
         frontend.assert_not_called()
 
     def brand_fixture(self,root):
-        names=("rynenglish-mark.svg","rynenglish-favicon.ico","rynenglish-apple-touch.png","rynenglish-icon-320.png","rynenglish-icon-512.png")
+        names=("paper-glow-mark.svg",)
         for name in names:
             path=root/"reader/site/brand"/name
             path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b"brand")
-        (root/"reader/site/index.html").write_text('<title>RynEnglish</title>'+''.join('<link href="/brand/'+name+'?v=test">' for name in names[:3]))
+        (root/"reader/site/index.html").write_text('<title>纸间微光</title>'+''.join('<link href="/brand/'+name+'?v=test">' for name in names))
 
     def test_frontend_build_runs_production_script_and_checks_assets(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);(root/"package.json").write_text("{}")
-            required=("reader/site/index.html","reader/site/assets/index.js","reader/site/assets/index.css","reader/site/product/reader-word-panel.jpg","reader/site/product/workspace-current.jpg","reader/site/product/learning-insights.png")
+            required=("reader/site/index.html","reader/site/assets/index.js","reader/site/assets/index.css")
             for relative in required:
                 path=root/relative
                 path.parent.mkdir(parents=True,exist_ok=True);path.write_text("ok")
@@ -52,48 +52,89 @@ class DeploymentReleasePipelineTests(unittest.TestCase):
             self.assertEqual(run.call_args.args[0],["npm","run","build:modern"])
             self.assertEqual(run.call_args.kwargs["cwd"],root)
 
-    def test_frontend_build_rejects_missing_home_screenshot(self):
+    def test_frontend_build_rejects_missing_stylesheet(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);(root/"package.json").write_text("{}")
-            required=("reader/site/index.html","reader/site/assets/index.js","reader/site/assets/index.css","reader/site/product/reader-word-panel.jpg","reader/site/product/workspace-current.jpg")
+            required=("reader/site/index.html","reader/site/assets/index.js")
             for relative in required:
                 path=root/relative
                 path.parent.mkdir(parents=True,exist_ok=True);path.write_text("ok")
             self.brand_fixture(root)
             completed=type("Completed",(),{"returncode":0,"stdout":"built\n","stderr":""})()
             with patch.object(manager,"ROOT",root),patch.object(manager.subprocess,"run",return_value=completed):
-                with self.assertRaisesRegex(ValueError,"learning-insights.png"):
+                with self.assertRaisesRegex(ValueError,"index.css"):
                     manager.build_frontend_assets(Job())
 
     def test_frontend_build_rejects_missing_brand_and_old_entry(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);(root/"package.json").write_text("{}")
-            for relative in ("reader/site/assets/index.js","reader/site/assets/index.css","reader/site/product/reader-word-panel.jpg","reader/site/product/workspace-current.jpg","reader/site/product/learning-insights.png"):
+            for relative in ("reader/site/assets/index.js","reader/site/assets/index.css"):
                 path=root/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b"asset")
             self.brand_fixture(root)
-            icon=root/"reader/site/brand/rynenglish-favicon.ico";icon.unlink()
+            icon=root/"reader/site/brand/paper-glow-mark.svg";icon.unlink()
             completed=type("Completed",(),{"returncode":0,"stdout":"built\n","stderr":""})()
             with patch.object(manager,"ROOT",root),patch.object(manager.subprocess,"run",return_value=completed):
-                with self.assertRaisesRegex(ValueError,"rynenglish-favicon.ico"):
+                with self.assertRaisesRegex(ValueError,"paper-glow-mark.svg"):
                     manager.build_frontend_assets(Job())
                 icon.write_bytes(b"brand")
                 (root/"reader/site/index.html").write_text('<title>拾页</title>')
-                with self.assertRaisesRegex(ValueError,"RynEnglish"):
+                with self.assertRaisesRegex(ValueError,"纸间微光"):
                     manager.build_frontend_assets(Job())
+
+    def test_runtime_package_does_not_include_development_tests(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);(root/"tools").mkdir()
+            (root/"tools/test_old_payment.py").write_text("historic test")
+            (root/"tools/reader_server.py").write_text("runtime")
+            with patch.object(manager,"ROOT",root):
+                files=manager.code_files()
+            self.assertIn(root/"tools/reader_server.py",files)
+            self.assertNotIn(root/"tools/test_old_payment.py",files)
+
+    def test_frontend_build_rejects_retired_transaction_routes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);(root/"package.json").write_text("{}")
+            assets=root/"reader/site/assets";assets.mkdir(parents=True)
+            (assets/"index.css").write_text("style")
+            (assets/"index.js").write_text('fetch("/api/payments/alipay/orders")')
+            self.brand_fixture(root)
+            completed=type("Completed",(),{"returncode":0,"stdout":"built\n","stderr":""})()
+            with patch.object(manager,"ROOT",root),patch.object(manager.subprocess,"run",return_value=completed):
+                with self.assertRaisesRegex(ValueError,"已移除接口"):
+                    manager.build_frontend_assets(Job())
+
+    def test_upgrade_config_removes_retired_provider_credentials(self):
+        scripts=[]
+        remote=type("Remote",(),{"ssh":lambda self,script: scripts.append(script) or ("SHIYUE_SAAS_ENV_READY" if len(scripts)==1 else "")})()
+        target={"id":1,"host":"127.0.0.1","remote_root":"/srv/shiyue","service_port":8765,"use_https":False}
+        manager.ensure_remote_saas_config(Job(),remote,target)
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);config=root/"saas.env"
+            original="POSTGRES_PASSWORD=keep-secret\nSESSION_SECRET=keep-session\nSMTP_FROM_NAME=Old Brand\nALIPAY_APP_ID=old\nPADDLE_API_KEY=old\nMBDPAY_KEY=old\nCLOUDCAT_KEY=old\nAPP_BASE_URL=https://example.test\n"
+            config.write_text(original)
+            command=shlex.split(scripts[-1])
+            code=command[-1].replace("Path('/config/saas.env')","Path("+repr(str(config))+")")
+            exec(code,{"Path":Path})
+            updated=config.read_text()
+            self.assertIn("POSTGRES_PASSWORD=keep-secret",updated)
+            self.assertIn("SESSION_SECRET=keep-session",updated)
+            self.assertIn("SMTP_FROM_NAME=纸间微光",updated)
+            for prefix in ("ALIPAY_","PADDLE_","MBDPAY_","CLOUDCAT_"):self.assertNotIn(prefix,updated)
 
     def test_release_package_contains_metadata(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp)/"repo";state=Path(temp)/"state";source=root/"reader/site/index.html";source.parent.mkdir(parents=True);source.write_text("ok");legacy=root/"reader/modern-assets/assets/index.js";legacy.parent.mkdir(parents=True);legacy.write_text("legacy")
-            screenshots=("reader-word-panel.jpg","workspace-current.jpg","learning-insights.png")
-            for name in screenshots:
-                image=root/"reader/site/product"/name;image.parent.mkdir(parents=True,exist_ok=True);image.write_bytes(b"image")
+            (root/"reader/README.md").write_text("development documentation")
+            (root/"reader/site/source.js.map").write_text("source map")
             self.brand_fixture(root)
             with patch.object(manager,"ROOT",root),patch.object(manager,"STATE",state),patch.object(manager,"build_frontend_assets"),patch.object(manager,"build_captcha_assets"),patch.object(manager,"code_files",return_value=[root/"reader"]),patch.object(manager,"release_metadata",return_value={"releaseId":"code-20261012-120000-abcdef12","packageFormat":2}):
                 package,digest=manager.build_code_package(Job(),"code-20261012-120000-abcdef12")
             self.assertEqual(len(digest),64)
             with tarfile.open(package,"r:gz") as archive:
                 self.assertFalse(any(name=="reader/modern-assets" or name.startswith("reader/modern-assets/") for name in archive.getnames()))
-                for name in screenshots:self.assertIn(f"reader/site/product/{name}",archive.getnames())
+                self.assertNotIn("reader/README.md",archive.getnames())
+                self.assertFalse(any(name.endswith(".map") for name in archive.getnames()))
+                self.assertIn("reader/site/index.html",archive.getnames())
                 for name in (root/"reader/site/brand").iterdir():self.assertIn(f"reader/site/brand/{name.name}",archive.getnames())
                 metadata=json.load(archive.extractfile(".shiyue-release.json"))
             self.assertEqual(metadata["packageFormat"],2)

@@ -101,7 +101,7 @@ class FrontendHandler(BaseHTTPRequestHandler):
         except ValueError:
             self.send_error(403)
             return
-        if not path.is_file() and (requested in {"/", "/app", "/pricing", "/login", "/register", "/support", "/verify-email", "/reset-password", "/terms", "/privacy", "/content-policy", "/refunds", "/copyright"} or requested.startswith("/purchase/")):
+        if not path.is_file() and requested in {"/", "/app", "/login", "/register", "/support", "/verify-email", "/reset-password", "/terms", "/privacy", "/content-policy", "/copyright"}:
             path = ROOT / "index.html"
         if not path.is_file():
             self.send_error(404)

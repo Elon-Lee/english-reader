@@ -1,7 +1,7 @@
 """Presentation of saved reading position; elapsed study time is not completion."""
 from typing import Any
 
-from saas_membership import as_json, timestamp
+from saas_resources import as_json, timestamp
 
 
 def reading_progress(row: dict[str, Any], data: Any) -> dict[str, Any]:

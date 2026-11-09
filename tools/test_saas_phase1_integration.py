@@ -3,7 +3,7 @@
 
 Run only against a disposable database whose name ends in ``_test``.  The
 script truncates every SaaS table between tests and reads (never alters) the
-current SQLite library when validating the legacy import.
+a temporary SQLite fixture when validating the legacy import.
 """
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ import http.client
 import json
 import os
 import socket
+import sqlite3
+import tempfile
 import subprocess
 import sys
 import time
@@ -141,15 +143,17 @@ class PhaseOnePostgresTests(unittest.TestCase):
         with self.assertRaises(SaaSError) as csrf_error:
             self.service.assert_csrf(self.service.authenticate(rotated), "wrong")
         self.assertEqual(csrf_error.exception.code, "csrf_failed")
+        for index in range(2, 6):
+            self.service.login("reader@local.test", "valid password for testing", f"device-flow-{index:08d}", "Phase1 test")
         with self.assertRaises(SaaSError) as device_error:
-            self.service.login("reader@local.test", "valid password for testing", "device-flow-00000002", "Phase1 test")
+            self.service.login("reader@local.test", "valid password for testing", "device-flow-00000006", "Phase1 test")
         self.assertEqual(device_error.exception.code, "device_limit_exceeded")
-        self.assertEqual(device_error.exception.details["limit"], 1)
-        self.assertEqual(device_error.exception.details["devices"][0]["id"], session["device_id"])
+        self.assertEqual(device_error.exception.details["limit"], 5)
+        self.assertIn(session["device_id"], {row["id"] for row in device_error.exception.details["devices"]})
         devices = self.service.devices(user_id)
-        self.assertEqual(len(devices), 1)
-        self.assertFalse(devices[0]["current"])
-        self.assertTrue(self.service.devices(user_id, str(session["device_id"]))[0]["current"])
+        self.assertEqual(len(devices), 5)
+        self.assertTrue(all(not row["current"] for row in devices))
+        self.assertEqual(sum(row["current"] for row in self.service.devices(user_id, str(session["device_id"]))), 1)
         self.service.logout(session)
         self.assertIsNone(self.service.authenticate(login["sessionToken"]))
 
@@ -236,12 +240,20 @@ class PhaseOnePostgresTests(unittest.TestCase):
         self.assertIsNotNone(self.service.login("admin@local.test", "replacement administrator password", "device-admin-00000001", "Phase1 test"))
 
     def test_legacy_sqlite_import_preserves_counts_and_admin_ownership(self):
-        imported = self.service.import_legacy_sqlite(SQLITE_PATH, str(self.admin["id"]))
-        self.assertEqual(imported["books"], 39)
+        with tempfile.TemporaryDirectory(prefix="private-legacy-") as folder:
+            source = Path(folder) / "library.sqlite3"
+            with sqlite3.connect(source) as connection:
+                connection.execute("CREATE TABLE books(id TEXT,title TEXT,source_path TEXT,data_json TEXT,created_at TEXT,updated_at TEXT)")
+                connection.execute("INSERT INTO books VALUES('legacy-reader','Fixture','fixture/book','{}',?,?)", (utcnow().isoformat(), utcnow().isoformat()))
+                for table in ('vocabulary', 'word_annotations', 'learning_daily', 'sentence_grammar'):
+                    connection.execute(f"CREATE TABLE {table}(id TEXT)")
+            connection.close()
+            imported = self.service.import_legacy_sqlite(source, str(self.admin["id"]))
+            self.assertEqual(imported["books"], 1)
         with self.service.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT COUNT(*),COUNT(*) FILTER (WHERE owner_id=%s),COUNT(*) FILTER (WHERE visibility='private') FROM content_books", (self.admin["id"],))
-                self.assertEqual(cursor.fetchone(), (39, 39, 39))
+                self.assertEqual(cursor.fetchone(), (1, 1, 1))
                 cursor.execute("SELECT COUNT(*) FROM content_sentence_grammar")
                 self.assertEqual(cursor.fetchone()[0], imported["grammar"])
                 cursor.execute("SELECT COUNT(*) FROM content_vocabulary")
@@ -282,8 +294,8 @@ class PhaseOnePostgresTests(unittest.TestCase):
                 connection.request("GET", auth_path)
                 response = connection.getresponse()
                 body = response.read().decode("utf-8")
-                self.assertEqual(response.status, 200)
-                self.assertIn('id="root"', body)
+                self.assertEqual(response.status, 404)
+                self.assertEqual(json.loads(body)["code"], "backend_only")
                 connection.close()
                 connection = None
             payload = json.dumps({"email": "http-reader@local.test", "password": "valid password for testing"})

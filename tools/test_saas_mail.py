@@ -12,7 +12,7 @@ class MailTests(unittest.TestCase):
         return SaaSService(environment={
             "SMTP_HOST": "smtpdm.aliyun.com", "SMTP_PORT": str(port),
             "SMTP_USER": "noreply@example.test", "SMTP_FROM": "noreply@example.test",
-            "SMTP_PASSWORD": "test-only", "SMTP_FROM_NAME": "RynEnglish",
+            "SMTP_PASSWORD": "test-only", "SMTP_FROM_NAME": "纸间微光",
         })
 
     @patch("saas_auth.smtplib.SMTP_SSL")
@@ -28,7 +28,7 @@ class MailTests(unittest.TestCase):
         client.login.assert_called_once_with("noreply@example.test", "test-only")
         call = client.send_message.call_args
         self.assertEqual(call.kwargs["from_addr"], "noreply@example.test")
-        self.assertIn("RynEnglish", str(call.args[0]["From"]))
+        self.assertIn("纸间微光", str(call.args[0]["From"]))
 
     @patch("saas_auth.smtplib.SMTP")
     def test_587_requires_verified_starttls(self, smtp):
@@ -43,8 +43,8 @@ class MailTests(unittest.TestCase):
     def test_auth_mail_brand_and_original_token_links(self):
         service = SaaSService(environment={"APP_BASE_URL": "https://rynenglish.com"})
         for method, path, subject in (
-            (service._send_verification, '/verify-email', '验证你的 RynEnglish 邮箱'),
-            (service._send_password_reset, '/reset-password', '重置 RynEnglish 密码'),
+            (service._send_verification, '/verify-email', '验证你的 纸间微光 邮箱'),
+            (service._send_password_reset, '/reset-password', '重置 纸间微光 密码'),
         ):
             with self.subTest(path=path), patch.object(service, '_send_mail', return_value=True) as send:
                 self.assertTrue(method('to@example.test', 'test token+/'))
@@ -52,7 +52,7 @@ class MailTests(unittest.TestCase):
                 self.assertEqual(email, 'to@example.test')
                 self.assertEqual(title, subject)
                 self.assertIn(f'https://rynenglish.com{path}?token=test%20token%2B/', body)
-                self.assertIn('RynEnglish\nEvery Page, A Deeper Understanding.', body)
+                self.assertIn('纸间微光\n一页一光，静读慢行。', body)
                 self.assertNotIn('拾页', body)
 
 

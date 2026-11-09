@@ -19,7 +19,7 @@ from saas_accounts import AccountLifecycleService
 from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
 from saas_catalog import CatalogService
 from saas_media import MediaService
-from saas_membership import MembershipService
+from saas_resources import ResourceService
 
 TEST_URL=os.environ.get("SHIYUE_SAAS_TEST_DATABASE_URL","")
 ROOT=Path(__file__).resolve().parents[1]
@@ -35,7 +35,7 @@ class PhaseSixPostgresTests(unittest.TestCase):
         cls.temp=tempfile.TemporaryDirectory(prefix="shiyue-phase6-media-")
         cls.media_root=Path(cls.temp.name)/"media";cls.media_root.mkdir()
         cls.environment={"DATABASE_URL":TEST_URL,"SHIYUE_SAAS_ENABLED":"1","SESSION_SECRET":"test-only-session-secret-that-is-at-least-32-characters","BOOTSTRAP_ADMIN_EMAIL":"admin@local.test","BOOTSTRAP_ADMIN_PASSWORD":"phase6 admin password","MEDIA_ROOT":str(cls.media_root)}
-        cls.accounts=SaaSService(TEST_URL,cls.environment);cls.accounts.migrate();cls.memberships=MembershipService(cls.accounts);cls.catalog=CatalogService(cls.accounts,cls.memberships);cls.media=MediaService(cls.accounts,cls.memberships,cls.media_root);cls.lifecycle=AccountLifecycleService(cls.accounts)
+        cls.accounts=SaaSService(TEST_URL,cls.environment);cls.accounts.migrate();cls.resources=ResourceService(cls.accounts);cls.catalog=CatalogService(cls.accounts,cls.resources);cls.media=MediaService(cls.accounts,cls.resources,cls.media_root);cls.lifecycle=AccountLifecycleService(cls.accounts)
 
     @classmethod
     def tearDownClass(cls):cls.temp.cleanup()
@@ -47,7 +47,7 @@ class PhaseSixPostgresTests(unittest.TestCase):
             with connection.cursor() as cursor:
                 cursor.execute("""TRUNCATE TABLE security_events,account_deletion_requests,asset_usage,asset_variants,media_assets,admin_audit_logs,platform_settings,
                 member_invite_rewards,member_invites,member_invite_allowances,reward_activity_events,reward_daily_activity,reward_redemptions,reward_ledger,checkins,
-                official_book_unlocks,user_library,catalog_book_tags,catalog_books,catalog_tags,catalog_series,membership_audit,usage_ledger,quota_reservations,usage_periods,subscriptions,manual_orders,assets,
+                official_book_unlocks,user_library,catalog_book_tags,catalog_books,catalog_tags,catalog_series,resource_audit,usage_ledger,quota_reservations,usage_periods,subscriptions,manual_orders,assets,
                 content_sentence_grammar,content_learning_daily,content_word_annotations,content_vocabulary,content_books,invitation_uses,invitations,password_reset_tokens,email_verifications,user_sessions,devices,user_roles,users,roles RESTART IDENTITY CASCADE""")
         self.admin=self.accounts.bootstrap_admin();assert self.admin
         invitation=self.accounts.create_invitation("MEDIA-TEST",max_uses=10,created_by=str(self.admin["id"]))
@@ -78,9 +78,9 @@ class PhaseSixPostgresTests(unittest.TestCase):
         stream=self.media.stream(user_id,asset["id"]);self.assertEqual(stream["path"].read_bytes(),b"private-media")
         with self.assertRaises(SaaSError) as denied:self.media.stream(str(self.other["id"]),asset["id"])
         self.assertEqual(denied.exception.code,"media_access_denied")
-        usage=self.memberships.usage(user_id);storage=next(row for row in usage["usage"] if row["feature"]=="storage_bytes");self.assertEqual(storage["used"],13)
+        usage=self.resources.usage(user_id);storage=next(row for row in usage["usage"] if row["feature"]=="storage_bytes");self.assertEqual(storage["used"],13)
         self.media.delete(user_id,asset["id"])
-        usage=self.memberships.usage(user_id);storage=next(row for row in usage["usage"] if row["feature"]=="storage_bytes");self.assertEqual(storage["used"],0)
+        usage=self.resources.usage(user_id);storage=next(row for row in usage["usage"] if row["feature"]=="storage_bytes");self.assertEqual(storage["used"],0)
         with self.assertRaises(SaaSError):self.media.stream(user_id,asset["id"])
 
     def test_official_media_requires_unlock_and_range_http(self):
@@ -93,7 +93,7 @@ class PhaseSixPostgresTests(unittest.TestCase):
         original=self.make_file("official/video.mp4",b"high-video")
         low=self.make_file("official/video-low.mp4",b"low-video")
         video=self.media.register(str(self.admin["id"]),str(self.admin["id"]),"official",original,"video","video/mp4",catalog_id,variants=[{"name":"low","storagePath":low,"contentType":"video/mp4"}])
-        self.assertFalse(self.catalog.reader(str(self.owner["id"]),catalog_id)["book"]["canWatchHdVideo"])
+        self.assertTrue(self.catalog.reader(str(self.owner["id"]),catalog_id)["book"]["canWatchHdVideo"])
         with socket.socket() as probe:probe.bind(("127.0.0.1",0));port=probe.getsockname()[1]
         environment={**os.environ,**self.environment,"READER_HOST":"127.0.0.1","READER_PORT":str(port)};process=subprocess.Popen([sys.executable,str(ROOT/"tools/reader_server.py")],cwd=ROOT,env=environment,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)
         connection=None
@@ -108,9 +108,8 @@ class PhaseSixPostgresTests(unittest.TestCase):
             login=self.accounts.login("owner@local.test","owner password phase six","phase6-owner-device-1","Phase6 test")
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("GET",f"/api/media/{asset['id']}",headers={"Cookie":f"shiyue_session={login['sessionToken']}","Range":"bytes=2-6"});response=connection.getresponse();body=response.read();self.assertEqual(response.status,206);self.assertEqual(body,b"23456");self.assertEqual(response.getheader("Content-Range"),"bytes 2-6/16");self.assertEqual(response.getheader("X-Content-Type-Options"),"nosniff");connection.close();connection=None
             cookie={"Cookie":f"shiyue_session={login['sessionToken']}"}
-            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("GET",f"/api/media/{video['id']}",headers=cookie);response=connection.getresponse();body=json.loads(response.read());self.assertEqual(response.status,403);self.assertEqual(body["code"],"video_quality_membership_required");connection.close();connection=None
+            connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("GET",f"/api/media/{video['id']}",headers=cookie);response=connection.getresponse();body=response.read();self.assertEqual(response.status,200);self.assertEqual(body,b"high-video");connection.close();connection=None
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("GET",f"/api/media/{video['id']}?variant=low",headers={**cookie,"Range":"bytes=0-2"});response=connection.getresponse();body=response.read();self.assertEqual(response.status,206);self.assertEqual(body,b"low");connection.close();connection=None
-            self.memberships.create_manual_order(str(self.admin["id"]),str(self.owner["id"]),"advanced-v1",utcnow()-timedelta(minutes=1),utcnow()+timedelta(days=30))
             self.assertTrue(self.catalog.reader(str(self.owner["id"]),catalog_id)["book"]["canWatchHdVideo"])
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connection.request("GET",f"/api/media/{video['id']}",headers={**cookie,"Range":"bytes=0-3"});response=connection.getresponse();body=response.read();self.assertEqual(response.status,206);self.assertEqual(body,b"high");connection.close();connection=None
         finally:
@@ -153,7 +152,7 @@ class PhaseSixPostgresTests(unittest.TestCase):
             deadline=time.time()+10
             while time.time()<deadline:
                 try:
-                    connection=http.client.HTTPConnection("127.0.0.1",port,timeout=1);connection.request("GET","/terms");response=connection.getresponse();body=response.read();self.assertEqual(response.status,200);self.assertIn("RynEnglish 用户协议",body.decode());self.assertEqual(response.getheader("X-Frame-Options"),"DENY");self.assertIn("default-src 'self'",response.getheader("Content-Security-Policy"));connection.close();connection=None;break
+                    connection=http.client.HTTPConnection("127.0.0.1",port,timeout=1);connection.request("GET","/terms");response=connection.getresponse();body=response.read();self.assertEqual(response.status,404);self.assertEqual(json.loads(body)["code"],"backend_only");self.assertEqual(response.getheader("X-Frame-Options"),"DENY");self.assertIn("default-src 'self'",response.getheader("Content-Security-Policy"));connection.close();connection=None;break
                 except OSError:time.sleep(.1)
             else:self.fail("security server did not start")
             statuses=[]

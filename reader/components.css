@@ -176,7 +176,6 @@ button:disabled {
 .stats-next-step button,
 .admin-form button,
 .admin-review-form button,
-.membership-orders button,
 .settings-save-row > button,
 .workspace-import-form > button,
 .youtube-import-panel > button,
@@ -194,7 +193,6 @@ button:disabled {
 .stats-next-step button:hover:not(:disabled),
 .admin-form button:hover:not(:disabled),
 .admin-review-form button:hover:not(:disabled),
-.membership-orders button:hover:not(:disabled),
 .settings-save-row > button:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 8px 18px rgba(32, 51, 44, .13);
@@ -203,7 +201,7 @@ button:disabled {
 .catalog-actions button.secondary,
 .admin-section-head button,
 .admin-media-pagination button,
-.membership-logout {
+.account-logout {
   background: #fff;
   color: var(--green);
   border: 1px solid #bfcfc1;
@@ -291,7 +289,6 @@ textarea:focus {
 }
 
 .catalog-book-card,
-.membership-usage-group,
 .admin-panel,
 .stats-next-step,
 .workspace-continue {

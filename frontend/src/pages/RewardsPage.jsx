@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { Alert, Button, Card, Col, Empty, List, Modal, Pagination, Row, Space, Tag, Typography } from 'antd'
 
 const { Paragraph, Text, Title } = Typography
-const eventNames = { checkin: '每日签到', streak: '连续签到奖励', valid_reading: '有效听读', review: '生词复习', official_book_completed: '读完官方读物', redemption: '奖励兑换', member_invite_effective: '邀请好友完成学习', member_invite_paid: '邀请好友开通会员' }
+const eventNames = { checkin: '每日签到', streak: '连续签到奖励', valid_reading: '有效听读', review: '生词复习', official_book_completed: '读完官方读物', redemption: '奖励兑换', member_invite_effective: '邀请好友完成学习' }
 
 export default function RewardsPage({ rewardStatus, rewardsCatalog, rewardsLedger, onCheckIn, onRedeemReward }) {
   const [page, setPage] = useState(1)

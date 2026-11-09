@@ -97,7 +97,7 @@ export default function SettingsPage({ currentUser, devices, preferences, deleti
         <Card title="账户与安全">
           <Descriptions column={1} size="small">
             <Descriptions.Item label="登录邮箱">{currentUser?.email || '当前会话未读取'}</Descriptions.Item>
-            <Descriptions.Item label="账号角色">{currentUser?.isAdmin ? '平台管理员' : '普通会员'}</Descriptions.Item>
+            <Descriptions.Item label="账号角色">{currentUser?.isAdmin ? '平台管理员' : '受邀用户'}</Descriptions.Item>
             <Descriptions.Item label="已连接设备">{devices?.length || 0} 台</Descriptions.Item>
           </Descriptions>
           {!currentDeviceKnown && devices?.length > 0 && <Text type="warning" style={{ display: 'block', marginBottom: 8 }}>当前设备状态待确认，暂不可撤销设备。</Text>}

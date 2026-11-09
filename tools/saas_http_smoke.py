@@ -27,17 +27,28 @@ def database_url(base:str,name:str)->str:
 
 def main()->int:
     formal=str(os.environ.get("DATABASE_URL","")).strip();test_name=str(os.environ.get("SHIYUE_SAAS_TEST_DATABASE_NAME","shiyue_phase1_test"));test_url=database_url(formal,test_name)
+    if not test_name.endswith("_test"):
+        raise RuntimeError("HTTP smoke 必须使用名称以 _test 结尾的隔离数据库。")
     temp_media=tempfile.TemporaryDirectory(prefix="shiyue-saas-http-smoke-")
-    environment={**os.environ,"DATABASE_URL":test_url,"SHIYUE_SAAS_ENABLED":"1","READER_HOST":"127.0.0.1","READER_PORT":str(PORT),"MEDIA_ROOT":temp_media.name,"BOOTSTRAP_ADMIN_EMAIL":"","BOOTSTRAP_ADMIN_PASSWORD":""}
+    environment={**os.environ,"DATABASE_URL":test_url,"SHIYUE_SAAS_ENABLED":"1","READER_HOST":"127.0.0.1","READER_PORT":str(PORT),"MEDIA_ROOT":temp_media.name,"BOOTSTRAP_ADMIN_EMAIL":"","BOOTSTRAP_ADMIN_PASSWORD":"","SMTP_HOST":"","REDIS_URL":"","SESSION_SECRET":"isolated-http-smoke-session-secret-over-32-characters"}
+    from saas_auth import SaaSService
+    service=SaaSService(environment=environment)
+    service.migrate()
+    owner_email="http-"+uuid.uuid4().hex+"@local.test"
+    invite=service.create_invitation("HTTP-"+uuid.uuid4().hex,max_uses=2)
+    owner=service.register(owner_email,"ai owner password",invite["code"])["user"]
+    with service.transaction() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("UPDATE users SET email_verified_at=NOW() WHERE id=%s",(owner["id"],))
     process=subprocess.Popen([sys.executable,str(ROOT/"tools/reader_server.py")],cwd=ROOT,env=environment,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)
     jar=http.cookiejar.CookieJar();opener=build_opener(HTTPCookieProcessor(jar));checks=[];device_id="saas-http-smoke-device"
     def csrf()->str:return next((cookie.value for cookie in jar if cookie.name=="shiyue_csrf"),"")
-    def request(path:str,method:str="GET",payload=None,headers=None,expected=(200,)):
+    def request(path:str,method:str="GET",payload=None,headers=None,expected=(200,),skip_csrf=False):
         body=None;actual_headers={"X-Device-Id":device_id,**(headers or {})}
         if payload is not None:
             if isinstance(payload,bytes):body=payload
             else:body=json.dumps(payload).encode();actual_headers.setdefault("Content-Type","application/json")
-        if method not in {"GET","HEAD","OPTIONS"} and csrf():actual_headers["X-CSRF-Token"]=csrf()
+        if method not in {"GET","HEAD","OPTIONS"} and csrf() and not skip_csrf:actual_headers["X-CSRF-Token"]=csrf()
         try:
             response=opener.open(Request(BASE+path,data=body,headers=actual_headers,method=method),timeout=20);status=response.status;data=response.read();response_headers={key.lower():value for key,value in response.headers.items()}
         except HTTPError as exc:status=exc.code;data=exc.read();response_headers={key.lower():value for key,value in exc.headers.items()}
@@ -56,24 +67,15 @@ def main()->int:
             except Exception:time.sleep(.1)
         else:raise RuntimeError("SaaS reader did not become healthy")
         check("SaaS health",health.get("saasEnabled") is True,health);check("CSP","content-security-policy" in headers,headers)
-        _,_,commerce=request("/api/commerce/products");check("CloudCat monthly catalog",{"free","advanced-30","pro-30"}.issubset({item.get("slug") for item in commerce.get("products",[])}) and all(item.get("family")=="free" or not item.get("purchaseUrl") or item.get("purchaseUrl","").startswith("https://catfk.com/") for item in commerce.get("products",[])) and commerce.get("payment",{}).get("methods")==["cloudcat"] and commerce.get("payment",{}).get("automaticRenewal") is False,commerce)
+        for removed in ("/api/commerce/products", "/api/membership", "/api/billing/config", "/api/payments/alipay/orders/retired"):
+            status,_,_=request(removed,expected=(404,));check("removed route "+removed,status==404)
+        status,_,_=request("/api/catalog",expected=(401,));check("private catalog requires login",status==401)
+        _,_,denied_signup=request("/api/auth/register","POST",{"email":"uninvited@local.test","password":"uninvited password"},expected=(400,));check("invitation required",denied_signup.get("code")=="invitation_required",denied_signup)
         _,_,homepage=request("/",expected=(404,));check("API-only backend boundary",homepage.get("code")=="backend_only",homepage)
         status,_,_=request("/api/workspace/books",expected=(401,));check("unauthenticated isolation",status==401)
-        try:
-            from saas_auth import SaaSService
-            service=SaaSService(environment=environment)
-            with service.transaction() as connection:
-                with connection.cursor() as cursor:
-                    cursor.execute("SELECT id FROM users WHERE email=%s",("ai-owner@local.test",));row=cursor.fetchone()
-                    if row:
-                        user_id=row[0] if not isinstance(row,dict) else row["id"]
-                        cursor.execute("UPDATE devices SET revoked_at=NOW() WHERE user_id=%s AND id<>%s AND revoked_at IS NULL",(user_id,device_id))
-                        cursor.execute("UPDATE user_sessions SET revoked_at=NOW() WHERE user_id=%s AND device_id<>%s AND revoked_at IS NULL",(user_id,device_id))
-        except Exception:pass
-        _,_,login=request("/api/auth/login","POST",{"email":"ai-owner@local.test","password":"ai owner password"});check("login",login.get("user",{}).get("email")=="ai-owner@local.test",login);check("csrf cookie",bool(csrf()))
-        _,_,usage=request("/api/membership/usage");check("membership",usage.get("plan",{}).get("id")=="free-v2",usage.get("plan"))
-        _,_,plans=request("/api/membership/plans");check("membership plans",len(plans.get("plans",[]))>=1,plans)
-        _,_,requests_before=request("/api/membership/requests");check("membership requests",isinstance(requests_before.get("requests"),list),requests_before)
+        _,_,login=request("/api/auth/login","POST",{"email":owner_email,"password":"ai owner password"});check("login",login.get("user",{}).get("email")==owner_email,login);check("csrf cookie",bool(csrf()))
+        status,_,denied=request("/api/preferences","POST",{"density":"compact"},expected=(403,),skip_csrf=True);check("CSRF required",status==403 and denied.get("code")=="csrf_failed",denied)
+        _,_,usage=request("/api/resources");check("uniform resources",usage.get("limits",{}).get("storage_bytes",0)>0 and "plan" not in usage and "subscription" not in usage,usage)
         _,_,preferences=request("/api/preferences");check("preferences read",isinstance(preferences,dict),preferences)
         _,_,saved_preferences=request("/api/preferences","POST",{"density":"compact","readerLayout":"stack","eyeComfort":True,"focusMode":False,"sentenceAutoPause":True,"shortcutPrevious":"a","shortcutRepeat":"s","shortcutNext":"d","shortcutPlay":"space","highlightLeadMs":80,"playbackRate":1.25});check("preferences write",saved_preferences.get("preferences",{}).get("playbackRate")==1.25 and "highlightLeadMs" not in saved_preferences.get("preferences",{}),saved_preferences)
         _,_,preferences_after=request("/api/preferences");check("preferences persisted",preferences_after.get("density")=="compact" and preferences_after.get("playbackRate")==1.25,preferences_after)
@@ -90,7 +92,7 @@ def main()->int:
         _,_,annotation=request("/api/workspace/annotations","POST",{"bookId":book_id,"sentenceId":sentence["id"],"wordIndex":0,"payload":{"note":"smoke note"}});check("annotation",annotation.get("payload",{}).get("note")=="smoke note")
         _,_,activity=request("/api/workspace/activity","POST",{"bookId":book_id,"readingSeconds":600,"sentences":5,"lookups":1,"reviews":1,"sessions":1,"lastSentenceId":sentence["id"],"idempotencyKey":"smoke-activity-"+uuid.uuid4().hex});check("activity",activity.get("reviews")==1 and activity.get("lookups")==1,activity)
         status,_,ai_failure=request("/api/word-context","POST",{"bookId":book_id,"sentenceId":sentence["id"],"wordIndex":0},expected=(503,));check("AI unavailable is controlled",ai_failure.get("code")=="ai_provider_unavailable",ai_failure)
-        _,_,usage_after=request("/api/membership/usage");context_usage=next(item for item in usage_after["usage"] if item["feature"]=="ai_context_generations");check("AI reservation released",context_usage["reserved"]==0 and context_usage["used"]==context_used_before,context_usage)
+        _,_,usage_after=request("/api/resources");context_usage=next(item for item in usage_after["usage"] if item["feature"]=="ai_context_generations");check("AI reservation released",context_usage["reserved"]==0 and context_usage["used"]==context_used_before,context_usage)
         _,_,exported=request("/api/account/export");check("account export",book_id in {item["id"] for item in exported.get("privateBooks",[])})
         _,_,deleted=request(f"/api/workspace/books/{quote(book_id)}","DELETE",{"confirmTitle":book["title"]});check("private book delete",deleted.get("status")=="deleted",deleted)
         status,_,_=request(f"/api/workspace/books/{quote(book_id)}/reader",expected=(404,));check("deleted book inaccessible",status==404)

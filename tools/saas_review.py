@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from saas_auth import SaaSError, new_id, utcnow
-from saas_membership import as_json, timestamp
+from saas_resources import as_json, timestamp
 from saas_rewards import local_day
 
 

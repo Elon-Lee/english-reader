@@ -30,7 +30,7 @@ from align_whisper import whisper_words,whisper_timing_report
 from manual_caption_alignment import MODEL_FILE,caption_cues,fallback_windows
 from timed_segmentation import segment_timed_words
 from saas_media import MediaService
-from saas_membership import MembershipService, as_json, timestamp
+from saas_resources import ResourceService, as_json, timestamp
 from youtube_subtitles import has_translated_english_track, select_chinese_track, select_native_english_track
 from text_segmentation import WORD_RE, split_sentences
 from reading_document import build_reading_document
@@ -41,8 +41,8 @@ UPLOAD_LIMITS={"text":20*1024*1024,"document":100*1024*1024,"mp3":2*1024*1024*10
 
 
 class WorkspaceImportService:
-    def __init__(self, accounts:SaaSService,memberships:MembershipService,media:MediaService,pdf_ocr:Path|None=None,whisper_cli:Path|None=None,whisper_model:Path|None=None,audio_duration=None,ffmpeg:Path|None=None,yt_dlp:Path|None=None,node:Path|None=None,official:bool=False):
-        self.accounts,self.memberships,self.media=accounts,memberships,media
+    def __init__(self, accounts:SaaSService,resources:ResourceService,media:MediaService,pdf_ocr:Path|None=None,whisper_cli:Path|None=None,whisper_model:Path|None=None,audio_duration=None,ffmpeg:Path|None=None,yt_dlp:Path|None=None,node:Path|None=None,official:bool=False):
+        self.accounts,self.resources,self.media=accounts,resources,media
         self.official=official
         self.pdf_ocr=(pdf_ocr or Path(os.environ.get("SHIYUE_PDF_OCR",str(ROOT/".local/bin/pdf_ocr")))).expanduser()
         self.whisper_cli=(whisper_cli or Path(os.environ.get("SHIYUE_WHISPER_CLI",str(ROOT/"tools/vendor/whisper.cpp/build/bin/whisper-cli")))).expanduser()
@@ -68,7 +68,7 @@ class WorkspaceImportService:
 
     @staticmethod
     def _public(task:dict[str,Any])->dict[str,Any]:
-        return {"id":task["id"],"kind":task["kind"],"status":task["status"],"title":task["title"],"originalFilename":task["original_filename"],"sourceUrl":task["source_url"],"sourceAssetId":task["source_asset_id"],"outputBookId":task["output_book_id"],"planVersion":task["plan_version_id"],"progress":int(task["progress"]),"step":task["step"],"error":task["error"],"awaitingAudioUpload":bool(as_json(task["metadata_json"]).get('awaitingAudioUpload')),"createdAt":timestamp(task["created_at"]),"updatedAt":timestamp(task["updated_at"]),"completedAt":timestamp(task["completed_at"])}
+        return {"id":task["id"],"kind":task["kind"],"status":task["status"],"title":task["title"],"originalFilename":task["original_filename"],"sourceUrl":task["source_url"],"sourceAssetId":task["source_asset_id"],"outputBookId":task["output_book_id"],"progress":int(task["progress"]),"step":task["step"],"error":task["error"],"awaitingAudioUpload":bool(as_json(task["metadata_json"]).get('awaitingAudioUpload')),"createdAt":timestamp(task["created_at"]),"updatedAt":timestamp(task["updated_at"]),"completedAt":timestamp(task["completed_at"])}
 
     def create(self,user_id:str,kind:str,title:str,filename:str,idempotency_key:str,source_url:str="",metadata:dict[str,Any]|None=None)->dict[str,Any]:
         metadata={**(metadata or {}),"officialImport":self.official}
@@ -80,7 +80,7 @@ class WorkspaceImportService:
         reservation=None
         feature=IMPORT_FEATURES.get(kind)
         if feature:
-            reservation=self.memberships.reserve(user_id,feature,f"import:{kind}:{key}",1,{"kind":kind,"filename":filename,"sourceUrl":str(source_url or "")})["reservation"]
+            reservation=self.resources.reserve(user_id,feature,f"import:{kind}:{key}",1,{"kind":kind,"filename":filename,"sourceUrl":str(source_url or "")})["reservation"]
         try:
             with self.accounts.transaction() as connection:
                 with connection.cursor() as cursor:
@@ -88,13 +88,13 @@ class WorkspaceImportService:
                     if existing:
                         if bool(as_json(existing["metadata_json"]).get("officialImport"))!=self.official:raise SaaSError("import_source_conflict","操作标识已用于其他导入。",409)
                         return {"task":self._public(existing),"idempotent":True}
-                    context=self.memberships._context(cursor,user_id)
+                    context=self.resources._context(cursor,user_id)
                     task_id=new_id();status="queued" if kind=="youtube" else "uploading";step="等待上传源文件" if status=="uploading" else "等待 PostgreSQL 原生处理器"
-                    cursor.execute("""INSERT INTO workspace_import_tasks(id,user_id,workspace_id,kind,status,title,original_filename,source_url,quota_reservation_id,plan_version_id,step,metadata_json,idempotency_key)
-                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)""",(task_id,user_id,user_id,kind,status,str(title or "").strip()[:300],filename,str(source_url or "")[:2000],reservation["id"] if reservation else None,context["plan"]["id"],step,json.dumps(metadata or {}),key))
+                    cursor.execute("""INSERT INTO workspace_import_tasks(id,user_id,workspace_id,kind,status,title,original_filename,source_url,quota_reservation_id,step,metadata_json,idempotency_key)
+                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)""",(task_id,user_id,user_id,kind,status,str(title or "").strip()[:300],filename,str(source_url or "")[:2000],reservation["id"] if reservation else None,step,json.dumps(metadata or {}),key))
                     cursor.execute("SELECT * FROM workspace_import_tasks WHERE id=%s",(task_id,));return {"task":self._public(self.accounts._one(cursor)or{}),"idempotent":False}
         except Exception:
-            if reservation:self.memberships.release(user_id,reservation["id"])
+            if reservation:self.resources.release(user_id,reservation["id"])
             raise
 
     @staticmethod
@@ -726,9 +726,9 @@ class WorkspaceImportService:
                     if current["status"]!="running":raise SaaSError("import_task_terminal","任务在处理期间已取消或结束。",409)
                     cursor.execute("SELECT id FROM users WHERE id=%s AND status='active' FOR UPDATE",(user_id,))
                     if not self.accounts._one(cursor):raise SaaSError("account_unavailable","账号不可用。",403)
-                    context=self.memberships._context(cursor,user_id,lock_user=False)
+                    context=self.resources._context(cursor,user_id,lock_user=False)
                     media_kind="video" if source_type in {"video","youtube"} else "audio" if source_type=="audio" else ""
-                    if not self.official:self.memberships.assert_media_capacity(cursor,user_id,context,media_kind)
+                    if not self.official:self.resources.assert_media_capacity(cursor,user_id,context,media_kind)
                     cursor.execute("""INSERT INTO content_books(id,owner_id,title,english_title,series,level,topics,source_type,source_path,status,visibility,cover_url,page_base_url,audio_url,pdf_url,video_url,duration,alignment,data_json,quality_json,created_at,updated_at)
                     VALUES(%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,'ready','private',%s,'',%s,'',%s,%s,%s,%s::jsonb,'{}'::jsonb,NOW(),NOW())""",(book_id,user_id,title,title,str(data.get("series") or (data.get("youtube") or {}).get("channel") or "私人导入"),str(data.get("level") or ""),json.dumps(data.get("topics") or [],ensure_ascii=False),source_type,f"workspace/{user_id}/{task_id}",str(data.get("cover","")or""),str(data.get("audio","")or""),str(data.get("video","")or""),float(data.get("duration",0)or 0),str(data.get("alignment","")or""),json.dumps(data,ensure_ascii=False)))
                     cursor.execute("UPDATE media_assets SET content_book_id=%s,kind=%s WHERE id=%s",(book_id,source_type,work["source_asset_id"]))
@@ -738,7 +738,7 @@ class WorkspaceImportService:
                         cursor.execute("""INSERT INTO catalog_books(id,source_content_book_id,title,english_title,resource_type,rights_status,publication_status,created_by)
                         VALUES(%s,%s,%s,%s,%s,'private','draft',%s)""",(catalog_id,book_id,title,title,source_type if source_type in {'audio','video','youtube'} else 'book',user_id))
                         cursor.execute("UPDATE media_assets SET catalog_book_id=%s WHERE id=%s",(catalog_id,work["source_asset_id"]))
-                        self.memberships._audit(cursor,user_id,user_id,"catalog_import",{"sourceBookId":book_id,"catalogBookId":catalog_id})
+                        self.resources._audit(cursor,user_id,user_id,"catalog_import",{"sourceBookId":book_id,"catalogBookId":catalog_id})
                     alignment=data.get('audioAlignment') or {}
                     completed_step=(f"导入完成 · 原音单词对齐 {alignment['coverage']:.1%}" if alignment else '导入完成')
                     cursor.execute("UPDATE workspace_import_tasks SET status='complete',output_book_id=%s,progress=100,step=%s,completed_at=NOW(),updated_at=NOW() WHERE id=%s",(book_id,completed_step,task_id))
@@ -751,7 +751,7 @@ class WorkspaceImportService:
             if not (isinstance(exc,SaaSError) and exc.code=="import_task_terminal"):
                 self.fail(user_id,task_id,str(exc))
             raise
-        if reservation_id:self.memberships.settle(user_id,reservation_id)
+        if reservation_id:self.resources.settle(user_id,reservation_id)
         return {"task":self._public(completed),"idempotent":False}
 
     def match_audio(self,user_id:str,filename:str)->dict[str,Any]:
@@ -789,7 +789,7 @@ class WorkspaceImportService:
                 if task["status"] in {"complete","cancelled"}:return {"task":self._public(task),"idempotent":True}
                 cursor.execute("UPDATE workspace_import_tasks SET status='failed',step='导入失败',error=%s,updated_at=NOW() WHERE id=%s",(str(error)[:2000],task_id));cursor.execute("SELECT * FROM workspace_import_tasks WHERE id=%s",(task_id,));failed=self.accounts._one(cursor)or{}
         if failed.get("quota_reservation_id"):
-            try:self.memberships.release(user_id,failed["quota_reservation_id"])
+            try:self.resources.release(user_id,failed["quota_reservation_id"])
             except SaaSError:pass
         return {"task":self._public(failed),"idempotent":False}
 
@@ -801,7 +801,7 @@ class WorkspaceImportService:
                 if task["status"]=="cancelled":return {"task":self._public(task),"idempotent":True}
                 cursor.execute("UPDATE workspace_import_tasks SET status='cancelled',step='用户取消任务',updated_at=NOW() WHERE id=%s",(task_id,));cursor.execute("SELECT * FROM workspace_import_tasks WHERE id=%s",(task_id,));cancelled=self.accounts._one(cursor)or{}
         if cancelled.get("quota_reservation_id"):
-            try:self.memberships.release(user_id,cancelled["quota_reservation_id"])
+            try:self.resources.release(user_id,cancelled["quota_reservation_id"])
             except SaaSError:pass
         if cancelled.get("source_asset_id"):
             try:self.media.delete(user_id,cancelled["source_asset_id"])

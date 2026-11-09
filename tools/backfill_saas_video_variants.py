@@ -11,7 +11,7 @@ from pathlib import Path
 
 from saas_auth import SaaSService, new_id
 from saas_media import MediaService
-from saas_membership import MembershipService, as_json
+from saas_resources import ResourceService, as_json
 
 
 def parser() -> argparse.ArgumentParser:
@@ -27,7 +27,7 @@ def has_audio(path:Path)->bool:
     return result.returncode==0 and bool(result.stdout.strip())
 
 
-def replace_registered_file(accounts:SaaSService,memberships:MembershipService,media:MediaService,target:Path,staged:Path)->int:
+def replace_registered_file(accounts:SaaSService,resources:ResourceService,media:MediaService,target:Path,staged:Path)->int:
     relative=target.relative_to(media.media_root).as_posix();new_size=staged.stat().st_size;new_digest=media._digest(staged);backup=target.with_name(f".{target.name}.{uuid.uuid4().hex}.bak")
     os.replace(target,backup);os.replace(staged,target)
     try:
@@ -43,7 +43,7 @@ def replace_registered_file(accounts:SaaSService,memberships:MembershipService,m
                 for asset_id,delta in deltas.items():owners[asset_owners[asset_id]]=owners.get(asset_owners[asset_id],0)+max(0,delta)
                 for owner_id,delta in owners.items():
                     if delta<=0:continue
-                    context=memberships._context(cursor,owner_id);limit=int(as_json(context["period"]["limits_json"]).get("storage_bytes",0));used=media._private_bytes(cursor,owner_id)
+                    context=resources._context(cursor,owner_id);limit=int(as_json(context["period"]["limits_json"]).get("storage_bytes",0));used=media._private_bytes(cursor,owner_id)
                     if used+delta>limit:raise RuntimeError(f"storage quota exceeded for {owner_id}: {used}+{delta}>{limit}")
                 cursor.execute("UPDATE media_assets SET original_bytes=%s,sha256=%s WHERE storage_path=%s AND status='active'",(new_size,new_digest,relative))
                 cursor.execute("UPDATE asset_variants SET byte_size=%s,sha256=%s,content_type='video/mp4' WHERE storage_path=%s AND deleted_at IS NULL",(new_size,new_digest,relative))
@@ -52,7 +52,7 @@ def replace_registered_file(accounts:SaaSService,memberships:MembershipService,m
                     variant_delta=sum(new_size-int(row["byte_size"]) for row in variants if row["asset_id"]==asset_id)
                     if variant_delta:cursor.execute("UPDATE media_assets SET generated_bytes=generated_bytes+%s WHERE id=%s",(variant_delta,asset_id))
                     cursor.execute("UPDATE asset_usage SET charged_bytes=charged_bytes+%s WHERE asset_id=%s",(delta,asset_id))
-                    cursor.execute("SELECT owner_id FROM media_assets WHERE id=%s",(asset_id,));owner_id=(accounts._one(cursor)or{})["owner_id"];context=memberships._context(cursor,owner_id)
+                    cursor.execute("SELECT owner_id FROM media_assets WHERE id=%s",(asset_id,));owner_id=(accounts._one(cursor)or{})["owner_id"];context=resources._context(cursor,owner_id)
                     cursor.execute("""INSERT INTO usage_ledger(id,user_id,usage_period_id,feature,quantity,reason,idempotency_key,metadata_json)
                         VALUES(%s,%s,%s,'storage_bytes',%s,'adjustment',%s,%s::jsonb) ON CONFLICT DO NOTHING""",(new_id(),owner_id,context["period"]["id"],delta,f"asset:{asset_id}:low-audio:{new_digest}",json.dumps({"assetId":asset_id,"bytes":delta,"repair":"low_video_audio"})))
                     cursor.execute("INSERT INTO security_events(id,user_id,event_type,metadata_json) VALUES(%s,%s,'media_variant_repaired',%s::jsonb)",(new_id(),owner_id,json.dumps({"assetId":asset_id,"variant":"low","bytes":new_size})))
@@ -67,7 +67,7 @@ def replace_registered_file(accounts:SaaSService,memberships:MembershipService,m
 def main() -> int:
     args=parser().parse_args()
     if not args.all and not args.asset_id:raise SystemExit("use --asset-id ID or --all")
-    accounts=SaaSService(os.environ.get("DATABASE_URL"),dict(os.environ));memberships=MembershipService(accounts);media=MediaService(accounts,memberships)
+    accounts=SaaSService(os.environ.get("DATABASE_URL"),dict(os.environ));resources=ResourceService(accounts);media=MediaService(accounts,resources)
     values=[];where=""
     if args.asset_id:
         where="AND ma.id=ANY(%s)";values.append(args.asset_id)
@@ -95,7 +95,7 @@ def main() -> int:
                 staged=target.with_name(f".{target.stem}.{uuid.uuid4().hex}.repair.mp4")
             else:target=source.parent/f"video-low-{str(row['id'])[:10]}.mp4";staged=target
             subprocess.run([str(ffmpeg),"-y","-v","error","-i",str(source),"-map","0:v:0","-map","0:a:0?","-vf","scale=640:360:force_original_aspect_ratio=decrease:force_divisible_by=2","-c:v","libx264","-preset","veryfast","-crf","27","-maxrate","380k","-bufsize","760k","-g","50","-keyint_min","50","-pix_fmt","yuv420p","-threads","2","-c:a","aac","-b:a","96k","-ac","2","-movflags","+faststart",str(staged)],check=True,timeout=3600)
-            if args.repair_audio:completed.append({"assetId":row["id"],"bytes":replace_registered_file(accounts,memberships,media,target,staged),"status":"repaired"})
+            if args.repair_audio:completed.append({"assetId":row["id"],"bytes":replace_registered_file(accounts,resources,media,target,staged),"status":"repaired"})
             else:
                 relative=target.relative_to(media.media_root).as_posix();result=media.add_variants(str(row["owner_id"]),str(row["id"]),[{"name":"low","storagePath":relative,"contentType":"video/mp4"}]);completed.append({"assetId":row["id"],"bytes":result["addedBytes"],"status":"created"})
         except Exception as exc:failed.append({"assetId":row["id"],"error":str(exc)[:240]})
