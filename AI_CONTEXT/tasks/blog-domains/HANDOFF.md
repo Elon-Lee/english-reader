@@ -13,7 +13,19 @@
 - 博客、Host 分站、双域名独立证书与续期、保数据升级集成已实现。用户已提供可用 SSH 私钥；凭据内容不得写入文档或日志。
 - 用户明确选择稍后添加 DNS、先部署源站。公共 DNS 实测主域名指向京东云，learn 为 NXDOMAIN；主域名 HTTP 返回 JDTP 403，HTTPS 未连通。源站部署使用 `--upgrade --app-domain learn.rynenglish.com --blog-domain rynenglish.com --defer-https`，不能声称公网 HTTPS 已完成。
 - 已验证 React 构建、modern/UI/JS、106 项部署回归、75 项域名/HTTPS/路由测试；额外覆盖切换后配置保存失败的回退路径。主域名不代理 API，未知 Host 拒绝，所有 User-Agent 返回一致。
-- 当前准备执行远端升级，尚未修改远端。
+- 实现提交 `3c0c77b`；京东云任务 **#16 complete**，实际版本 `code-20261111-152232-21f52fbd`，源码快照干净。此前 #14/#15 的传输与候选检查失败记录保留，已完成回退后重试，不冒充成功。
+- 数据库备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261111-152232-21f52fbd.dump`；配置备份同目录 `settings-code-20261111-152232-21f52fbd/`。迁移已到 0044，升级前后只读核对均为 1 用户、2 书目。数据库、Redis、媒体目录和会话密钥保留。
+- 实测节点内存约 2 GB、无 swap，候选推理时出现高 I/O 等待与 SSH 握手超时；已添加 `/var/lib/shiyue/paper-glow-deploy-20261111.swap` 的 1 GiB 临时交换空间（0600），未写入 fstab。启用后候选真实原音 CPU 推理和正式切换均通过；交换空间在服务器重启后需要重新启用。
+- 临时传输包装 `.local/deployment/deploy-origin-resume.py` 增加 SSH 保活与大包分段/前缀 SHA-256 校验，仅本轮进程使用；未改动部署业务逻辑或运行源码。
+
+## 源站验收与待办
+
+- 6 容器运行，`current`、发布包 SHA-256、应用挂载和健康检查通过。`APP_BASE_URL=https://learn.rynenglish.com`，`sites.json` 保存两域及 `https_deferred:true`。
+- 实际源站主域首页/文章/关于/RSS 为 200，API 与登录地址为 404，自定义缺页为 404；learn 登录页面和健康接口为 200、未登录会话为 401；未知 Host 为 421，验证码健康与配置通过。
+- 主域首页 SHA-256 `a5139f33b2c8ad90f5567a3dd203bac3a9e46e7db6971398842414ec9e05c27b`，与本机构建及经 SSH 转发的源站预览完全一致。Chrome 已实际打开源站首页，纸色主题显示正常。
+- 临时源站预览 `http://127.0.0.1:4331/`：仅本机回环，代理脚本 `.local/deployment/preview-blog-origin.py`，经 SSH 回环 4332 固定主域 Host 访问已部署站点。本地生产构建预览 4321 另存；4331 才是京东云实际源站。
+- 2026-11-11 公共 DNS 再验：learn 仍 NXDOMAIN，主域 A 为 `117.72.209.44`；公网 HTTP 返回 `Server: JDTP` 的 403。**尚未开通两域公网 HTTPS**，没有申请失败的证书冒充可用。
+- 用户稍后添加 `learn` A 记录到 `117.72.209.44`，并完成京东云域名放行后，仅补装入口：`tools/deploy_remote.py --target 1 --https-entry --domain learn.rynenglish.com --identity-file <已授权私钥路径>`；该流程读取远端双站配置并为两域各自签证、安装续期，再严格验收公网 HTTPS。不要用主域覆盖应用域名，不要执行 `--saas` 或重装。
 
 ## 关键文件与维护
 

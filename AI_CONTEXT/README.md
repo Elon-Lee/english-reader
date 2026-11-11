@@ -20,9 +20,9 @@
 
 ## 跨任务状态
 
-- `refactor/private-paper-glow` 从干净本地 `main` 创建；当前改造状态及完整验证见 [私域改造交接](tasks/private-paper-glow/HANDOFF.md)。用户已授权提交并推送至 `origin` 同名分支，实际提交与同步状态以 Git 为准；未合并或远程部署。2026-11-09 已初始化当前目录独立本地库并应用至 0044，完整本地栈保持运行，入口 `http://127.0.0.1:4173`。
+- 私域改造提交 `810f19a` 已推送至 `origin/refactor/private-paper-glow`；未合并，详见 [私域改造交接](tasks/private-paper-glow/HANDOFF.md)。其后双站分支 `feat/paper-glow-blog-domains` 的实现 `3c0c77b` 已随任务 #16 发布京东云源站，公网 HTTPS 尚待 DNS 与域名放行。本地栈入口 `http://127.0.0.1:4173`。
 - 品牌已改为“纸间微光”，标语“一页一光，静读慢行。”，统一 SVG。旧商业页面、服务模块、HTTP 入口、营销图片和旧 modern 编译包已删除。
-- 京东云已只读核实为运行中的 SaaS 栈；本轮用户授权保留数据升级双站，并明确先部署源站、稍后添加 learn DNS。源站发布进度及公网 HTTPS 待办以 `tasks/blog-domains/HANDOFF.md` 为准。
+- 京东云 #16 已保数据升级双站，`current` 为 `code-20261111-152232-21f52fbd`，迁移至 0044；源站验收通过。用户明确稍后添加 learn DNS；公网 HTTPS、临时 swap 与预览信息以 `tasks/blog-domains/HANDOFF.md` 为准。
 - PC 优先，移动端视觉优化仍待后续独立任务；保留原音播放，不以浏览器 TTS 替代。
 
 ## 任务索引

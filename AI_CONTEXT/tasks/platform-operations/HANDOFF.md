@@ -1,5 +1,14 @@
 # 平台运营与部署交接
 
+## 2026-11-11 双站源站发布（当前有效）
+
+- 用户授权先部署源站、稍后添加 DNS。任务 **#16 complete**，`current=/srv/shiyue/releases/code-20261111-152232-21f52fbd`，源码提交 `3c0c77b`，保留用户、媒体与密钥，迁移至 0044；6 个容器健康。数据库及站点配置备份见 [双站交接](../blog-domains/HANDOFF.md)。
+- 主域 `rynenglish.com` 仅提供 Astro/Retypeset 静态博客；阅读应用为 `learn.rynenglish.com`，`APP_BASE_URL` 已对应修改。`shared/config/sites.json` 持久化两域及 `https_deferred:true`，后续升级自动恢复；不要恢复旧 Cloudflare/10ye.cc 应用入口，未知 Host 返回 421。
+- 源站真实 Host 验收、用户/书目保留、验证码与原音 CPU 推理通过。主域 API/登录 404，阅读应用未登录会话 401。临时预览 `http://127.0.0.1:4331/` 经仅回环 SSH 转发访问实际京东云内容。
+- 公网 learn DNS 仍 NXDOMAIN，主域 HTTP 仍为 JDTP 403，域名证书和 443 尚未开通。待用户新增 learn A=`117.72.209.44` 并完成京东云放行后，只执行 `tools/deploy_remote.py --target 1 --https-entry --domain learn.rynenglish.com --identity-file <已授权私钥路径>`，恢复双站并安装各自证书/续期，无需重新部署数据库。
+- 节点 2 GB 内存，候选推理曾内存紧张并出现高 I/O 等待；已添加 `/var/lib/shiyue/paper-glow-deploy-20261111.swap` 的 1 GiB 临时 swap（0600），未配置开机启用，重启后需要恢复。失败任务 #14/#15 已回退，记录保留；#16 不跳过任何候选推理或分站检查。
+- 以下 2026-11-08/09 记录为历史；当前域名、版本和待办以上文及双站交接为准。
+
 ## 2026-11-09 私域改造补充
 
 - 当前分支已删除商业运营后台及对应支付、订单、订阅、套餐、兑换开通 API。旧商业记录不再代表当前实现；详见 [私域改造交接](../private-paper-glow/HANDOFF.md)。
@@ -14,7 +23,7 @@
 - “上传官方内容”只增量同步已登记的官方读物及关联媒体，不发布代码，也不覆盖远端用户数据。新增或变更内容需在线上审核后才公开。
 - 远程部署、重新部署、回滚、卸载和清理均需管理员确认；除非用户明确要求，不执行远程变更。
 
-## 当前实现（2026-11-08 更新）
+## 2026-11-08 运行记录（历史）
 
 - 京东云 `117.72.209.44` 当前通过 **`https://10ye.cc` 的 Cloudflare Tunnel 提供服务**。原恢复任务 #89 因直连域名证书失败保持 failed；后续隧道恢复独立完成。当前指针 `/srv/shiyue/current` 指向 `code-20261108-092017-f197eeaa`。6 个容器运行：SaaS、前台、PostgreSQL、Redis、验证码及 HTTP bootstrap Nginx。API 的 SaaS/Redis、PG readiness、验证码健康、5173 首页与 TLS 均通过，数据库迁移至 0043。
 - 直连域名证书问题已按用户要求移入备案后待办：Let's Encrypt HTTP-01 返回京东云 `JDTP 403`；服务器回环验证文件为 200。当前没有 `rynenglish.com` 的域名证书、443 监听或续期 timer；暂停申请。5173 自建证书与 Cloudflare 公网证书独立。
@@ -30,6 +39,8 @@
 - 本轮验证：95 项运行环境/节点/发布/HTTPS/Docker/对齐/验证码测试通过，包含真实隔离 bash 执行；前端生产构建和 modern smoke 通过，Python 编译、diff 检查通过。最终本地后台已重载，六项本地服务保持独立，不使用远程调试隧道。
 
 ## 未完成与接续
+
+本节的单域名/Cloudflare 操作已由顶部 2026-11-11 双站待办替代，保留为历史记录，不直接执行。
 
 1. **待用户完成 `rynenglish.com` 域名备案后再处理直连 HTTPS。** 届时核查京东云域名放行，确认公网 ACME 路径到达 Nginx；目前不再申请证书，不影响 Cloudflare 入口服务。
 2. 备案及放行完成后，在节点设置重新填写公网域名 `rynenglish.com`，再在仓库根目录执行以下命令，只补装 HTTPS 和续期，不重新导入数据库：
