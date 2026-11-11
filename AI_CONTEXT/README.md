@@ -28,6 +28,7 @@
 
 | 工作内容 | 必读任务文档 |
 |---|---|
+| 独立静态博客、主域名与阅读子域名、双站发布 | `tasks/blog-domains/HANDOFF.md` |
 | 私域邀请制、商业功能移除、纸间微光更名 | `tasks/private-paper-glow/HANDOFF.md` |
 | 品牌与网站图标 | `tasks/brand-assets/HANDOFF.md` |
 | PC 页面、路由、分页、工作台 | `tasks/pc-workspace/HANDOFF.md` |
