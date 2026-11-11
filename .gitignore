@@ -9,3 +9,4 @@ books
 .DS_Store
 node_modules
 .playwright-mcp
+reader/blog/

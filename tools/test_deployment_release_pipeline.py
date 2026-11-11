@@ -127,7 +127,7 @@ class DeploymentReleasePipelineTests(unittest.TestCase):
             (root/"reader/README.md").write_text("development documentation")
             (root/"reader/site/source.js.map").write_text("source map")
             self.brand_fixture(root)
-            with patch.object(manager,"ROOT",root),patch.object(manager,"STATE",state),patch.object(manager,"build_frontend_assets"),patch.object(manager,"build_captcha_assets"),patch.object(manager,"code_files",return_value=[root/"reader"]),patch.object(manager,"release_metadata",return_value={"releaseId":"code-20261012-120000-abcdef12","packageFormat":2}):
+            with patch.object(manager,"ROOT",root),patch.object(manager,"STATE",state),patch.object(manager,"build_frontend_assets"),patch.object(manager,"build_blog_assets"),patch.object(manager,"build_captcha_assets"),patch.object(manager,"code_files",return_value=[root/"reader"]),patch.object(manager,"release_metadata",return_value={"releaseId":"code-20261012-120000-abcdef12","packageFormat":2}):
                 package,digest=manager.build_code_package(Job(),"code-20261012-120000-abcdef12")
             self.assertEqual(len(digest),64)
             with tarfile.open(package,"r:gz") as archive:

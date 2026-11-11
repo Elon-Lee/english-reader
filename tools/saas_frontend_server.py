@@ -12,12 +12,15 @@ import socket
 import ssl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 ROOT = Path(os.environ.get("FRONTEND_ROOT", "/app/site")).resolve()
 BACKEND = urlsplit(os.environ.get("SAAS_BACKEND_URL", "http://127.0.0.1:8790"))
 PORT = int(os.environ.get("FRONTEND_PORT", "5173"))
 PROXY_PREFIXES = ("/api/", "/books/")
+APP_DOMAIN = os.environ.get("APP_DOMAIN", "").strip().lower()
+BLOG_DOMAIN = os.environ.get("BLOG_DOMAIN", "").strip().lower()
+BLOG_ROOT = Path(os.environ["BLOG_ROOT"]).resolve() if os.environ.get("BLOG_ROOT") else None
 
 
 class TLSFrontendServer(ThreadingHTTPServer):
@@ -44,6 +47,79 @@ class TLSFrontendServer(ThreadingHTTPServer):
 
 class FrontendHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+
+    def _site(self):
+        if not BLOG_ROOT:
+            return 'app'
+        hosts = self.headers.get_all('Host', [])
+        if len(hosts) != 1:
+            return None
+        if any(character.isspace() or ord(character) < 33 or ord(character) == 127 for character in hosts[0]):
+            return None
+        try:
+            value = urlsplit('//' + hosts[0])
+            value.port  # Reject malformed ports rather than trusting only the hostname.
+            if value.username or value.password or value.path or value.query or value.fragment:
+                return None
+            host = value.hostname
+        except ValueError:
+            return None
+        if host == BLOG_DOMAIN:
+            return 'blog'
+        if host == APP_DOMAIN:
+            return 'app'
+        # Existing container probes are local HTTP requests without an edge hop.
+        if (host in {'127.0.0.1', 'localhost', '::1'}
+                and ipaddress.ip_address(self.client_address[0]).is_loopback
+                and not any(key.lower().startswith('x-forwarded-')
+                            or key.lower() in {'x-real-ip', 'cf-connecting-ip', 'forwarded'}
+                            for key in self.headers)):
+            return 'app'
+        return None
+
+    def _blog_file(self):
+        requested = unquote(urlsplit(self.path).path)
+        path = (BLOG_ROOT / requested.lstrip('/')).resolve()
+        if path.is_dir():
+            path = (path / 'index.html').resolve()
+        try:
+            path.relative_to(BLOG_ROOT)
+        except ValueError:
+            self.send_error(403)
+            return
+        status = 200
+        if not path.is_file():
+            path = BLOG_ROOT / '404.html'
+            status = 404
+            if not path.is_file():
+                self.send_error(404)
+                return
+        data = path.read_bytes()
+        self.send_response(status)
+        self.send_header('Content-Type', mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Cache-Control', 'public, max-age=31536000, immutable' if '/_astro/' in requested else 'no-cache')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Referrer-Policy', 'strict-origin-when-cross-origin')
+        self.end_headers()
+        if self.command != 'HEAD':
+            self.wfile.write(data)
+
+    def _dispatch(self):
+        site = self._site()
+        if site is None:
+            self.send_error(421, 'Misdirected Request')
+        elif site == 'blog':
+            if self.command in {'GET', 'HEAD'}:
+                self._blog_file()
+            else:
+                self.send_error(404)
+        elif self.path.startswith(PROXY_PREFIXES):
+            self._proxy()
+        elif self.command in {'GET', 'HEAD'}:
+            self._file()
+        else:
+            self.send_error(404)
 
     def _proxy(self):
         body = None
@@ -116,31 +192,39 @@ class FrontendHandler(BaseHTTPRequestHandler):
             self.wfile.write(data)
 
     def do_GET(self):
-        if self.path.startswith(PROXY_PREFIXES):
-            self._proxy()
-        else:
-            self._file()
+        self._dispatch()
 
     def do_HEAD(self):
         self.do_GET()
 
     def do_POST(self):
-        self._proxy() if self.path.startswith(PROXY_PREFIXES) else self.send_error(404)
+        self._dispatch()
 
     def do_PUT(self):
-        self._proxy() if self.path.startswith(PROXY_PREFIXES) else self.send_error(404)
+        self._dispatch()
 
     def do_PATCH(self):
-        self._proxy() if self.path.startswith(PROXY_PREFIXES) else self.send_error(404)
+        self._dispatch()
 
     def do_DELETE(self):
-        self._proxy() if self.path.startswith(PROXY_PREFIXES) else self.send_error(404)
+        self._dispatch()
+
+    def do_OPTIONS(self):
+        self._dispatch()
 
     def log_message(self, format, *args):
         print(f"frontend {self.address_string()} - {format % args}", flush=True)
 
 
 if __name__ == "__main__":
+    if any((APP_DOMAIN, BLOG_DOMAIN, BLOG_ROOT)):
+        from deployment.https_entry import normalize_domain
+        if (not all((APP_DOMAIN, BLOG_DOMAIN, BLOG_ROOT))
+                or normalize_domain(APP_DOMAIN) == normalize_domain(BLOG_DOMAIN)
+                or not (BLOG_ROOT / 'index.html').is_file()):
+            raise ValueError('Dual-site mode requires distinct APP_DOMAIN/BLOG_DOMAIN and a built BLOG_ROOT')
+        APP_DOMAIN = normalize_domain(APP_DOMAIN)
+        BLOG_DOMAIN = normalize_domain(BLOG_DOMAIN)
     address = (os.environ.get("FRONTEND_HOST", "0.0.0.0"), PORT)
     cert = os.environ.get("FRONTEND_TLS_CERT", "")
     key = os.environ.get("FRONTEND_TLS_KEY", "")

@@ -262,6 +262,29 @@ def build_frontend_assets(job):
     summary=next((line for line in reversed(output.splitlines()) if line.strip()),"构建完成")
     job.write(f"React 生产前端已构建：{summary[:500]}")
 
+def build_blog_assets(job):
+    package=ROOT/"blog/package.json"
+    if not package.is_file():raise ValueError("缺少 blog/package.json，无法构建独立博客")
+    job.update(30,"构建纸间微光静态博客")
+    try:
+        result=subprocess.run(["npm","run","build"],cwd=package.parent,text=True,capture_output=True,timeout=600)
+    except (FileNotFoundError,subprocess.TimeoutExpired) as exc:
+        raise ValueError("博客构建工具不可用或构建超时") from exc
+    if result.returncode:
+        job.write((result.stdout+result.stderr)[-4000:])
+        raise ValueError("静态博客构建失败")
+    required=("index.html","about/index.html","rss.xml","sitemap-index.xml","404.html")
+    for relative in required:
+        path=ROOT/"reader/blog"/relative
+        if not path.is_file() or not path.stat().st_size:raise ValueError("博客产物缺失："+relative)
+    if "纸间微光" not in (ROOT/"reader/blog/index.html").read_text():raise ValueError("博客站点标题不正确")
+    for path in (ROOT/"reader/blog").rglob("*"):
+        if path.is_file() and path.suffix in {'.html','.css','.js','.xml','.json','.txt','.svg'}:
+            content=path.read_text(encoding='utf-8')
+            if any(value in content for value in ('learn.rynenglish.com','/api/auth/','/api/membership','/api/payments/')):
+                raise ValueError("博客产物混入应用入口或业务代码："+str(path.relative_to(ROOT)))
+    job.write("静态博客构建与独立资源审计通过")
+
 def release_metadata(release):
     commit=""
     dirty=False
@@ -279,6 +302,7 @@ def build_code_package(job,release):
     metadata=release_metadata(release)
     build_captcha_assets(job,ROOT)
     build_frontend_assets(job)
+    build_blog_assets(job)
     target=STATE/f"{release}.tar.gz";STATE.mkdir(parents=True,exist_ok=True)
     def archive_filter(info):
         if "__pycache__" in info.name or info.name.endswith((".pyc",".pyo",".DS_Store",".map")):return None
@@ -521,6 +545,11 @@ def saas_frontend_run_command(target,release_path,name="shiyue-saas-frontend",po
     if restart:options.append("--restart unless-stopped")
     options += ["--network host",f"-e FRONTEND_HOST=0.0.0.0",f"-e FRONTEND_PORT={port}",f"-e SAAS_BACKEND_URL=http://127.0.0.1:{backend_port}","-e FRONTEND_ROOT=/app/site",f"-v {release}/reader/site:/app/site:ro,z",f"-v {release}/tools:/app/tools:ro,z",shlex.quote(SAAS_IMAGE),"python3","/app/tools/saas_frontend_server.py"]
     if target.get("use_https",0):options[-3:-3]=[f"-e FRONTEND_TLS_CERT=/certs/server-cert.pem",f"-e FRONTEND_TLS_KEY=/certs/server-key.pem",f"-v {root}/shared/https:/certs:ro,z"]
+    if target.get('blog_domain'):
+        app_domain=normalize_domain(target.get('public_domain'))
+        blog_domain=normalize_domain(target['blog_domain'])
+        if not app_domain or app_domain==blog_domain:raise ValueError('双站需要不同的应用域名和博客域名')
+        options[-3:-3]=[f"-e APP_DOMAIN={app_domain}",f"-e BLOG_DOMAIN={blog_domain}","-e BLOG_ROOT=/app/blog",f"-v {release}/reader/blog:/app/blog:ro,z"]
     return " \\\n  ".join(options)
 
 def saas_health_check_command(port,container="shiyue-saas"):
@@ -531,6 +560,31 @@ def saas_health_check_command(port,container="shiyue-saas"):
 def saas_frontend_health_check_command(port=SAAS_FRONTEND_PORT,container="shiyue-saas-frontend",https=False):
     scheme="https" if https else "http";context=",context=ssl._create_unverified_context()" if https else ""
     code=f"import ssl,urllib.request; h=urllib.request.urlopen('{scheme}://127.0.0.1:{int(port)}/',timeout=20{context}); assert h.status==200 and b'<div id=\\\"root\\\"' in h.read(); a=urllib.request.urlopen('{scheme}://127.0.0.1:{int(port)}/api/health',timeout=20{context}); assert a.status==200; print('SHIYUE_FRONTEND_READY')"
+    return f"docker exec {shlex.quote(container)} python3 -c {shlex.quote(code)}"
+
+def saas_sites_health_check_command(target,port,container):
+    if not target.get('blog_domain'):return ':'
+    scheme='https' if target.get('use_https') else 'http'
+    code=f"""import http.client,ssl
+connection_type=http.client.HTTPSConnection if {scheme!r}=='https' else http.client.HTTPConnection
+options={{'context':ssl._create_unverified_context()}} if {scheme!r}=='https' else {{}}
+def request(host,path):
+    connection=connection_type('127.0.0.1',{int(port)},timeout=10,**options)
+    connection.request('GET',path,headers={{'Host':host}})
+    response=connection.getresponse()
+    status,body=response.status,response.read()
+    connection.close()
+    return status,body
+status,body=request({target['blog_domain']!r},'/')
+assert status==200 and '纸间微光'.encode() in body and {target['public_domain']!r}.encode() not in body
+assert request({target['blog_domain']!r},'/api/health')[0]==404
+assert request({target['blog_domain']!r},'/login')[0]==404
+status,body=request({target['public_domain']!r},'/login')
+assert status==200 and b'id="root"' in body
+assert request({target['public_domain']!r},'/api/health')[0]==200
+assert request('unexpected.invalid','/')[0]==421
+print('SHIYUE_SITES_READY')
+"""
     return f"docker exec {shlex.quote(container)} python3 -c {shlex.quote(code)}"
 
 def saas_migration_check_command(container="shiyue-saas-candidate"):
@@ -548,6 +602,18 @@ print('SHIYUE_MIGRATIONS_READY '+','.join(versions))"""
 def saas_https_target(remote,target):
     """Recover edge settings before an older local node can overwrite its URL."""
     effective={**target,"service_port":SAAS_FRONTEND_PORT,"use_https":1}
+    sites=f"{target['remote_root']}/shared/config/sites.json"
+    output=remote.ssh(f"if test -s {shlex.quote(sites)}; then echo SHIYUE_SITES_CONFIG; cat {shlex.quote(sites)}; fi")
+    if "SHIYUE_SITES_CONFIG\n" in output:
+        try:
+            settings=json.loads(output.split("SHIYUE_SITES_CONFIG\n",1)[1])
+            app_domain=normalize_domain(settings['public_domain'])
+            blog_domain=normalize_domain(settings['blog_domain'])
+            if not app_domain or not blog_domain or app_domain==blog_domain:raise ValueError('invalid site domains')
+        except (KeyError,TypeError,ValueError) as exc:
+            raise ValueError('远程双站配置无效，拒绝回退至单站入口') from exc
+        effective.update(public_domain=app_domain,blog_domain=blog_domain,
+                         https_deferred=bool(settings.get('https_deferred',False)))
     if not effective.get("public_domain"):
         manifest=f"{target['remote_root']}/shared/config/https-entry.json"
         output=remote.ssh(f"if test -s {shlex.quote(manifest)}; then echo SHIYUE_HTTPS_ENTRY_CONFIG; cat {shlex.quote(manifest)}; fi")
@@ -556,8 +622,18 @@ def saas_https_target(remote,target):
             try:settings=json.loads(output.split(marker,1)[1])
             except (TypeError,ValueError) as exc:raise ValueError("远程 HTTPS 入口配置损坏，拒绝覆盖现有入口") from exc
             effective["public_domain"]=settings.get("public_domain","")
+            if settings.get('blog_domain'):effective['blog_domain']=normalize_domain(settings['blog_domain'])
     effective["public_domain"]=normalize_domain(effective.get("public_domain",""))
     return effective
+
+def save_remote_site_config(remote,target):
+    if not target.get('blog_domain'):return
+    values={'version':1,'public_domain':normalize_domain(target['public_domain']),
+            'blog_domain':normalize_domain(target['blog_domain']),
+            'https_deferred':bool(target.get('https_deferred',False))}
+    path=shlex.quote(target['remote_root']+'/shared/config/sites.json')
+    payload=shlex.quote(json.dumps(values,sort_keys=True))
+    remote.ssh(f"set -e; umask 022; printf '%s\\n' {payload} > {path}.tmp; chmod 644 {path}.tmp; mv -f {path}.tmp {path}")
 
 def ensure_remote_https_entry(job,remote,target):
     if not target.get("public_domain"):return {}
@@ -576,15 +652,33 @@ with opener.open(base+'/api/health',timeout=20) as response:
     assert health.get('status')=='ok' and health.get('saasEnabled') and health.get('redisReady')
 print('SHIYUE_HTTPS_PUBLIC_READY')
 """
+    if target.get('blog_domain'):
+        code+=f"""
+blog={'https://'+target['blog_domain']!r}
+with opener.open(blog+'/',timeout=20) as response:
+    page=response.read().decode('utf-8')
+    assert response.status==200 and '纸间微光' in page and {target['public_domain']!r} not in page
+import urllib.error
+try:
+    opener.open(blog+'/api/health',timeout=20)
+except urllib.error.HTTPError as error:
+    assert error.code==404
+else:
+    raise AssertionError('Blog must not expose application API')
+print('SHIYUE_BLOG_PUBLIC_READY')
+"""
     verification=remote.ssh(f"docker exec shiyue-saas python3 -c {shlex.quote(code)}")
     if "SHIYUE_HTTPS_PUBLIC_READY" not in verification:raise ValueError("公网 HTTPS 入口严格校验失败")
     return {"frontendUrl":frontend_url(target),"stateRoot":entry_paths(target)["state_root"]}
 
 def configure_existing_https_entry(job,remote,target):
     """Change only the public entry and origin URL, using the deployed image."""
+    requested_domain=normalize_domain(target.get('public_domain',''))
+    target=saas_https_target(remote,target)
     target={**target,"service_port":SAAS_FRONTEND_PORT,"use_https":1,
-            "public_domain":normalize_domain(target.get("public_domain",""))}
+            "public_domain":requested_domain or target.get('public_domain','')}
     if not target["public_domain"]:raise ValueError("配置标准 HTTPS 入口必须提供域名")
+    if target.get('blog_domain')==target['public_domain']:raise ValueError('应用域名不能覆盖独立博客域名')
     root=shlex.quote(target["remote_root"])
     metadata=remote.ssh(f"""set -euo pipefail
 test -s {root}/shared/config/saas.env
@@ -639,6 +733,8 @@ echo SHIYUE_HTTPS_APP_READY
         remote.ssh(f"cp -p {shlex.quote(backup)}/saas.env {root}/shared/config/saas.env")
         raise
     health=remote.ssh(saas_health_check_command(SAAS_FRONTEND_PORT))
+    target['https_deferred']=False
+    save_remote_site_config(remote,target)
     return {**entry,"backup":backup,"health":health,"applicationCodePreserved":True}
 
 def ensure_remote_saas_config(job,remote,target):
@@ -714,6 +810,51 @@ sha256sum {shlex.quote(backup)} | awk '{{print "SHIYUE_SAAS_BACKUP_READY " $1}}'
     if "SHIYUE_SAAS_BACKUP_READY" not in output:raise ValueError("远程 SaaS 数据库备份未完成")
     job.write(f"远程数据库备份已完成：{Path(backup).name}")
     return backup
+
+def backup_remote_site_settings(remote,target,release):
+    root=target['remote_root']
+    backup=f'{root}/backups/saas/settings-{release}'
+    remote.ssh(f"""set -euo pipefail
+umask 077
+mkdir -p {shlex.quote(backup)}
+cp -p {shlex.quote(root)}/shared/config/saas.env {shlex.quote(backup)}/saas.env
+readlink -f {shlex.quote(root)}/current > {shlex.quote(backup)}/current-release
+if test -f {shlex.quote(root)}/shared/config/sites.json; then
+    cp -p {shlex.quote(root)}/shared/config/sites.json {shlex.quote(backup)}/sites.json
+else
+    touch {shlex.quote(backup)}/sites.absent
+fi
+""")
+    return backup
+
+def restore_site_settings_command(target):
+    backup=target.get('_settings_backup')
+    if not backup:return ':'
+    root=shlex.quote(target['remote_root'])
+    backup=shlex.quote(backup)
+    return f"""cp -p {backup}/saas.env {root}/shared/config/saas.env
+if test -f {backup}/sites.absent; then rm -f {root}/shared/config/sites.json;
+else cp -p {backup}/sites.json {root}/shared/config/sites.json; fi"""
+
+def rollback_site_upgrade_command(target):
+    root=shlex.quote(target['remote_root'])
+    backup=shlex.quote(target['_settings_backup'])
+    previous=target.get('_previous_target',target)
+    app=saas_app_run_command(previous,target['remote_root']+'/current')
+    frontend=saas_frontend_run_command(previous,target['remote_root']+'/current')
+    return f"""set -euo pipefail
+{restore_site_settings_command(target)}
+previous_release=$(cat {backup}/current-release)
+case "$previous_release" in {root}/releases/*) ;; *) echo 'Invalid rollback release' >&2; exit 2;; esac
+test -s "$previous_release/reader/site/index.html"
+if [ "$(readlink -f {root}/current)" != "$previous_release" ]; then
+    docker rm -f shiyue-saas shiyue-saas-frontend >/dev/null 2>&1 || true
+    ln -sfn "$previous_release" {root}/current
+    {app}
+    {frontend}
+fi
+docker rm -f shiyue-saas-candidate shiyue-saas-frontend-candidate >/dev/null 2>&1 || true
+"""
 
 def check_remote_saas_upgrade_target(remote,target):
     root=shlex.quote(target["remote_root"])
@@ -1065,6 +1206,7 @@ def activate_saas_release(job,remote,target,release):
     candidate_frontend_command=saas_frontend_run_command(target,release_path,"shiyue-saas-frontend-candidate",candidate_frontend,candidate_backend,False)
     candidate_health=saas_health_check_command(candidate_backend,"shiyue-saas-candidate")
     frontend_health=saas_frontend_health_check_command(candidate_frontend,"shiyue-saas-frontend-candidate",bool(target.get("use_https",0)))
+    candidate_sites_health=saas_sites_health_check_command(target,candidate_frontend,'shiyue-saas-frontend-candidate')
     frontend_scheme="https" if target.get("use_https",0) else "http";frontend_context=",context=ssl._create_unverified_context()" if target.get("use_https",0) else ""
     root_check_code=f"import ssl,urllib.request; r=urllib.request.urlopen(\'{frontend_scheme}://127.0.0.1:{candidate_frontend}/\',timeout=20{frontend_context}); assert r.status==200 and b'id=\"root\"' in r.read(); print(\'SHIYUE_FRONTEND_READY\')"
     job.update(91,"候选端口验收 SaaS 前后台服务")
@@ -1081,6 +1223,7 @@ def activate_saas_release(job,remote,target,release):
  {saas_migration_check_command("shiyue-saas-candidate")}
  {aligner_check_command("shiyue-saas-candidate")}
  docker exec shiyue-saas-frontend-candidate python3 -c {shlex.quote(root_check_code)}
+ {candidate_sites_health}
  cat /tmp/shiyue-saas-candidate-health.json
  docker rm -f shiyue-saas-candidate shiyue-saas-frontend-candidate >/dev/null
  """
@@ -1090,30 +1233,42 @@ def activate_saas_release(job,remote,target,release):
     production_frontend=saas_frontend_run_command(target,f"{root}/current","shiyue-saas-frontend",SAAS_FRONTEND_PORT,SAAS_BACKEND_PORT,True)
     production_health=saas_health_check_command(SAAS_BACKEND_PORT,"shiyue-saas")
     frontend_production_health=saas_frontend_health_check_command(SAAS_FRONTEND_PORT,"shiyue-saas-frontend",bool(target.get("use_https",0)))
+    production_sites_health=saas_sites_health_check_command(target,SAAS_FRONTEND_PORT,'shiyue-saas-frontend')
     legacy=docker_run_command(target)
-    previous_saas=saas_app_run_command(target,f"{root}/current","shiyue-saas",SAAS_BACKEND_PORT,True)
-    previous_frontend=saas_frontend_run_command(target,f"{root}/current","shiyue-saas-frontend",SAAS_FRONTEND_PORT,SAAS_BACKEND_PORT,True)
+    previous_target=target.get('_previous_target',target)
+    previous_saas=saas_app_run_command(previous_target,f"{root}/current","shiyue-saas",SAAS_BACKEND_PORT,True)
+    previous_frontend=saas_frontend_run_command(previous_target,f"{root}/current","shiyue-saas-frontend",SAAS_FRONTEND_PORT,SAAS_BACKEND_PORT,True)
     switch=f"""set -euo pipefail
  previous_release=$(readlink -f {shlex.quote(root)}/current 2>/dev/null || true)
+ rollback() {{
+   status=$?
+   trap - EXIT
+   if [ "$status" -ne 0 ]; then
+     docker rm -f shiyue-saas shiyue-saas-frontend >/dev/null 2>&1 || true
+     {restore_site_settings_command(target)}
+     if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then
+       ln -sfn "$previous_release" {shlex.quote(root)}/current
+       if [ -s "$previous_release/reader/site/index.html" ]; then {previous_saas}; {previous_frontend}; else {legacy}; fi
+     fi
+   fi
+   exit "$status"
+ }}
+ trap rollback EXIT
  docker rm -f shiyue-saas shiyue-saas-frontend shiyue-reader >/dev/null 2>&1 || true
  ln -sfn {shlex.quote(release_path)} {shlex.quote(root)}/current
  {production}
  {production_frontend}
  healthy=0
  for attempt in $(seq 1 60); do
-   if {production_health} >/tmp/shiyue-saas-health.json 2>/tmp/shiyue-saas-health-error.log && {frontend_production_health} >/tmp/shiyue-saas-frontend-health.log 2>/tmp/shiyue-saas-frontend-error.log; then healthy=1; break; fi
+   if {production_health} >/tmp/shiyue-saas-health.json 2>/tmp/shiyue-saas-health-error.log && {frontend_production_health} >/tmp/shiyue-saas-frontend-health.log 2>/tmp/shiyue-saas-frontend-error.log && {production_sites_health} >/tmp/shiyue-sites-health.log 2>/tmp/shiyue-sites-health-error.log; then healthy=1; break; fi
    sleep 1
  done
  if [ "$healthy" -ne 1 ]; then
    docker logs --tail 200 shiyue-saas >&2 || true; docker logs --tail 200 shiyue-saas-frontend >&2 || true
-   docker rm -f shiyue-saas shiyue-saas-frontend >/dev/null 2>&1 || true
-   if [ -n "$previous_release" ] && [ -d "$previous_release" ]; then
-     ln -sfn "$previous_release" {shlex.quote(root)}/current
-     if [ -s "$previous_release/reader/site/index.html" ]; then {previous_saas}; {previous_frontend}; else {legacy}; fi
-   fi
    exit 6
  fi
  cat /tmp/shiyue-saas-health.json
+ trap - EXIT
  """
     return {"candidate":candidate_output,"production":remote.ssh(switch)}
 
@@ -1166,9 +1321,17 @@ def start_upgrade(target_id):
         job.complete({"targetId":target["id"],"releaseId":release,"health":final_health,"initialHealth":health,"codeBytes":package.stat().st_size,"diocoConfigured":dioco["configured"],"diocoReady":dioco_ready},"程序升级完成")
     return run_task("program_upgrade",worker,target_id)
 
-def start_saas_upgrade(target_id):
+def start_saas_upgrade(target_id,site_domains=None,defer_https=False):
+    if site_domains:
+        site_domains={key:normalize_domain(site_domains.get(key)) for key in ('public_domain','blog_domain')}
+        if not all(site_domains.values()) or site_domains['public_domain']==site_domains['blog_domain']:
+            raise ValueError('双站需要不同的应用域名和博客域名')
     def worker(job,remote,target):
         target=saas_https_target(remote,target)
+        previous_target=dict(target)
+        if site_domains:target={**target,**site_domains}
+        if defer_https:target['https_deferred']=True
+        target['_previous_target']=previous_target
         release=new_release_id("code");job.update(5,"检查远程 SaaS 生产栈",release_id=release)
         check_remote_saas_upgrade_target(remote,target)
         job.update(15,"生成 SaaS 程序发布包");package,digest=build_code_package(job,release)
@@ -1180,18 +1343,24 @@ def start_saas_upgrade(target_id):
         job.update(60,"同步远程词典服务配置");dioco=sync_remote_private_config(job,remote,target)
         job.update(64,"准备 5173 HTTPS 证书与入口配置")
         certificate=ensure_remote_tls(job,remote,target)
-        ensure_remote_saas_config(job,remote,target)
-        sync_remote_smtp_config(job,remote,target)
-        ensure_remote_captcha(job,remote,target,release)
-        ensure_remote_aligner(job,remote,target,release)
-        job.update(70,"启动候选版本并执行 SaaS 健康检查")
-        activation=activate_saas_release(job,remote,target,release)
-        job.update(97,"安装 HTTPS 入口、Let's Encrypt 证书及自动续期")
-        ensure_remote_https_entry(job,remote,target)
-        health=remote.ssh(saas_health_check_command(target["service_port"]))
-        job.update(98,"核对线上版本指针与运行容器")
-        root=shlex.quote(target["remote_root"])
-        verification=remote.ssh(f"""set -euo pipefail
+        target['_settings_backup']=backup_remote_site_settings(remote,target,release)
+        try:
+            ensure_remote_saas_config(job,remote,target)
+            sync_remote_smtp_config(job,remote,target)
+            ensure_remote_captcha(job,remote,target,release)
+            ensure_remote_aligner(job,remote,target,release)
+            job.update(70,"启动候选版本并执行 SaaS 健康检查")
+            activation=activate_saas_release(job,remote,target,release)
+            save_remote_site_config(remote,target)
+            if target.get('https_deferred'):
+                job.update(97,"源站双站已启用；DNS 与公网 HTTPS 待完成")
+            else:
+                job.update(97,"安装 HTTPS 入口、Let's Encrypt 证书及自动续期")
+                ensure_remote_https_entry(job,remote,target)
+            health=remote.ssh(saas_health_check_command(target["service_port"]))
+            job.update(98,"核对线上版本指针与运行容器")
+            root=shlex.quote(target["remote_root"])
+            verification=remote.ssh(f"""set -euo pipefail
 current_release=$(readlink -f {root}/current)
 test "$(basename "$current_release")" = {shlex.quote(release)}
 test "$(docker inspect -f '{{{{.State.Running}}}}' shiyue-saas)" = true
@@ -1201,10 +1370,12 @@ test "$(readlink -f "$mount_source")" = "$current_release/reader"
 {saas_frontend_health_check_command(SAAS_FRONTEND_PORT,"shiyue-saas-frontend",bool(target.get("use_https",0)))}
 echo SHIYUE_SAAS_RELEASE_ACTIVE
 """)
-        if "SHIYUE_SAAS_RELEASE_ACTIVE" not in verification:raise ValueError("线上 SaaS 容器与 current 发布版本不一致")
-        db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":health,"mode":"saas"}),now()));db.commit();db.close()
-        db=connect();db.execute("UPDATE deployment_targets SET service_port=?,use_https=1,public_domain=?,updated_at=? WHERE id=?",(SAAS_FRONTEND_PORT,target.get("public_domain",""),now(),target["id"]));db.commit();db.close()
-        job.complete({"targetId":target["id"],"releaseId":release,"health":health,"backup":backup,"candidate":activation["candidate"],"verification":verification,"buildInfo":build_info,"diocoConfigured":dioco["configured"],"frontendUrl":frontend_url(target),"rootCertificate":"" if target.get("public_domain") else str(certificate)},"SaaS 程序升级完成（HTTPS）")
+            if "SHIYUE_SAAS_RELEASE_ACTIVE" not in verification:raise ValueError("线上 SaaS 容器与 current 发布版本不一致")
+            db=connect();db.execute("UPDATE deployment_releases SET status='available' WHERE target_id=? AND status='active'",(target["id"],));db.execute("INSERT OR REPLACE INTO deployment_releases(release_id,target_id,status,content_hash,health_json,deployed_at) VALUES(?,?,?,?,?,?)",(release,target["id"],"active",digest,json.dumps({"raw":health,"mode":"saas"}),now()));db.execute("UPDATE deployment_targets SET service_port=?,use_https=1,public_domain=?,updated_at=? WHERE id=?",(SAAS_FRONTEND_PORT,target.get("public_domain",""),now(),target["id"]));db.commit();db.close()
+            job.complete({"targetId":target["id"],"releaseId":release,"health":health,"backup":backup,"candidate":activation["candidate"],"verification":verification,"buildInfo":build_info,"diocoConfigured":dioco["configured"],"frontendUrl":frontend_url(target),"blogDomain":target.get('blog_domain',''),"httpsPending":bool(target.get('https_deferred')),"rootCertificate":"" if target.get("public_domain") else str(certificate)},"源站升级完成（公网 HTTPS 待启用）" if target.get('https_deferred') else "SaaS 程序升级完成（HTTPS）")
+        except Exception:
+            remote.ssh(rollback_site_upgrade_command(target))
+            raise
     return run_task("saas_upgrade",worker,target_id)
 
 def uninstall_saas_for_redeploy(job,remote,target):

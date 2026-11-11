@@ -1,0 +1,13 @@
+---
+import { icpRecord, themeConfig } from '@/config'
+const { author } = themeConfig.site
+const { startYear } = themeConfig.footer
+const currentYear = new Date().getFullYear()
+const year = startYear === currentYear ? startYear : `${startYear}–${currentYear}`
+---
+<footer class="text-3 leading-1.75em font-navbar" lg="uno-desktop-column bottom-20 text-3.5">
+  <p><a class="highlight-hover" href="/rss.xml">RSS 订阅</a> · <a class="highlight-hover" href="/tags/">标签归档</a></p>
+  <p>© {year} {author}</p>
+  <p>Astro · Retypeset</p>
+  {icpRecord && <p><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">{icpRecord}</a></p>}
+</footer>

@@ -1,0 +1,42 @@
+---
+import PostList from '@/components/PostList.astro'
+import { allLocales } from '@/config'
+import { getLangFromLocale, getLangRouteParam } from '@/i18n/lang'
+import Layout from '@/layouts/Layout.astro'
+import { getPinnedPosts, getPostsByYear } from '@/utils/content'
+
+export async function getStaticPaths() {
+  return allLocales.map(lang => ({
+    params: { lang: getLangRouteParam(lang) },
+  }))
+}
+
+const currentLang = getLangFromLocale(Astro.currentLocale)
+const pinnedPosts = await getPinnedPosts(currentLang)
+const postsByYear = await getPostsByYear(currentLang)
+---
+
+<Layout>
+  <div class="journal-intro">
+    <p class="journal-kicker">阅读 · 写作 · 日常</p>
+    <p>留一点时间给文字，也给尚未想清楚的问题。</p>
+    <p>这里收存阅读笔记与写作随想。慢慢读，轻轻记，让细小的发现有处可放。</p>
+  </div>
+  <!-- Pinned Posts -->
+  {pinnedPosts.length > 0 && (
+    <section class="mb-7.5">
+      <div class="uno-decorative-line" />
+      <PostList posts={pinnedPosts} lang={currentLang} pinned={true} />
+    </section>
+  )}
+
+  <!-- Regular Posts -->
+  {Array.from(postsByYear.entries(), ([year, posts]) => (
+    <section class="mb-7.5">
+      <div class="uno-decorative-line" />
+      <h2 class="archive-year">{year} / 文章归档</h2>
+      <PostList posts={posts} lang={currentLang} />
+    </section>
+  ))}
+  {pinnedPosts.length === 0 && postsByYear.size === 0 && <p class="empty-state">文字正在整理中，过些时候再来看看。</p>}
+</Layout>

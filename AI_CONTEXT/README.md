@@ -1,12 +1,13 @@
 # 纸间微光 AI 共享上下文
 
-更新时间：2026-11-09（Asia/Shanghai）
+更新时间：2026-11-11（Asia/Shanghai）
 
 只读取与当前任务对应的交接文档。当前产品为邀请制个人阅读空间，线上商业化功能已撤除；此前支付、套餐和旧品牌记录仅供历史追溯，不得按旧文档恢复实现。
 
 ## 当前架构
 
 - 前端：React 18 + Ant Design 5 + Vite，源码 `frontend/src/`，构建到 `reader/site/`。生产由 `tools/saas_frontend_server.py` 提供页面并代理 API。
+- 双站：`blog/` 独立 Astro + Retypeset 构建到 `reader/blog/`；主域名 `rynenglish.com` 提供静态文章，阅读应用使用 `learn.rynenglish.com`，按 Host 隔离资源和 API。发布进度及外部条件见博客分站交接。
 - 后端：Python HTTP 服务 `tools/reader_server.py`，业务模块 `tools/saas_*.py`，PostgreSQL、Redis、Java 旋转验证码。
 - 身份：有效邀请码注册、邮箱验证、数据库会话 Cookie、CSRF、管理员权限及租户隔离。未登录不能读取书城。
 - 资源：`saas_resources.py` 统一控制容量、设备和 AI 使用；无会员等级、购买、支付、订阅、兑换开通或外部收款跳转。保留学习奖励。
@@ -21,7 +22,7 @@
 
 - `refactor/private-paper-glow` 从干净本地 `main` 创建；当前改造状态及完整验证见 [私域改造交接](tasks/private-paper-glow/HANDOFF.md)。用户已授权提交并推送至 `origin` 同名分支，实际提交与同步状态以 Git 为准；未合并或远程部署。2026-11-09 已初始化当前目录独立本地库并应用至 0044，完整本地栈保持运行，入口 `http://127.0.0.1:4173`。
 - 品牌已改为“纸间微光”，标语“一页一光，静读慢行。”，统一 SVG。旧商业页面、服务模块、HTTP 入口、营销图片和旧 modern 编译包已删除。
-- 此前交接记录京东云于 2026-11-08 完成整项目卸载；本轮未连接或操作远端，当前远端状态未经重新核实。
+- 京东云已只读核实为运行中的 SaaS 栈；本轮用户授权保留数据升级双站，并明确先部署源站、稍后添加 learn DNS。源站发布进度及公网 HTTPS 待办以 `tasks/blog-domains/HANDOFF.md` 为准。
 - PC 优先，移动端视觉优化仍待后续独立任务；保留原音播放，不以浏览器 TTS 替代。
 
 ## 任务索引

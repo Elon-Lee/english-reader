@@ -1,0 +1,48 @@
+---
+import { ClientRouter } from 'astro:transitions'
+import { themeConfig } from '@/config'
+interface Props { postTitle?: string; postDescription?: string; postSlug?: string }
+const { postTitle, postDescription, postSlug } = Astro.props
+const { title, subtitle, description, author, url, favicon } = themeConfig.site
+const { mode: defaultMode, light: { background: lightMode }, dark: { background: darkMode } } = themeConfig.color
+const { reduceMotion } = themeConfig.global
+const pageTitle = postTitle ? `${postTitle} | ${title}` : `${title} · ${subtitle}`
+const pageDescription = postDescription || description
+const canonical = new URL(Astro.url.pathname, url)
+---
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/svg+xml" href={favicon} />
+  <title>{pageTitle}</title>
+  <meta name="description" content={pageDescription} />
+  <meta name="author" content={author} />
+  <meta name="generator" content={Astro.generator} />
+  <meta name="theme-color" content={lightMode} />
+  <link rel="canonical" href={canonical} />
+  <link rel="sitemap" href="/sitemap-index.xml" />
+  <link rel="alternate" href="/rss.xml" type="application/rss+xml" title="纸间微光 RSS" />
+  <link rel="alternate" href="/atom.xml" type="application/atom+xml" title="纸间微光 Atom" />
+  <meta property="og:type" content={postSlug ? 'article' : 'website'} />
+  <meta property="og:url" content={canonical} />
+  <meta property="og:title" content={pageTitle} />
+  <meta property="og:description" content={pageDescription} />
+  <meta property="og:site_name" content={title} />
+  <meta property="og:locale" content="zh_CN" />
+  <ClientRouter fallback="none" />
+  <script is:inline define:vars={{ defaultMode, lightMode, darkMode, reduceMotion }}>
+    (() => {
+      function initialize(doc = document) {
+        let savedTheme
+        try { savedTheme = localStorage.getItem('theme') } catch {}
+        const isDark = savedTheme ? savedTheme === 'dark' : defaultMode === 'dark'
+        doc.documentElement.classList.toggle('dark', isDark)
+        doc.documentElement.classList.toggle('reduce-motion',
+          reduceMotion || window.matchMedia('(prefers-reduced-motion: reduce)').matches || !('startViewTransition' in doc))
+        doc.head.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark ? darkMode : lightMode)
+      }
+      document.addEventListener('astro:before-swap', ({ newDocument }) => initialize(newDocument))
+      initialize()
+    })()
+  </script>
+</head>

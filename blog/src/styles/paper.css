@@ -1,0 +1,31 @@
+/* Retypeset 原始版面之上的纸色与中文排版微调。 */
+body {
+  font-size: 1rem;
+  line-height: 1.85;
+}
+header { letter-spacing: .08em; }
+.heti { line-height: 1.95; }
+.heti .post-title { line-height: 1.5; }
+a:focus-visible, button:focus-visible, label:focus-visible {
+  outline: 2px solid #a26a3f;
+  outline-offset: 5px;
+}
+.journal-intro {
+  margin-bottom: 3rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid #b9946b40;
+}
+.journal-kicker {
+  color: #9b6c44;
+  font-size: .75rem;
+  letter-spacing: .16em;
+  margin-bottom: .7rem;
+}
+.journal-intro p:last-child { max-width: 31rem; }
+.archive-year {
+  font-size: .8rem;
+  letter-spacing: .12em;
+  margin-bottom: 1.5rem;
+  opacity: .7;
+}
+.empty-state { margin: 2rem 0; }

@@ -78,7 +78,12 @@ def entry_paths(target):
     }
 
 
-def _http_config(domain):
+def _http_config(domain, blog_domain=''):
+    if blog_domain:
+        config = 'server { listen 80 default_server; server_name _; return 404; }\n'
+        for name in (domain, blog_domain):
+            config += _http_config(name).replace('listen 80 default_server;', 'listen 80;')
+        return config
     return '''server {
     listen 80 default_server;
     server_name @DOMAIN@;
@@ -91,7 +96,13 @@ def _http_config(domain):
 '''.replace('@DOMAIN@', domain)
 
 
-def _https_config(domain):
+def _https_config(domain, blog_domain=''):
+    if blog_domain:
+        config = _http_config(domain, blog_domain)
+        config += 'server { listen 443 ssl default_server; server_name _; ssl_reject_handshake on; }\n'
+        for name in (domain, blog_domain):
+            config += _https_config(name).removeprefix(_http_config(name)).replace('listen 443 ssl default_server;', 'listen 443 ssl;')
+        return config
     return _http_config(domain) + '''
 server {
     listen 443 ssl default_server;
@@ -146,14 +157,16 @@ flock -x 9
 owner=$(docker inspect --format '{{index .Config.Labels "@OWNER_LABEL@"}}' "$container")
 [ "$owner" = "$remote_root" ] || { echo "HTTPS container ownership conflict" >&2; exit 1; }
 # A failed ACME attempt or nginx validation never consumes the reload marker.
+for cert_domain in @CERT_DOMAINS@; do
 docker run --rm --network host \
     -v "$state/letsencrypt:/etc/letsencrypt:z" \
     -v "$state/webroot:/var/www/acme:z" \
     -v "$state/work:/var/lib/letsencrypt:z" \
     -v "$state/logs:/var/log/letsencrypt:z" \
-    "$certbot_image" renew --cert-name "$domain" --non-interactive --no-random-sleep-on-renew \
+    "$certbot_image" renew --cert-name "$cert_domain" --non-interactive --no-random-sleep-on-renew \
     --webroot --webroot-path /var/www/acme \
     --deploy-hook 'touch /var/lib/letsencrypt/reload-required' "$@"
+done
 if [ -f "$state/work/reload-required" ]; then
     docker exec "$container" nginx -t
     docker exec "$container" nginx -s reload
@@ -168,6 +181,9 @@ def install_script(target):
     domain = normalize_domain(target.get('public_domain'))
     if not domain:
         raise ValueError('public_domain is required to install the HTTPS entry')
+    blog_domain = normalize_domain(target.get('blog_domain'))
+    if blog_domain == domain:
+        raise ValueError('blog_domain must differ from public_domain')
     paths = entry_paths(target)
     email = target.get('acme_email') or ''
     if email and (not isinstance(email, str) or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', email)):
@@ -177,6 +193,7 @@ def install_script(target):
         'STATE': shlex.quote(paths['state_root']),
         'ROOT': shlex.quote(root),
         'DOMAIN': shlex.quote(domain),
+        'CERT_DOMAINS': ' '.join(shlex.quote(name) for name in (domain, blog_domain) if name),
         'CONTAINER': shlex.quote(CONTAINER),
         'NGINX_IMAGE': shlex.quote(NGINX_IMAGE),
         'CERTBOT_IMAGE': shlex.quote(CERTBOT_IMAGE),
@@ -185,12 +202,14 @@ def install_script(target):
         'SERVICE_NAME': paths['service_name'],
         'TIMER_NAME': paths['timer_name'],
         'EMAIL_ARGS': email_args,
-        'HTTP_CONFIG': _http_config(domain),
-        'HTTPS_CONFIG': _https_config(domain),
+        'HTTP_CONFIG': _http_config(domain, blog_domain),
+        'HTTPS_CONFIG': _https_config(domain, blog_domain),
     }
     values['RENEW_SCRIPT'] = _renew_script(values)
     manifest = {'version': 1, 'public_domain': domain, 'remote_root': root,
                 'frontend_url': frontend_url(target), 'container': CONTAINER, **paths}
+    if blog_domain:
+        manifest.update(version=2, blog_domain=blog_domain, blog_url='https://' + blog_domain)
     values['MANIFEST_JSON'] = json.dumps(manifest, sort_keys=True)
     values['READY'] = shlex.quote('SHIYUE_HTTPS_ENTRY_READY ' + json.dumps(manifest, sort_keys=True))
     return _render(r'''#!/bin/bash
@@ -313,20 +332,22 @@ SHIYUE_HTTP_CONFIG
     fi
 fi
 # Existing TLS configuration remains active while certbot obtains/reuses a cert.
+for cert_domain in @CERT_DOMAINS@; do
 if ! docker run --rm --network host \
     -v "$state/letsencrypt:/etc/letsencrypt:z" \
     -v "$state/webroot:/var/www/acme:z" \
     -v "$state/work:/var/lib/letsencrypt:z" \
     -v "$state/logs:/var/log/letsencrypt:z" \
     "$certbot_image" certonly --webroot --webroot-path /var/www/acme \
-    --cert-name "$domain" --domain "$domain" --keep-until-expiring \
+    --cert-name "$cert_domain" --domain "$cert_domain" --keep-until-expiring \
     --server https://acme-v02.api.letsencrypt.org/directory \
     --non-interactive --agree-tos @EMAIL_ARGS@; then
     echo "SHIYUE_HTTPS_CERTIFICATE_FAILED: Let's Encrypt domain validation failed; check public DNS, port 80 and provider domain restrictions. Application services remain running." >&2
     exit 10
 fi
-test -s "$state/letsencrypt/live/$domain/fullchain.pem"
-test -s "$state/letsencrypt/live/$domain/privkey.pem"
+test -s "$state/letsencrypt/live/$cert_domain/fullchain.pem"
+test -s "$state/letsencrypt/live/$cert_domain/privkey.pem"
+done
 cat > "$state/nginx/candidate.tmp" <<'SHIYUE_HTTPS_CONFIG'
 @HTTPS_CONFIG@
 SHIYUE_HTTPS_CONFIG
