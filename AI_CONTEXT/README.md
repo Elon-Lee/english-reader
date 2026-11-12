@@ -6,6 +6,8 @@
 
 ## 当前架构
 
+- 维护约定：用户已验收国内主页与10ye.cc流程，确认统一归入主线 `main`。后续先区分共享核心/国内扩展/国际扩展；共享业务只改一份、两站回归，单站差异通过 `@site` 组合。每次程序发布从同一提交同时交付国内、国际、博客及共享后端，不单独发布某站。详见 `AGENTS.md` 与 `docs/DEPLOYMENT_SITES.md`；`npm run deploy:jdcloud` 默认保数据升级。
+
 - 前端：React 18 + Ant Design 5 + Vite，共享 `frontend/src/` 阅读业务，`sites/cn|intl` 分别构建到 `reader/site/` 与 `reader/site-intl/`。两个前端进程代理同一 API。
 - 双站：`blog/` 独立 Astro + Retypeset 构建到 `reader/blog/`；主域名 `rynenglish.com` 提供静态文章，阅读应用使用 `learn.rynenglish.com`，按 Host 隔离资源和 API。发布进度及外部条件见博客分站交接。
 - 后端：Python HTTP 服务 `tools/reader_server.py`，业务模块 `tools/saas_*.py`，PostgreSQL、Redis、Java 旋转验证码。
@@ -20,8 +22,8 @@
 
 ## 跨任务状态
 
-- 国内/国际并行在 `feat/dual-entry-commerce` 实施：国际回环5173、国内5174、共享回环API8790。用户已授权国内5174监听0.0.0.0供IP博客预览，配置 `cn_public_preview:true`；实际发布状态以 [双入口交接](tasks/dual-entry-commerce/HANDOFF.md) 为准，端口文档见 `docs/DEPLOYMENT_SITES.md`。
-- 私域改造提交 `810f19a` 已推送至 `origin/refactor/private-paper-glow`；未合并，详见 [私域改造交接](tasks/private-paper-glow/HANDOFF.md)。其后双站分支 `feat/paper-glow-blog-domains` 的实现 `3c0c77b` 已随任务 #16 发布京东云源站，公网 HTTPS 尚待 DNS 与域名放行。本地栈入口 `http://127.0.0.1:4173`。
+- 国内/国际并行在 `feat/dual-entry-commerce` 实施并经用户验收，本轮归入主线 `main`：国际回环5173、国内5174、共享回环API8790。用户已授权国内5174监听0.0.0.0供IP博客预览，配置 `cn_public_preview:true`；实际发布状态以 [双入口交接](tasks/dual-entry-commerce/HANDOFF.md) 为准，端口文档见 `docs/DEPLOYMENT_SITES.md`。
+- 私域改造 `810f19a`、博客分站 `3c0c77b` 与后续双入口/AI博客改版均包含在本轮主线合并范围；原 `refactor/private-paper-glow`、`feat/paper-glow-blog-domains` 为历史实施分支，后续不作为独立业务主线。本地栈入口 `http://127.0.0.1:4173`。
 - 国内品牌为“纸间微光”，标语“一页一光，静读慢行。”；国际恢复RynEnglish首页与商业素材，通过独立构建隔离。
 - 京东云最新 #19 已保数据升级，`current=code-20261112-180050-05f3c3a1`、源码 `e8b1ccd`，迁移0045。博客改为纸色个人手记，4个AI栏目/12篇新文/共15篇，40个正常公网页面与本地产物逐页一致；IP5174可预览，国际健康正常，数据保留。详见博客分站交接；国内learn解析、京东云域名放行/HTTPS及真实支付渠道仍待外部条件。
 - PC 优先，移动端视觉优化仍待后续独立任务；保留原音播放，不以浏览器 TTS 替代。

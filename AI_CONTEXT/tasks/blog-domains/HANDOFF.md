@@ -4,7 +4,7 @@
 
 ## 目标与边界
 
-- 用户确认 Astro + Retypeset 独立博客和“纸色手记”改版；主域 `rynenglish.com` 展示公开文章，阅读业务在 `learn.rynenglish.com`。用户已授权保数据发布京东云，当前工作分支 `feat/dual-entry-commerce`。
+- 用户确认 Astro + Retypeset 独立博客和“纸色手记”改版；主域 `rynenglish.com` 展示公开文章，阅读业务在 `learn.rynenglish.com`。实施分支 `feat/dual-entry-commerce` 已获用户验收，2026-11-12本轮合并推送至默认主线 `main`；后续修改边界与双程序同步发布规则见根 `AGENTS.md` 及 `docs/DEPLOYMENT_SITES.md`。线上仍为下述#19，本轮文档/默认升级命令调整不重新发布业务。
 - 主站不链接业务站、不代理API，不加载登录/支付业务资源；所有访客与User-Agent一致。域名分站不替代实际服务的备案和合规要求。
 - 国内/国际双前端和共享后端详见 [双入口交接](../dual-entry-commerce/HANDOFF.md)；端口与升级配置见 `docs/DEPLOYMENT_SITES.md`。
 

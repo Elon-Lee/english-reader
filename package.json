@@ -13,7 +13,7 @@
     "test:sites:built": "python3 tools/test_dual_entry_build.py",
     "test:sites:browser": "node tools/test_dual_entry_frontend_browser.cjs",
     "package:remote": "python3 tools/deploy_remote.py --package-only",
-    "deploy:jdcloud": "python3 tools/deploy_remote.py --target 京东云服务器 --saas --timeout 14400",
+    "deploy:jdcloud": "python3 tools/deploy_remote.py --target 京东云服务器 --upgrade --timeout 14400",
     "sync:jdcloud:public": "python3 tools/deploy_remote.py --target 京东云服务器 --sync-public",
     "test:modern": "python3 tools/test_modern_frontend.py",
     "test:extensive": "node --test frontend/src/utils/extensiveReading.test.mjs frontend/src/utils/epubSource.test.mjs && python3 -m unittest discover -s tools -p test_reading_document.py && python3 -m unittest discover -s tools -p test_epub_document.py && python3 -m unittest discover -s tools -p test_source_reading.py",

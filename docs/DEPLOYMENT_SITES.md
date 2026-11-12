@@ -4,6 +4,30 @@
 
 同一源码提交构建两份 React：`reader/site/` 为国内应用，`reader/site-intl/` 为国际应用；`reader/blog/` 为国内独立 Astro 博客。部署包同时包含三份构建产物与共享 Python 后端。国内构建单独检查商业接口残留，国际构建允许商业模块。
 
+2026-11-12 用户已验收国内主页与 `10ye.cc` 流程，确认将双入口与博客调整合并至实际默认主分支 `main`（仓库没有 `master`）。该验收不替代真实支付渠道联调与国内域名HTTPS的既有待办。
+
+## 后续修改如何划分
+
+保持一个 `main` 主线，按需求创建短期分支；国内/国际通过构建入口组合差异，不建立长期分叉的业务代码。
+
+| 修改范围 | 代码与判断依据 | 必须验证 |
+| --- | --- | --- |
+| 共享核心 | 两站共用的阅读器、书架、内容管理、学习记录、账号、资源；`frontend/src/` 中实际被两入口使用的组件/页面/hooks/utils，以及 `tools/saas_*.py` 中共享服务和数据模型 | 国内与国际的相关流程、权限与数据一致性；只改一次核心实现 |
+| 国内扩展 | `frontend/src/sites/cn/index.jsx` 选出的国内页面/品牌/路由；目前也复用 `frontend/src/pages/PublicSite.jsx` 等目录外文件。`blog/` 是独立公开博客 | 国内博客/阅读入口、国内商业路径拒绝；共享调用未被破坏 |
+| 国际扩展 | `frontend/src/sites/intl/`、`frontend/public-intl/` 和国际可信入口下的商业服务 | 国际首页/会员/订单/支付相关流程与权限；国内产物仍无国际商业依赖 |
+
+开始修改时先声明范围并检查实际引用链，目录只是线索。Vite配置 `frontend/vite.config.js` 将 `@site` 指向 `sites/cn|intl/index.jsx`；共享页面通过这个接口组合站点能力。不要把国际模块直接导入共享核心，也不要复制共享业务到各站目录。后端仍是一套服务，站点专属行为须保留 `saas_sites.py` 等服务端门禁，数据迁移兼容两入口。
+
+## 每次程序发布的固定约定
+
+- 无论本轮改共享核心、某站扩展或博客，都以**同一源码提交、一个发布包、一个发布版本**同时交付国内前端、国际前端、博客与共享后端。
+- `build_code_package()` 调用 `build_frontend_assets()` → `npm run build:sites`（依次构建国内/国际），再调用 `build_blog_assets()`。任一构建失败即停止，产物校验包含国内商业隔离与国际产物完整性。
+- 双前端与共享后端先在候选端口验收，全部通过后统一更新 `current` 并重建两入口。这里是整体切换流程，不保证零停机；失败走整体回退，不能只留下一个入口的新版本。
+- 日常命令是 `npm run deploy:jdcloud -- --identity-file <已授权私钥路径>`；已改为 `--upgrade` 保数据升级。该命令读取远端 `sites.json` 恢复双入口与端口，无需分别执行两次发布。完整 `--saas`/重装仅用于单独授权的初始化场景。
+- 发布后核对两入口、博客、共享API及运行版本，并按改动验证相关业务。不要只验证本轮修改的首页。构建产物不手工提交，也不单独替换线上文件。
+
+以下为当前网络与端口配置：
+
 | 入口 | 域名 | 进程/容器 | 正式端口 | 候选回环端口 |
 | --- | --- | --- | --- | --- |
 | 国内博客与阅读应用 | `rynenglish.com`、`learn.rynenglish.com` | `shiyue-saas-frontend` | HTTP 5174 | HTTP 15174 |
@@ -23,6 +47,15 @@ Cloudflare 原国际回源 `http://localhost:5173` 保持不变；国内 Nginx �
 前端各自只读取 `shared/config/frontend-cn.env` 或 `frontend-intl.env`，其中仅包含本站 `FRONTEND_SITE_TOKEN`，权限 0600。前端容器不读取数据库、支付密钥或另一站入口凭据。令牌由入口覆盖注入，不能相信浏览器自报站点。
 
 ## 保数据升级
+
+日常同时升级国内、国际、博客及共享后端：
+
+```bash
+PATH=/Users/elonlee/.nvm/versions/node/v24.14.0/bin:$PATH \
+npm run deploy:jdcloud -- --identity-file <已授权私钥路径>
+```
+
+服务器已保存 `https_deferred:true` 时继续保留国内HTTPS待办；该命令不会把初始化重装作为默认路径。若本机默认Python缺少项目依赖，直接用 `.local/saas-venv/bin/python tools/deploy_remote.py --target 1 --upgrade --identity-file <已授权私钥路径>`，与npm命令使用同一发布流程。
 
 首次显式启用双入口：
 
