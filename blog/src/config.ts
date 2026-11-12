@@ -4,7 +4,7 @@ export const themeConfig: ThemeConfig = {
   site: {
     title: '纸间微光',
     subtitle: '一页一光，静读慢行。',
-    description: '记录阅读中的问题、写作中的推敲，以及日常文字里的微小发现。一个安静的个人博客。',
+    description: '一个关于 AI、阅读与日常思考的个人博客。记录概念、提问与实践，让细小的发现有处可放。',
     i18nTitle: false,
     author: '纸间微光',
     url: 'https://rynenglish.com',

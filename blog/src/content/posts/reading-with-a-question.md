@@ -1,6 +1,7 @@
 ---
 title: 给阅读留下一个问题
 published: 2026-11-11
+category: ai-reading
 description: 不急着摘录漂亮句子，先找出一处尚未理解的地方。一个具体问题，往往能让阅读笔记更有方向。
 tags: [阅读笔记, 阅读方法]
 lang: zh

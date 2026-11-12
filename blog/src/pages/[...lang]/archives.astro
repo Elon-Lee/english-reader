@@ -1,0 +1,13 @@
+---
+import { allLocales } from '@/config'
+import { categories, getCategory } from '@/categories'
+import { getLangFromLocale, getLangRouteParam } from '@/i18n/lang'
+import { getPostPath } from '@/i18n/path'
+import Layout from '@/layouts/Layout.astro'
+import { getPosts } from '@/utils/content'
+export function getStaticPaths() { return allLocales.map(lang => ({ params: { lang: getLangRouteParam(lang) } })) }
+const lang = getLangFromLocale(Astro.currentLocale)
+const posts = await getPosts(lang)
+const years = [...new Set(posts.map(post => post.data.published.getFullYear()))]
+---
+<Layout postTitle="文章归档"><section class="page-heading"><p class="eyebrow">每一页，都有来处</p><h1>文章归档</h1><p>共 {posts.length} 篇手记，收在 {categories.length} 个栏目里。按时间，慢慢翻阅。</p></section>{years.map(year => <section class="archive-section"><h2>{year}<span> / {posts.filter(post => post.data.published.getFullYear() === year).length} 篇</span></h2><ol>{posts.filter(post => post.data.published.getFullYear() === year).map(post => <li class="archive-entry"><time datetime={post.data.published.toISOString()}>{post.data.published.toISOString().slice(5, 10)}</time><a href={getPostPath(post.data.abbrlink || post.id, lang)}>{post.data.title}</a><a class="archive-category" href={`/categories/${post.data.category}/`}>{getCategory(post.data.category).title}</a></li>)}</ol></section>)}</Layout>

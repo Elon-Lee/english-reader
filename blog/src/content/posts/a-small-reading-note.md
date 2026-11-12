@@ -1,6 +1,7 @@
 ---
 title: 一张小纸条，也能成为阅读笔记
 published: 2026-11-11
+category: ai-reading
 description: 用观察、解释和下一步三个小格子，给阅读留下一份能够重新找到的记录。
 tags: [阅读笔记, 写作]
 lang: zh

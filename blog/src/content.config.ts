@@ -2,6 +2,7 @@ import { glob } from 'astro/loaders'
 import { z } from 'astro/zod'
 import { defineCollection } from 'astro:content'
 import { allLocales, themeConfig } from '@/config'
+import { categorySlugs } from '@/categories'
 
 const posts = defineCollection({
   loader: glob({ pattern: '**/*.{md,mdx}', base: './src/content/posts' }),
@@ -9,6 +10,7 @@ const posts = defineCollection({
     // required
     title: z.string(),
     published: z.date(),
+    category: z.enum(categorySlugs),
     // optional
     description: z.string().optional().default(''),
     updated: z.preprocess(

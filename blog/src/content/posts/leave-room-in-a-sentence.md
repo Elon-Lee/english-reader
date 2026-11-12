@@ -1,6 +1,7 @@
 ---
 title: 修改一句话，从减轻它的负担开始
 published: 2026-11-11
+category: ai-reading
 description: 一句话里装进太多判断，读者就需要反复返回。修改时先找出核心意思，再安排细节和语气。
 tags: [写作, 文字推敲]
 lang: zh

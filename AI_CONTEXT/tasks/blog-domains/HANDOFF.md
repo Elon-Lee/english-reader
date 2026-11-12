@@ -4,6 +4,10 @@
 
 ## 国内/国际入口变更
 
+- 2026-11-12 AI手记改版：用户确认纸色手记方案，分支 `feat/dual-entry-commerce`。新增4个一级栏目（AI入门/提示词手记/AI与阅读/实践与思考）、12篇当日原创文章，原3篇阅读随笔保留URL并归入AI与阅读，共15篇。首页改为横向导航、书页SVG首屏、栏目卡片、精选、最新6篇及个人侧栏；新增完整归档与分类路由，关于页同步定位。
+- 分类定义 `blog/src/categories.ts`，内容schema强制category枚举。文章正文保留目录和标签、暗色切换；资源全本地。参考资料仅允许验证脚本中4个精确原始资料URL，主站仍无业务链接/API或访客差异。
+- 本地Astro类型检查0错误/警告，静态构建及输出验证通过（41页面/15文章），Chrome验证4栏目、阅读栏目6篇、归档15篇、目录展开/暗色切换及390px无横向溢出，无pageerror。截图 `/private/tmp/ai-journal-{home,dark,post}.png`。源码完成后按现有保数据升级发布；本次线上状态待验收后填写。
+
 - 用户已确认国际恢复原完整流程；国内博客和learn继续保持本任务边界。双前端共享同一业务后端，国际回环5173、国内回环5174，国内Nginx随发布改转5174。
 - 本轮实际发布状态优先看 [双入口交接](../dual-entry-commerce/HANDOFF.md)，端口与升级配置见 `docs/DEPLOYMENT_SITES.md`。下方11月11日数据为本轮前基线。
 - 主站不链接阅读子站，不代理API；所有User-Agent返回一致，不按爬虫或访客差异呈现。域名拆分不替代备案和实际服务合规要求。
@@ -41,4 +45,4 @@
 - `tools/saas_frontend_server.py` 根据 `APP_DOMAIN`、`BLOG_DOMAIN`、`BLOG_ROOT` 精确分站；主站独立静态目录，应用保留原 API 与鉴权。
 - `tools/deployment/manager.py` 构建双站、备份数据库与站点配置、候选检查、切换失败回退。`shared/config/sites.json` 持久化双域名与 `https_deferred`，后续升级优先恢复该配置。
 - `tools/deployment/https_entry.py` 支持主/子域各自证书和续期；待两域 DNS 与京东云放行完成后，仅补装 HTTPS，不重装或导入数据库。
-- 博客当前含三篇原创方法笔记，不虚构个人经历；备案号配置为空，取得真实号码后填写 `blog/src/config.ts` 的 `icpRecord` 并重新构建发布。
+- 博客当前共15篇手记，不虚构个人经历；写作与栏目维护见 `blog/README.md`。备案号配置为空，取得真实号码后填写 `blog/src/config.ts` 的 `icpRecord` 并重新构建发布。
