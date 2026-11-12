@@ -8,4 +8,4 @@
 - [x] 修改Layout/Header/Navbar/Footer/Button布局，增加PostCard与本地书页SVG；首页加入hero、栏目入口、最新文章、个人侧栏。
 - [x] `verify-output.mjs` 检查至少15篇、4分类每类>=3、分类归属、归档/Feed数量、首页组件与现有隔离；仅允许文章参考资料的精确官方URL，资源保持本地。
 - [x] Node24执行 `npm --prefix blog run build && npm --prefix blog run verify`，浏览器桌面检查首页/分类/归档/正文/明暗切换，无pageerror或断链；检查小屏基础可用，不做独立移动端视觉优化。
-- [ ] 更新交接并提交源码，保数据发布；公网IP博客检查及国际健康验证，恢复本轮生成的已跟踪React产物，不提交产物。
+- [x] 更新交接并提交源码 `e8b1ccd`，京东云#19保数据发布；40个正常公网页面逐页校验、本地/公网Chrome及国际健康验证通过，数据库数量保持，恢复本轮生成的已跟踪React产物，不提交产物。

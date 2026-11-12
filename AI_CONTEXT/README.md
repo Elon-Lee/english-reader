@@ -23,7 +23,7 @@
 - 国内/国际并行在 `feat/dual-entry-commerce` 实施：国际回环5173、国内5174、共享回环API8790。用户已授权国内5174监听0.0.0.0供IP博客预览，配置 `cn_public_preview:true`；实际发布状态以 [双入口交接](tasks/dual-entry-commerce/HANDOFF.md) 为准，端口文档见 `docs/DEPLOYMENT_SITES.md`。
 - 私域改造提交 `810f19a` 已推送至 `origin/refactor/private-paper-glow`；未合并，详见 [私域改造交接](tasks/private-paper-glow/HANDOFF.md)。其后双站分支 `feat/paper-glow-blog-domains` 的实现 `3c0c77b` 已随任务 #16 发布京东云源站，公网 HTTPS 尚待 DNS 与域名放行。本地栈入口 `http://127.0.0.1:4173`。
 - 国内品牌为“纸间微光”，标语“一页一光，静读慢行。”；国际恢复RynEnglish首页与商业素材，通过独立构建隔离。
-- 京东云 #18 已保数据升级，`current=code-20261112-143047-2b622ca0`、源码 `0e0ea91`，迁移0045；国际公网HTTPS和国内IP博客预览验收通过，数据保留。国内learn解析、京东云域名放行/HTTPS及真实支付渠道仍待外部条件，详见双入口交接。
+- 京东云最新 #19 已保数据升级，`current=code-20261112-180050-05f3c3a1`、源码 `e8b1ccd`，迁移0045。博客改为纸色个人手记，4个AI栏目/12篇新文/共15篇，40个正常公网页面与本地产物逐页一致；IP5174可预览，国际健康正常，数据保留。详见博客分站交接；国内learn解析、京东云域名放行/HTTPS及真实支付渠道仍待外部条件。
 - PC 优先，移动端视觉优化仍待后续独立任务；保留原音播放，不以浏览器 TTS 替代。
 
 ## 任务索引

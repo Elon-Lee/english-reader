@@ -19,6 +19,8 @@
 
 ## 验证与发布状态
 
+- 最新为博客改版发布 **#19 complete**，`current=code-20261112-180050-05f3c3a1`、源码 `e8b1ccd`（clean）。仅改博客展示与内容，双入口配置/端口保持；国际公网健康正常、数据仍1用户/2书目/2内容书/0支付订单/0订阅。四个AI栏目、12篇新文、40个正常公网页面验收见 [博客交接](../blog-domains/HANDOFF.md)。下方#17/#18为业务恢复和端口开放时验证记录。
+
 - 前端双构建、源码/产物隔离、UI/modern/JS检查通过；隔离Chrome fixtures覆盖首页素材、失败重试、购买深链、会员空订单、下单轮询和邀请码必填，无页面异常。fixtures不是正式收款验收。
 - 真实隔离PG/HTTP覆盖两站同账号、偏好一致、统一用量、国内商业404、国际鉴权、伪造内部头拒绝与两站无邀请码400。
 - 独立审查发现支付宝notify国际地址门禁、journey购买恢复缺失，已修正并复核通过；同步更新旧国内journey测试的404预期。
@@ -34,7 +36,7 @@
 ## 接续与外部条件
 
 - 用户要求5174监听所有IPv4供测试，已增加 `cn_public_preview` 显式配置与固定IP博客预览。开启时国内正式进程0.0.0.0:5174，IP仅映射静态博客，域名分站/国际回环/候选回环不变。实现见 `saas_frontend_server.py`、`deployment/manager.py`，运维说明见部署文档。
-- **最新发布#18 complete**：`current=code-20261112-143047-2b622ca0`，源码 `0e0ea91`（clean），包SHA-256 `cd6517ff8b78aa160b9e75723cc940d889c630a720e0e9c4db401636c32656ab`。持久化sites.json已开启 `cn_public_preview:true`；修改前配置备份 `shared/config/sites-before-public-preview-20261112.json`。
+- **端口开放发布#18 complete**：`current=code-20261112-143047-2b622ca0`，源码 `0e0ea91`（clean），包SHA-256 `cd6517ff8b78aa160b9e75723cc940d889c630a720e0e9c4db401636c32656ab`。持久化sites.json已开启 `cn_public_preview:true`；修改前配置备份 `shared/config/sites-before-public-preview-20261112.json`。
 - 本轮34项入口/部署相关测试、120项完整部署回归、Python编译、diff-check、发布双构建/博客隔离及候选检查通过。公网 `http://117.72.209.44:5174/` 和3个入口资源均200，Chrome实际打开无页面异常；IP API404、learn登录200、国际200与公网健康正常。实际监听0.0.0.0:5174，5173/8790仍127.0.0.1，数据仍1用户/2书目/2内容书。浏览器截图 `/private/tmp/cn-public-preview-20261112.png`。
 - 后续普通保数据升级自动读取sites.json v2；不要完整重装。源码与两份前端使用同一提交，共同阅读业务只改一次。
 - 待用户配置learn A=`117.72.209.44`及京东云域名放行后，补装国内两域HTTPS/续期并严格公网验收；按 `docs/DEPLOYMENT_SITES.md` 读取保存的5174端口。
