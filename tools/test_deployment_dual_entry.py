@@ -21,6 +21,23 @@ def target(**updates):
 
 
 class DualEntryDeploymentTests(unittest.TestCase):
+    def test_explicit_cn_public_preview_keeps_international_and_candidates_private(self):
+        item=target(cn_public_preview=True)
+        public=shlex.split(manager.saas_frontend_run_command(item,'/srv/shiyue/current'))
+        self.assertIn('FRONTEND_HOST=0.0.0.0',public)
+        self.assertIn('BLOG_PREVIEW_HOST=192.0.2.1',public)
+        for site,name in [('intl','shiyue-saas-frontend-intl'),('cn','shiyue-saas-frontend-candidate')]:
+            args=shlex.split(manager.saas_frontend_run_command(item,'/srv/shiyue/current',name=name,site=site))
+            self.assertIn('FRONTEND_HOST=127.0.0.1',args)
+            self.assertFalse(any(arg.startswith('BLOG_PREVIEW_HOST=') for arg in args))
+        scripts=[]
+        manager.save_remote_site_config(SimpleNamespace(ssh=lambda s:scripts.append(s)),item)
+        args=shlex.split(scripts[0])
+        values=json.loads(args[args.index('%s\\n')+1])
+        self.assertTrue(values['cn_public_preview'])
+        remote=SimpleNamespace(ssh=lambda _: 'SHIYUE_SITES_CONFIG\n'+json.dumps(values))
+        self.assertTrue(manager.saas_https_target(remote,item)['cn_public_preview'])
+
     def test_release_metadata_ignores_built_output_changes_but_reports_source_changes(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp)

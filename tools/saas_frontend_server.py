@@ -22,6 +22,7 @@ PORT = int(os.environ.get("FRONTEND_PORT", "5173"))
 PROXY_PREFIXES = ("/api/", "/books/")
 APP_DOMAIN = os.environ.get("APP_DOMAIN", "").strip().lower()
 BLOG_DOMAIN = os.environ.get("BLOG_DOMAIN", "").strip().lower()
+BLOG_PREVIEW_HOST = os.environ.get('BLOG_PREVIEW_HOST', '').strip()
 BLOG_ROOT = Path(os.environ["BLOG_ROOT"]).resolve() if os.environ.get("BLOG_ROOT") else None
 FRONTEND_SITE = os.environ.get('FRONTEND_SITE', 'cn')
 SITE_TOKEN = os.environ.get('FRONTEND_SITE_TOKEN', '') or os.environ.get(
@@ -70,6 +71,8 @@ class FrontendHandler(BaseHTTPRequestHandler):
         except ValueError:
             return None
         if BLOG_ROOT and host == BLOG_DOMAIN:
+            return 'blog'
+        if BLOG_ROOT and FRONTEND_SITE == 'cn' and BLOG_PREVIEW_HOST and host == BLOG_PREVIEW_HOST:
             return 'blog'
         if host == APP_DOMAIN:
             return 'app'
@@ -231,6 +234,8 @@ class FrontendHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    if BLOG_PREVIEW_HOST:
+        BLOG_PREVIEW_HOST = str(ipaddress.ip_address(BLOG_PREVIEW_HOST))
     if FRONTEND_SITE not in {'cn', 'intl'}:
         raise ValueError('FRONTEND_SITE must be cn or intl')
     if FRONTEND_SITE == 'intl' and not SITE_TOKEN:

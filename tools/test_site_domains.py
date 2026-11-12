@@ -82,6 +82,19 @@ class SiteDomainsTests(unittest.TestCase):
                 self.assertNotIn(b'learn.rynenglish.com', body)
         self.assertEqual(Backend.calls, [])
 
+    def test_explicit_ip_preview_only_serves_blog_and_never_proxies(self):
+        with patch.object(frontend, 'BLOG_PREVIEW_HOST', '192.0.2.1', create=True):
+            status, _, body = self.request(host='192.0.2.1:5174')
+            self.assertEqual(status, 200)
+            self.assertIn('纸间微光'.encode(), body)
+            for path in ['/api/health', '/api/auth/me', '/login', '/app', '/private.js']:
+                self.assertEqual(self.request(path, host='192.0.2.1:5174')[0], 404)
+            self.assertEqual(self.request('/api/auth/login', host='192.0.2.1:5174', method='POST')[0], 404)
+            self.assertEqual(self.request(host='192.0.2.2:5174')[0], 421)
+            with patch.object(frontend, 'FRONTEND_SITE', 'intl'):
+                self.assertEqual(self.request(host='192.0.2.1:5174')[0], 421)
+        self.assertEqual(Backend.calls, [])
+
     def test_blog_never_proxies_api_or_serves_app(self):
         for path in ['/api/health', '/api/auth/me', '/api', '/login', '/app', '/books/a', '/private.js']:
             with self.subTest(path=path):

@@ -550,6 +550,7 @@ def saas_frontend_run_command(target,release_path,name="shiyue-saas-frontend",po
     if site not in ('cn','intl'):raise ValueError('未知前端站点')
     dual=bool(target.get('intl_domain'))
     if site=='intl' and not dual:raise ValueError('国际入口未配置')
+    public_preview=bool(dual and site=='cn' and target.get('cn_public_preview') and not name.endswith('-candidate'))
     root=shlex.quote(target["remote_root"]);release=shlex.quote(release_path)
     default_port=target.get('intl_frontend_port',SAAS_FRONTEND_PORT) if site=='intl' else target.get('frontend_port',SAAS_CN_FRONTEND_PORT if dual else SAAS_FRONTEND_PORT)
     port=int(port or default_port);backend_port=int(backend_port or SAAS_BACKEND_PORT)
@@ -557,7 +558,7 @@ def saas_frontend_run_command(target,release_path,name="shiyue-saas-frontend",po
     options=[f"docker run -d --name {shlex.quote(name)}"]
     if restart:options.append("--restart unless-stopped")
     assets='site-intl' if site=='intl' else 'site'
-    options += ["--network host",f"-e FRONTEND_HOST={'127.0.0.1' if dual else '0.0.0.0'}",f"-e FRONTEND_PORT={port}",f"-e SAAS_BACKEND_URL=http://127.0.0.1:{backend_port}","-e FRONTEND_ROOT=/app/site",f"-v {release}/reader/{assets}:/app/site:ro,z",f"-v {release}/tools:/app/tools:ro,z",shlex.quote(SAAS_IMAGE),"python3","/app/tools/saas_frontend_server.py"]
+    options += ["--network host",f"-e FRONTEND_HOST={'0.0.0.0' if public_preview or not dual else '127.0.0.1'}",f"-e FRONTEND_PORT={port}",f"-e SAAS_BACKEND_URL=http://127.0.0.1:{backend_port}","-e FRONTEND_ROOT=/app/site",f"-v {release}/reader/{assets}:/app/site:ro,z",f"-v {release}/tools:/app/tools:ro,z",shlex.quote(SAAS_IMAGE),"python3","/app/tools/saas_frontend_server.py"]
     if dual:options[-3:-3]=[f'--env-file {root}/shared/config/frontend-{site}.env',f'-e FRONTEND_SITE={site}']
     if target.get("use_https",0) and not dual:options[-3:-3]=[f"-e FRONTEND_TLS_CERT=/certs/server-cert.pem",f"-e FRONTEND_TLS_KEY=/certs/server-key.pem",f"-v {root}/shared/https:/certs:ro,z"]
     if site=='intl':options[-3:-3]=[f"-e APP_DOMAIN={normalize_domain(target['intl_domain'])}"]
@@ -566,6 +567,7 @@ def saas_frontend_run_command(target,release_path,name="shiyue-saas-frontend",po
         blog_domain=normalize_domain(target['blog_domain'])
         if not app_domain or app_domain==blog_domain:raise ValueError('双站需要不同的应用域名和博客域名')
         options[-3:-3]=[f"-e APP_DOMAIN={app_domain}",f"-e BLOG_DOMAIN={blog_domain}","-e BLOG_ROOT=/app/blog",f"-v {release}/reader/blog:/app/blog:ro,z"]
+        if public_preview:options[-3:-3]=[f"-e BLOG_PREVIEW_HOST={ipaddress.ip_address(target['host'])}"]
     return " \\\n  ".join(options)
 
 def saas_health_check_command(port,container="shiyue-saas"):
@@ -660,6 +662,9 @@ def saas_https_target(remote,target):
             intl_port=int(settings.get('intl_frontend_port',SAAS_FRONTEND_PORT))
             if not (1<=cn_port<=65535 and 1<=intl_port<=65535) or cn_port==intl_port:raise ValueError('前端端口无效')
             effective.update(intl_domain=intl_domain,frontend_port=cn_port,intl_frontend_port=intl_port,service_port=cn_port,use_https=0)
+            if 'cn_public_preview' in settings:
+                if not isinstance(settings['cn_public_preview'],bool):raise ValueError('国内公网预览配置无效')
+                effective['cn_public_preview']=settings['cn_public_preview']
     if not effective.get("public_domain"):
         manifest=f"{target['remote_root']}/shared/config/https-entry.json"
         output=remote.ssh(f"if test -s {shlex.quote(manifest)}; then echo SHIYUE_HTTPS_ENTRY_CONFIG; cat {shlex.quote(manifest)}; fi")
@@ -680,6 +685,7 @@ def save_remote_site_config(remote,target):
     if target.get('intl_domain'):
         values.update(version=2,intl_domain=normalize_domain(target['intl_domain']),
                       frontend_port=int(target['frontend_port']),intl_frontend_port=int(target['intl_frontend_port']))
+        if target.get('cn_public_preview'):values['cn_public_preview']=True
     path=shlex.quote(target['remote_root']+'/shared/config/sites.json')
     payload=shlex.quote(json.dumps(values,sort_keys=True))
     remote.ssh(f"set -e; umask 022; printf '%s\\n' {payload} > {path}.tmp; chmod 644 {path}.tmp; mv -f {path}.tmp {path}")

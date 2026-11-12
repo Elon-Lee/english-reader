@@ -4,13 +4,15 @@
 
 同一源码提交构建两份 React：`reader/site/` 为国内应用，`reader/site-intl/` 为国际应用；`reader/blog/` 为国内独立 Astro 博客。部署包同时包含三份构建产物与共享 Python 后端。国内构建单独检查商业接口残留，国际构建允许商业模块。
 
-| 入口 | 域名 | 进程/容器 | 正式回环端口 | 候选回环端口 |
+| 入口 | 域名 | 进程/容器 | 正式端口 | 候选回环端口 |
 | --- | --- | --- | --- | --- |
 | 国内博客与阅读应用 | `rynenglish.com`、`learn.rynenglish.com` | `shiyue-saas-frontend` | HTTP 5174 | HTTP 15174 |
 | 国际应用 | `10ye.cc` | `shiyue-saas-frontend-intl` | HTTP 5173 | HTTP 15173 |
 | 共享 API | 仅内部访问 | `shiyue-saas` | HTTP 8790 | HTTP 18790 |
 
 Cloudflare 原国际回源 `http://localhost:5173` 保持不变；国内 Nginx 按已知 Host 转到 5174。国际前端只接受国际域名，国内博客不暴露应用 API，未知 Host 拒绝访问。两个前端共享账号、数据库、Redis、媒体与同一套后端；Cookie 在各注册域分别登录。
+
+用户授权测试时，`sites.json` 中 `cn_public_preview:true` 令国内正式5174监听 `0.0.0.0`，并将部署节点的固定IP Host映射到静态博客。当前预览地址 `http://117.72.209.44:5174/`，不提供IP登录或API。域名分站保持原规则，国际5173和所有候选端口仍仅回环。后续升级恢复该设置；测试结束可删除该键或设为false后重建国内前端，恢复回环监听。公网是否可达还取决于实际云安全组和网络放行。
 
 ## 配置与凭据
 
