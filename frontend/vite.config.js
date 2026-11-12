@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'node:path'
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
 // Self-host PDF fonts, CMaps and image decoders, including offline Linux installs.
@@ -25,9 +25,55 @@ function pdfResources() {
   }
 }
 
-export default defineConfig({
+// Shared captcha and reader assets remain maintained once; international
+// marketing assets live only in public-intl and never enter the domestic build.
+function sharedPublicResources(international) {
+  if (!international) return { name: 'shiyue-domestic-public' }
+  const root = resolve(process.cwd(), 'frontend/public')
+  const files = new Map()
+  const visit = (directory, prefix = '') => {
+    for (const name of readdirSync(directory)) {
+      const path = resolve(directory, name)
+      const relative = `${prefix}${name}`
+      if (statSync(path).isDirectory()) visit(path, `${relative}/`)
+      else files.set(`/${relative}`, path)
+    }
+  }
+  visit(root)
+  return {
+    name: 'shiyue-shared-public',
+    generateBundle() {
+      for (const [url, path] of files) this.emitFile({ type: 'asset', fileName: url.slice(1), source: readFileSync(path) })
+    },
+    configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        const path = files.get(request.url?.split('?')[0])
+        if (!path) return next()
+        const types = { css: 'text/css', js: 'application/javascript', svg: 'image/svg+xml', png: 'image/png', jpeg: 'image/jpeg' }
+        response.setHeader('Content-Type', types[path.split('.').at(-1)] || 'application/octet-stream')
+        response.end(readFileSync(path))
+      })
+    },
+  }
+}
+
+export default defineConfig(({ mode }) => {
+  const international = mode === 'intl'
+  const site = international ? 'intl' : 'cn'
+  return {
   root: resolve(process.cwd(), 'frontend'),
-  plugins: [react(), pdfResources(), {
+  publicDir: resolve(process.cwd(), international ? 'frontend/public-intl' : 'frontend/public'),
+  resolve: { alias: { '@site': resolve(process.cwd(), `frontend/src/sites/${site}/index.jsx`) } },
+  plugins: [react(), pdfResources(), sharedPublicResources(international), {
+    name: 'shiyue-site-metadata',
+    transformIndexHtml(html) {
+      if (!international) return html
+      return html.replaceAll('纸间微光', 'RynEnglish')
+        .replaceAll('记录阅读与学习的点滴。仅向受邀使用者开放的个人阅读空间。', '原声听读、逐句精读与生词复习。选择适合你的学习空间。')
+        .replaceAll('https://learn.rynenglish.com/', 'https://10ye.cc/')
+        .replaceAll('/brand/paper-glow-mark.svg?v=20261109', '/brand/rynenglish-mark.svg?v=20261106-re2')
+    },
+  }, {
     name: 'shiyue-entry-cache-version',
     enforce: 'post',
     generateBundle(_, bundle) {
@@ -58,7 +104,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: resolve(process.cwd(), 'reader/site'),
+    outDir: resolve(process.cwd(), international ? 'reader/site-intl' : 'reader/site'),
     emptyOutDir: true,
     rollupOptions: {
       input: resolve(process.cwd(), 'frontend/index.html'),
@@ -79,4 +125,5 @@ export default defineConfig({
       },
     },
   },
+  }
 })

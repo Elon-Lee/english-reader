@@ -1,9 +1,16 @@
 # 平台运营与部署交接
 
-## 2026-11-11 双站源站发布（当前有效）
+## 2026-11-12 国内/国际并行（当前优先）
+
+- 用户已确认恢复国际完整流程并保数据发布，实施分支 `feat/dual-entry-commerce`。本轮发布进度以 [双入口交接](../dual-entry-commerce/HANDOFF.md) 为准；下方11月11日状态为发布前基线。
+- 国际 `10ye.cc` 回环5173、国内主域博客/learn阅读回环5174、共享API8790；两个前端独立构建，同一数据库与公共业务。Cloudflare回源5173、国内Nginx改转5174。运维端口与升级约定见 `docs/DEPLOYMENT_SITES.md`。
+- 后续升级从 `sites.json` v2 恢复三域与双端口，保留支付配置；国内商业关闭、国际按真实渠道就绪门禁开放。两站仍要求邀请码，原个人账号资源不降低。
+- 双候选和正式检查失败整体恢复代码、配置、入口令牌、Nginx与前端拓扑；数据库只做兼容迁移，禁止用完整重装替代保数据升级。
+
+## 2026-11-11 双站源站发布（本轮前基线）
 
 - 用户授权先部署源站、稍后添加 DNS。任务 **#16 complete**，`current=/srv/shiyue/releases/code-20261111-152232-21f52fbd`，源码提交 `3c0c77b`，保留用户、媒体与密钥，迁移至 0044；6 个容器健康。数据库及站点配置备份见 [双站交接](../blog-domains/HANDOFF.md)。
-- 主域 `rynenglish.com` 仅提供 Astro/Retypeset 静态博客；阅读应用为 `learn.rynenglish.com`，`APP_BASE_URL` 已对应修改。`shared/config/sites.json` 持久化两域及 `https_deferred:true`，后续升级自动恢复；不要恢复旧 Cloudflare/10ye.cc 应用入口，未知 Host 返回 421。
+- 主域 `rynenglish.com` 仅提供 Astro/Retypeset 静态博客；阅读应用为 `learn.rynenglish.com`，`APP_BASE_URL` 已对应修改。该日 `sites.json` 保存两域及 `https_deferred:true`；11月12日用户另授权国际恢复，以顶部双入口方案为准。
 - 源站真实 Host 验收、用户/书目保留、验证码与原音 CPU 推理通过。主域 API/登录 404，阅读应用未登录会话 401。临时预览 `http://127.0.0.1:4331/` 经仅回环 SSH 转发访问实际京东云内容。
 - 公网 learn DNS 仍 NXDOMAIN，主域 HTTP 仍为 JDTP 403，域名证书和 443 尚未开通。待用户新增 learn A=`117.72.209.44` 并完成京东云放行后，只执行 `tools/deploy_remote.py --target 1 --https-entry --domain learn.rynenglish.com --identity-file <已授权私钥路径>`，恢复双站并安装各自证书/续期，无需重新部署数据库。
 - 节点 2 GB 内存，候选推理曾内存紧张并出现高 I/O 等待；已添加 `/var/lib/shiyue/paper-glow-deploy-20261111.swap` 的 1 GiB 临时 swap（0600），未配置开机启用，重启后需要恢复。失败任务 #14/#15 已回退，记录保留；#16 不跳过任何候选推理或分站检查。

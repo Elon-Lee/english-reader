@@ -9,7 +9,7 @@ import AuthSecuritySettings from '../components/AuthSecuritySettings'
 
 const { Paragraph, Text, Title } = Typography
 
-export default function AdminPage({ messageApi, adminData, onUpdateUserStatus, onVerifyUser, onDeleteUnverifiedUser, onCreateInvitation, onDeleteUnusedInvitations, onRevokeDevice, onExportAdminSummary }) {
+export default function AdminPage({ messageApi, adminData, onUpdateUserStatus, onVerifyUser, onDeleteUnverifiedUser, onCreateInvitation, onDeleteUnusedInvitations, onRevokeDevice, onExportAdminSummary, extraTabs = () => [] }) {
   const [activeTab, setActiveTab] = useState(() => new URLSearchParams(location.search).get('adminTab') === 'catalog' ? 'catalog' : 'overview')
   const [detailOpen, setDetailOpen] = useState(false)
   const [detail, setDetail] = useState(null)
@@ -98,6 +98,7 @@ export default function AdminPage({ messageApi, adminData, onUpdateUserStatus, o
   const removeExpiredInvitations = () => Modal.confirm({ title: '删除所有可清理的过期邀请码？', content: '仅删除过期、未使用且没有邀请奖励关联的邀请码，并写入审计记录。', okText: '删除过期码', cancelText: '取消', okButtonProps: { danger: true }, onOk: async () => { try { const result = await postJson('/api/admin/invitations/delete-expired', {}); messageApi.success(`已删除 ${result.deleted || 0} 个过期邀请码`); await loadInvitations() } catch (error) { messageApi.error(error.message || '清理过期邀请码失败'); throw error } } })
 
   const tabItems = [
+    ...extraTabs(activeTab, { messageApi }),
     { key: 'auth-security', label: '认证安全', children: activeTab === 'auth-security' ? <AuthSecuritySettings messageApi={messageApi} /> : null },
     { key: 'overview', label: '概览', children: <Space direction="vertical" size={20} style={{ width: '100%' }}>{metrics}<Card title="快捷操作"><Space wrap><Button onClick={() => setInviteOpen(true)}>创建邀请码</Button><Button icon={<FileTextOutlined />} onClick={onExportAdminSummary}>导出数据</Button></Space></Card></Space> },
     { key: 'media', label: '媒体资产', children: activeTab === 'media' ? <MediaAssetsAdmin messageApi={messageApi} /> : null },

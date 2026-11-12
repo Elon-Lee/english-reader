@@ -311,6 +311,8 @@ class SaaSService:
         return raw
 
     def register(self, email: Any, password: Any, invitation_code: Any, display_name: Any = "", ip_address: str = "") -> dict[str, Any]:
+        from saas_sites import current_site
+        commercial = current_site() == "intl"
         normalized_email = normalize_email(email)
         password_value = validate_password(password)
         code = re.sub(r"\s+", "", str(invitation_code or "").upper())
@@ -333,9 +335,9 @@ class SaaSService:
                     raise SaaSError("email_exists", "该邮箱已注册，请直接登录。", 409)
                 user_id = new_id()
                 cursor.execute(
-                    """INSERT INTO users(id,email,password_hash,display_name)
-                    VALUES(%s,%s,%s,%s)""",
-                    (user_id, normalized_email, hash_password(password_value), str(display_name or "").strip()[:100]),
+                    """INSERT INTO users(id,email,password_hash,display_name,account_resource_policy)
+                    VALUES(%s,%s,%s,%s,%s)""",
+                    (user_id, normalized_email, hash_password(password_value), str(display_name or "").strip()[:100], "commercial" if commercial else "private"),
                 )
                 cursor.execute(
                     "INSERT INTO invitation_uses(id,invitation_id,user_id,email,ip_address) VALUES(%s,%s,%s,%s,%s)",
@@ -389,7 +391,9 @@ class SaaSService:
                     (user["id"],),
                 )
                 user["is_admin"] = bool((self._one(cursor) or {}).get("is_admin"))
-                limit = device_limit()
+                from saas_resources import ResourceService
+                resources = ResourceService(self)
+                limit = int(resources._context(cursor, str(user["id"]), lock_user=False)["limits"]["devices"])
                 cursor.execute("SELECT * FROM devices WHERE user_id=%s AND device_key=%s FOR UPDATE", (user["id"], key))
                 device = self._one(cursor)
                 if not device or device["revoked_at"]:
@@ -660,8 +664,8 @@ class SaaSService:
         return self._send_mail(email, "重置 纸间微光 密码", f"请在 2 小时内打开以下链接重置密码：\n{url}\n\n纸间微光\n一页一光，静读慢行。\n")
 
     def _app_url(self, path: str) -> str:
-        base = self.environment.get("APP_BASE_URL", "").strip().rstrip("/")
-        return (base or "http://localhost:8765") + path
+        from saas_sites import app_base_url
+        return app_base_url(self.environment) + path
 
     def _send_mail(self, recipient: str, subject: str, text: str) -> bool:
         host = self.environment.get("SMTP_HOST", "").strip()

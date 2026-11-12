@@ -41,7 +41,7 @@ class DeploymentReleasePipelineTests(unittest.TestCase):
     def test_frontend_build_runs_production_script_and_checks_assets(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);(root/"package.json").write_text("{}")
-            required=("reader/site/index.html","reader/site/assets/index.js","reader/site/assets/index.css")
+            required=tuple(f'reader/{site}/{name}' for site in ('site','site-intl') for name in ('index.html','assets/index.js','assets/index.css'))
             for relative in required:
                 path=root/relative
                 path.parent.mkdir(parents=True,exist_ok=True);path.write_text("ok")
@@ -49,7 +49,7 @@ class DeploymentReleasePipelineTests(unittest.TestCase):
             completed=type("Completed",(),{"returncode":0,"stdout":"built\n","stderr":""})()
             with patch.object(manager,"ROOT",root),patch.object(manager.subprocess,"run",return_value=completed) as run:
                 manager.build_frontend_assets(Job())
-            self.assertEqual(run.call_args.args[0],["npm","run","build:modern"])
+            self.assertEqual(run.call_args.args[0],["npm","run","build:sites"])
             self.assertEqual(run.call_args.kwargs["cwd"],root)
 
     def test_frontend_build_rejects_missing_stylesheet(self):

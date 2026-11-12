@@ -24,8 +24,13 @@ SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
 def can_watch_hd_video(cursor: Any, user_id: str) -> bool:
-    """Playback quality is uniform; callers enforce account and asset access."""
-    return bool(user_id)
+    """Account entitlement is shared by both entry points."""
+    cursor.execute("""SELECT EXISTS(SELECT 1 FROM users u WHERE u.id=%s AND
+        (u.account_resource_policy='private' OR EXISTS(SELECT 1 FROM subscriptions s
+          JOIN plan_versions pv ON pv.id=s.plan_version_id JOIN plans p ON p.id=pv.plan_id
+          WHERE s.user_id=u.id AND s.status IN ('active','grace_period')
+            AND s.starts_at<=NOW() AND s.ends_at>NOW() AND p.slug<>'free')))""", (user_id,))
+    return bool(cursor.fetchone()[0])
 
 
 def as_json(value: Any) -> dict[str, Any]:
@@ -76,11 +81,35 @@ class ResourceService:
                 raise SaaSConfigurationError(f"RESOURCE_{feature.upper()} 必须为正整数。")
             self.limits[feature] = value
 
+    def resolve_limits(self, policy: str, paid_quotas: dict[str, Any] | None = None, free_quotas: dict[str, Any] | None = None) -> dict[str, int]:
+        limits = dict(self.limits)
+        if policy == 'commercial':
+            quotas = paid_quotas if paid_quotas is not None else (free_quotas or {})
+            for feature in FEATURES:
+                if feature not in AI_FEATURES and feature in quotas:
+                    limits[feature] = max(0, int(quotas[feature] or 0))
+        elif paid_quotas is not None:
+            for feature in FEATURES:
+                if feature not in AI_FEATURES:
+                    limits[feature] = max(limits[feature], int(paid_quotas.get(feature, 0) or 0))
+        return limits
+
     def _context(self, cursor: Any, user_id: str, lock_user: bool = True) -> dict[str, Any]:
-        cursor.execute(f"SELECT id,created_at,status FROM users WHERE id=%s {'FOR UPDATE' if lock_user else ''}", (user_id,))
+        cursor.execute(f"SELECT id,created_at,status,account_resource_policy FROM users WHERE id=%s {'FOR UPDATE' if lock_user else ''}", (user_id,))
         user = self.accounts._one(cursor)
         if not user or user["status"] != "active":
             raise SaaSError("account_unavailable", "账号不可用。", 403)
+        cursor.execute("""SELECT pv.quotas_json FROM subscriptions s
+            JOIN plan_versions pv ON pv.id=s.plan_version_id JOIN plans p ON p.id=pv.plan_id
+            WHERE s.user_id=%s AND s.status IN ('active','grace_period') AND s.starts_at<=NOW()
+              AND s.ends_at>NOW() AND p.slug<>'free'
+            ORDER BY pv.rank DESC,s.ends_at DESC,s.created_at DESC LIMIT 1""", (user_id,))
+        paid = self.accounts._one(cursor)
+        free = None
+        if user['account_resource_policy'] == 'commercial' and not paid:
+            cursor.execute("SELECT quotas_json FROM plan_versions WHERE id='free-v2'")
+            free = self.accounts._one(cursor)
+        limits = self.resolve_limits(user['account_resource_policy'], as_json(paid['quotas_json']) if paid else None, as_json(free['quotas_json']) if free else None)
         local_now = utcnow().astimezone(SHANGHAI)
         start = datetime.combine(local_now.date(), datetime.min.time(), tzinfo=SHANGHAI)
         period_key = f"resource-day:{local_now.date().isoformat()}"
@@ -88,21 +117,23 @@ class ResourceService:
             VALUES(%s,%s,%s,%s,%s,%s::jsonb)
             ON CONFLICT(user_id,period_key) DO UPDATE SET limits_json=EXCLUDED.limits_json""",
             (new_id(), user_id, period_key, start.astimezone(timezone.utc),
-             (start + timedelta(days=1)).astimezone(timezone.utc), json.dumps(self.limits)))
+             (start + timedelta(days=1)).astimezone(timezone.utc), json.dumps(limits)))
         cursor.execute("SELECT * FROM usage_periods WHERE user_id=%s AND period_key=%s FOR UPDATE", (user_id, period_key))
         period = self.accounts._one(cursor)
         if not period:
             raise RuntimeError("resource period creation failed")
-        return {"user": user, "period": period}
+        return {"user": user, "period": period, "paid": bool(paid), "limits": limits,
+                "canWatchHdVideo": user['account_resource_policy'] == 'private' or bool(paid)}
 
     def _quota_context(self, cursor: Any, context: dict[str, Any], feature: str) -> dict[str, Any]:
         return context
 
     def _public_context(self, cursor: Any, context: dict[str, Any], include_usage: bool = False) -> dict[str, Any]:
         period = context["period"]
-        result = {"limits": dict(self.limits), "canWatchHdVideo": True,
+        limits = as_json(period['limits_json'])
+        result = {"limits": limits, "canWatchHdVideo": context.get('canWatchHdVideo', True),
                   "period": {"startsAt": timestamp(period["starts_at"]), "endsAt": timestamp(period["ends_at"])},
-                  "mediaCapacity": self._media_capacity(cursor, context["user"]["id"], self.limits)}
+                  "mediaCapacity": self._media_capacity(cursor, context["user"]["id"], limits)}
         if include_usage:
             result["usage"] = [self._feature_summary(cursor, context, feature) for feature in FEATURES]
         return result
@@ -138,6 +169,10 @@ class ResourceService:
         context = self._quota_context(cursor, context, feature)
         limits = as_json(context["period"]["limits_json"])
         limit = int(limits.get(feature, 0))
+        if feature in AI_FEATURES and context.get('paid'):
+            net_used, reserved = self._usage_numbers(cursor, context['period']['id'], feature)
+            return {'feature': feature, 'limit': None, 'used': max(0, net_used), 'credits': max(0, -net_used),
+                    'reserved': reserved, 'available': None, 'unlimited': True, 'resetAt': None}
         if feature in {"video_library_capacity", "audio_library_capacity"}:
             media_type = "video" if feature.startswith("video_") else "audio"
             used = self._media_library_count(cursor, str(context["user"]["id"]), media_type)
@@ -226,7 +261,7 @@ class ResourceService:
                     return {"reservation": self._reservation(existing), "resources": self._public_context(cursor, context, True), "idempotent": True}
                 quota_context = self._quota_context(cursor, context, feature)
                 summary = self._feature_summary(cursor, quota_context, feature)
-                if quantity > summary["available"]:
+                if not summary.get('unlimited') and quantity > summary["available"]:
                     raise SaaSError("quota_exceeded", "今日该项使用次数已用完，请在次日恢复后重试。", 409,
                         {"feature": feature, "used": summary["used"], "limit": summary["limit"],
                          "resetAt": timestamp(context["period"]["ends_at"])})

@@ -10,3 +10,4 @@ books
 node_modules
 .playwright-mcp
 reader/blog/
+reader/site-intl/

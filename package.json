@@ -7,6 +7,11 @@
   "scripts": {
     "dev:modern": "vite --config frontend/vite.config.js",
     "build:modern": "vite build --config frontend/vite.config.js",
+    "build:intl": "vite build --config frontend/vite.config.js --mode intl",
+    "build:sites": "npm run build:modern && npm run build:intl",
+    "test:sites": "python3 tools/test_dual_entry_frontend.py && node --test frontend/src/utils/privateRoutes.test.mjs frontend/src/utils/internationalRoutes.test.mjs frontend/src/sites/intl/utils/paymentAttempt.test.mjs",
+    "test:sites:built": "python3 tools/test_dual_entry_build.py",
+    "test:sites:browser": "node tools/test_dual_entry_frontend_browser.cjs",
     "package:remote": "python3 tools/deploy_remote.py --package-only",
     "deploy:jdcloud": "python3 tools/deploy_remote.py --target 京东云服务器 --saas --timeout 14400",
     "sync:jdcloud:public": "python3 tools/deploy_remote.py --target 京东云服务器 --sync-public",

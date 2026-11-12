@@ -37,10 +37,14 @@ class PrivateWorkspaceTests(unittest.TestCase):
             with connection.cursor() as cursor:
                 cursor.execute("INSERT INTO workspace_settings(user_id,key,value_json) VALUES(%s,'pending_purchase','{}'::jsonb)", (user_id,))
         self.assertNotIn('pendingPurchase', journey.state(user_id))
-        for action in ('plan_selected', 'purchase_departure', 'clear_purchase', 'first_reading'):
+        for action in ('plan_selected', 'purchase_departure', 'clear_purchase'):
             with self.assertRaises(SaaSError) as rejected:
                 journey.update(user_id, {'action': action})
-            self.assertEqual(rejected.exception.code, 'invalid_journey_action')
+            self.assertEqual(rejected.exception.code, 'not_found')
+            self.assertEqual(rejected.exception.status, 404)
+        with self.assertRaises(SaaSError) as rejected:
+            journey.update(user_id, {'action': 'first_reading'})
+        self.assertEqual(rejected.exception.code, 'invalid_journey_action')
 
     @classmethod
     def setUpClass(cls):

@@ -61,6 +61,7 @@ def main():
     parser.add_argument("--domain",help="标准 HTTPS 域名，例如 example.com（不带协议或路径）")
     parser.add_argument("--app-domain",help="升级时的阅读应用域名；必须与 --blog-domain 一起使用")
     parser.add_argument("--blog-domain",help="升级时的独立博客域名；必须与 --app-domain 一起使用")
+    parser.add_argument("--intl-domain",help="升级时启用独立国际入口域名；必须与国内双域名一起提供")
     parser.add_argument("--defer-https",action="store_true",help="仅完成源站升级，保留双域名 DNS/HTTPS 待办，不申请证书")
     parser.add_argument("--host",help="仅入口模式的 SSH 地址，可替代 --target")
     parser.add_argument("--identity-file",help="现有 SSH 私钥文件；使用已验证的默认 known_hosts")
@@ -72,6 +73,7 @@ def main():
     parser.add_argument("--timeout",type=int,default=1800,help="最长等待秒数，默认 1800")
     args=parser.parse_args()
     if bool(args.app_domain)!=bool(args.blog_domain):parser.error('--app-domain 与 --blog-domain 必须一起提供')
+    if args.intl_domain and not args.app_domain:parser.error('--intl-domain 必须与 --app-domain 和 --blog-domain 一起提供')
     sites=None
     if args.defer_https and (args.full or args.saas or args.sync_public or args.https_entry or args.package_only):
         parser.error('--defer-https 仅用于保留数据的程序升级')
@@ -79,6 +81,7 @@ def main():
         if args.full or args.saas or args.sync_public or args.https_entry or args.package_only:
             parser.error('双站域名参数仅用于保留数据的程序升级')
         sites={'public_domain':manager.normalize_domain(args.app_domain),'blog_domain':manager.normalize_domain(args.blog_domain)}
+        if args.intl_domain:sites['intl_domain']=manager.normalize_domain(args.intl_domain)
     if args.package_only:
         package_only();return
     if args.https_entry:

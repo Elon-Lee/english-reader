@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Guard the invitation-only frontend against commercial feature reintroduction."""
+"""Guard the domestic dependency graph against commercial feature leakage."""
 from pathlib import Path
 import re
 import unittest
+from test_dual_entry_frontend import dependencies
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'frontend' / 'src'
@@ -10,7 +11,7 @@ SOURCE = ROOT / 'frontend' / 'src'
 
 class PrivateFrontendTests(unittest.TestCase):
     def test_no_commercial_api_or_navigation_remains(self):
-        for path in SOURCE.rglob('*'):
+        for path in dependencies('cn'):
             if path.suffix not in {'.jsx', '.js', '.mjs', '.css'} or '.test.' in path.name:
                 continue
             text = path.read_text()

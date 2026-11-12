@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from saas_sites import is_commercial_path
+
 ROOT = Path(os.environ.get("FRONTEND_ROOT", "/app/site")).resolve()
 BACKEND = urlsplit(os.environ.get("SAAS_BACKEND_URL", "http://127.0.0.1:8790"))
 PORT = int(os.environ.get("FRONTEND_PORT", "5173"))
@@ -21,6 +23,9 @@ PROXY_PREFIXES = ("/api/", "/books/")
 APP_DOMAIN = os.environ.get("APP_DOMAIN", "").strip().lower()
 BLOG_DOMAIN = os.environ.get("BLOG_DOMAIN", "").strip().lower()
 BLOG_ROOT = Path(os.environ["BLOG_ROOT"]).resolve() if os.environ.get("BLOG_ROOT") else None
+FRONTEND_SITE = os.environ.get('FRONTEND_SITE', 'cn')
+SITE_TOKEN = os.environ.get('FRONTEND_SITE_TOKEN', '') or os.environ.get(
+    'INTL_GATEWAY_TOKEN' if FRONTEND_SITE == 'intl' else 'CN_GATEWAY_TOKEN', '')
 
 
 class TLSFrontendServer(ThreadingHTTPServer):
@@ -49,7 +54,7 @@ class FrontendHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def _site(self):
-        if not BLOG_ROOT:
+        if not BLOG_ROOT and not APP_DOMAIN:
             return 'app'
         hosts = self.headers.get_all('Host', [])
         if len(hosts) != 1:
@@ -64,7 +69,7 @@ class FrontendHandler(BaseHTTPRequestHandler):
             host = value.hostname
         except ValueError:
             return None
-        if host == BLOG_DOMAIN:
+        if BLOG_ROOT and host == BLOG_DOMAIN:
             return 'blog'
         if host == APP_DOMAIN:
             return 'app'
@@ -114,6 +119,8 @@ class FrontendHandler(BaseHTTPRequestHandler):
                 self._blog_file()
             else:
                 self.send_error(404)
+        elif FRONTEND_SITE == 'cn' and is_commercial_path(self.path):
+            self.send_error(404)
         elif self.path.startswith(PROXY_PREFIXES):
             self._proxy()
         elif self.command in {'GET', 'HEAD'}:
@@ -142,17 +149,21 @@ class FrontendHandler(BaseHTTPRequestHandler):
         headers = {key: value for key, value in self.headers.items() if key.lower() not in {"host", "content-length", "connection"}}
         headers["Host"] = BACKEND.netloc
         # Overwrite internal identity headers on every ingress, including direct TLS.
-        headers = {key: value for key, value in headers.items() if key.lower() not in {"x-shiyue-client-ip", "x-shiyue-original-host"}}
+        headers = {key: value for key, value in headers.items() if not key.lower().startswith('x-shiyue-')}
         peer = self.client_address[0]
         client_ip = peer
         if ipaddress.ip_address(peer).is_loopback:
             # Nginx appends its socket peer to XFF. Cloudflared sets CF-Connecting-IP.
             forwarded = self.headers.get("X-Forwarded-For", "").split(",")[-1].strip()
-            candidate = forwarded or self.headers.get("CF-Connecting-IP", "")
+            cloudflare = self.headers.get("CF-Connecting-IP", "")
+            candidate = cloudflare if FRONTEND_SITE == 'intl' and cloudflare else forwarded or cloudflare
             try: client_ip = str(ipaddress.ip_address(candidate))
             except ValueError: pass
         headers["X-Shiyue-Client-IP"] = client_ip
         headers["X-Shiyue-Original-Host"] = self.headers.get("Host", "")
+        if SITE_TOKEN:
+            headers['X-Shiyue-Site'] = FRONTEND_SITE
+            headers['X-Shiyue-Site-Token'] = SITE_TOKEN
         connection = http.client.HTTPConnection(BACKEND.hostname, BACKEND.port or 80, timeout=60)
         try:
             connection.request(self.command, self.path, body=body, headers=headers)
@@ -177,7 +188,10 @@ class FrontendHandler(BaseHTTPRequestHandler):
         except ValueError:
             self.send_error(403)
             return
-        if not path.is_file() and requested in {"/", "/app", "/login", "/register", "/support", "/verify-email", "/reset-password", "/terms", "/privacy", "/content-policy", "/copyright"}:
+        app_route = requested in {"/", "/app", "/login", "/register", "/support", "/verify-email", "/reset-password", "/terms", "/privacy", "/content-policy", "/copyright"}
+        if FRONTEND_SITE == 'intl' and (requested in {'/pricing', '/refunds'} or requested.startswith('/purchase/')):
+            app_route = True
+        if not path.is_file() and app_route:
             path = ROOT / "index.html"
         if not path.is_file():
             self.send_error(404)
@@ -217,13 +231,18 @@ class FrontendHandler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    if any((APP_DOMAIN, BLOG_DOMAIN, BLOG_ROOT)):
+    if FRONTEND_SITE not in {'cn', 'intl'}:
+        raise ValueError('FRONTEND_SITE must be cn or intl')
+    if FRONTEND_SITE == 'intl' and not SITE_TOKEN:
+        raise ValueError('International ingress requires its configured gateway token')
+    if APP_DOMAIN or BLOG_DOMAIN or BLOG_ROOT:
         from deployment.https_entry import normalize_domain
+        APP_DOMAIN = normalize_domain(APP_DOMAIN)
+    if BLOG_DOMAIN or BLOG_ROOT:
         if (not all((APP_DOMAIN, BLOG_DOMAIN, BLOG_ROOT))
                 or normalize_domain(APP_DOMAIN) == normalize_domain(BLOG_DOMAIN)
                 or not (BLOG_ROOT / 'index.html').is_file()):
             raise ValueError('Dual-site mode requires distinct APP_DOMAIN/BLOG_DOMAIN and a built BLOG_ROOT')
-        APP_DOMAIN = normalize_domain(APP_DOMAIN)
         BLOG_DOMAIN = normalize_domain(BLOG_DOMAIN)
     address = (os.environ.get("FRONTEND_HOST", "0.0.0.0"), PORT)
     cert = os.environ.get("FRONTEND_TLS_CERT", "")
@@ -234,5 +253,5 @@ if __name__ == "__main__":
         server = TLSFrontendServer(address, FrontendHandler, context)
     else:
         server = ThreadingHTTPServer(address, FrontendHandler)
-    print(f"SaaS frontend listening on 0.0.0.0:{PORT}, backend={BACKEND.geturl()}", flush=True)
+    print(f"SaaS frontend site={FRONTEND_SITE} listening on {address[0]}:{PORT}, backend={BACKEND.geturl()}", flush=True)
     server.serve_forever()

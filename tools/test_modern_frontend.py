@@ -40,7 +40,7 @@ def main():
     modern = (SOURCE / 'main.jsx').read_text()
     check(modern.index("initialPreferences = await getJson('/api/preferences'") < modern.index("setAuthState('authenticated')", modern.index("initialPreferences = await getJson('/api/preferences'")), "saved theme must load before workspace")
     check('Promise.resolve(initialPreferences || preferences)' in modern, "first preferences snapshot lost")
-    check('resolvePrivateRoute' in modern and 'safeNextPath' in modern, "private routes and login return validation missing")
+    check('resolveSiteRoute' in modern and 'safeNextPath' in modern and 'resolvePrivateRoute as resolveSiteRoute' in (SOURCE / 'sites/cn/index.jsx').read_text(), "private routes and login return validation missing")
     check('name="invitationCode"' in modern and "required: true, message: '请输入邀请码'" in modern, "invitation input must be required")
     check('fallbackBooks' not in modern and 'Atomic Habits' not in modern, "example books must not ship")
     api = (SOURCE / 'api/client.js').read_text()

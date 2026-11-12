@@ -8,6 +8,17 @@ from saas_auth import SaaSService
 
 
 class MailTests(unittest.TestCase):
+    def test_site_specific_links_use_trusted_config(self):
+        from saas_sites import site_context
+        service = SaaSService(environment={
+            'APP_BASE_URL': 'https://fallback.example',
+            'CN_APP_BASE_URL': 'https://learn.cn.example',
+            'INTL_APP_BASE_URL': 'https://intl.example',
+        })
+        with site_context('intl'):
+            self.assertEqual(service._app_url('/reset-password?token=safe'), 'https://intl.example/reset-password?token=safe')
+        self.assertEqual(service._app_url('/verify-email?token=safe'), 'https://learn.cn.example/verify-email?token=safe')
+
     def service(self, port):
         return SaaSService(environment={
             "SMTP_HOST": "smtpdm.aliyun.com", "SMTP_PORT": str(port),

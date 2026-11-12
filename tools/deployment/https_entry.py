@@ -96,12 +96,12 @@ def _http_config(domain, blog_domain=''):
 '''.replace('@DOMAIN@', domain)
 
 
-def _https_config(domain, blog_domain=''):
+def _https_config(domain, blog_domain='', frontend_port=5173):
     if blog_domain:
         config = _http_config(domain, blog_domain)
         config += 'server { listen 443 ssl default_server; server_name _; ssl_reject_handshake on; }\n'
         for name in (domain, blog_domain):
-            config += _https_config(name).removeprefix(_http_config(name)).replace('listen 443 ssl default_server;', 'listen 443 ssl;')
+            config += _https_config(name, frontend_port=frontend_port).removeprefix(_http_config(name)).replace('listen 443 ssl default_server;', 'listen 443 ssl;')
         return config
     return _http_config(domain) + '''
 server {
@@ -115,7 +115,7 @@ server {
     client_max_body_size 20g;
     client_body_timeout 600s;
     location / {
-        proxy_pass http://127.0.0.1:5173;
+        proxy_pass http://127.0.0.1:@FRONTEND_PORT@;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -131,7 +131,74 @@ server {
         proxy_read_timeout 600s;
     }
 }
-'''.replace('@DOMAIN@', domain)
+'''.replace('@DOMAIN@', domain).replace('@FRONTEND_PORT@', str(int(frontend_port)))
+
+
+def deferred_script(target):
+    """Update an already owned HTTP bootstrap; never create a TLS listener."""
+    paths=entry_paths(target)
+    domain=normalize_domain(target.get('public_domain'))
+    blog=normalize_domain(target.get('blog_domain'))
+    if not domain or not blog or domain==blog:raise ValueError('Deferred entry requires two domestic domains')
+    port=int(target.get('frontend_port',5173))
+    if not 1<=port<=65535:raise ValueError('frontend_port is invalid')
+    config='server { listen 80 default_server; server_name _; return 421; }\n'
+    for name in (domain,blog):
+        config+=f'''server {{
+    listen 80;
+    server_name {name};
+    location ^~ /.well-known/acme-challenge/ {{ root /var/www/acme; try_files $uri =404; }}
+    client_max_body_size 20g;
+    location / {{
+        proxy_pass http://127.0.0.1:{port};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_read_timeout 600s;
+    }}
+}}
+'''
+    return f'''set -euo pipefail
+state={shlex.quote(paths['state_root'])}
+container={shlex.quote(CONTAINER)}
+if ! docker inspect "$container" >/dev/null 2>&1; then
+    echo 'No existing HTTP bootstrap; domestic public entry remains pending'
+    exit 0
+fi
+owner=$(docker inspect --format '{{{{index .Config.Labels "{OWNER_LABEL}"}}}}' "$container")
+test "$owner" = {shlex.quote(_remote_root(target))}
+exec 9>"$state/entry.lock"
+flock -x 9
+config="$state/nginx/default.conf"
+test -s "$config"
+# Existing certificate-backed configurations require the normal entry updater.
+if grep -Eq 'listen[[:space:]]+443' "$config"; then
+    echo 'Existing TLS entry cannot be downgraded with deferred HTTPS' >&2
+    exit 2
+fi
+backup=$(mktemp "$state/nginx/deferred.XXXXXXXX")
+cp -p "$config" "$backup"
+restore() {{
+    status=$?
+    trap - EXIT
+    if [ "$status" -ne 0 ]; then
+        cp -p "$backup" "$config"
+        docker exec "$container" nginx -t && docker exec "$container" nginx -s reload || true
+    fi
+    rm -f "$backup" "$state/nginx/candidate.tmp"
+    exit "$status"
+}}
+trap restore EXIT
+cat > "$state/nginx/candidate.tmp" <<'SHIYUE_DOMESTIC_HTTP'
+{config}SHIYUE_DOMESTIC_HTTP
+mv -f "$state/nginx/candidate.tmp" "$config"
+docker exec "$container" nginx -t
+docker exec "$container" nginx -s reload
+echo SHIYUE_DOMESTIC_HTTP_READY
+'''
 
 
 def _render(template, values):
@@ -203,10 +270,11 @@ def install_script(target):
         'TIMER_NAME': paths['timer_name'],
         'EMAIL_ARGS': email_args,
         'HTTP_CONFIG': _http_config(domain, blog_domain),
-        'HTTPS_CONFIG': _https_config(domain, blog_domain),
+        'HTTPS_CONFIG': _https_config(domain, blog_domain, target.get('frontend_port',5173)),
     }
     values['RENEW_SCRIPT'] = _renew_script(values)
     manifest = {'version': 1, 'public_domain': domain, 'remote_root': root,
+                'frontend_port':int(target.get('frontend_port',5173)),
                 'frontend_url': frontend_url(target), 'container': CONTAINER, **paths}
     if blog_domain:
         manifest.update(version=2, blog_domain=blog_domain, blog_url='https://' + blog_domain)

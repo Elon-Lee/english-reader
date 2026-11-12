@@ -39,6 +39,11 @@ from saas_accounts import AccountLifecycleService
 from saas_catalog import CatalogService
 from saas_media import MediaService
 from saas_resources import ResourceService
+from saas_membership import MembershipService
+from saas_commerce import CommerceService
+from saas_redemptions import RedemptionService
+from saas_payments import AlipayService
+from saas_billing import PaddleBillingService
 from saas_rewards import RewardService
 from saas_workspace import WorkspaceService
 from saas_review import ReviewService
@@ -82,6 +87,11 @@ ACTIVE_IMPORT_PROCESSES={}
 ACTIVE_PROCESS_LOCK=threading.Lock()
 SAAS=SaaSService.from_env()
 RESOURCES=ResourceService(SAAS)
+MEMBERSHIPS=MembershipService(SAAS)
+PAYMENTS=AlipayService(SAAS,MEMBERSHIPS)
+COMMERCE=CommerceService(SAAS,PAYMENTS)
+REDEMPTIONS=RedemptionService(SAAS,MEMBERSHIPS)
+BILLING=PaddleBillingService(SAAS,MEMBERSHIPS)
 CATALOG=CatalogService(SAAS,RESOURCES)
 REWARDS=RewardService(SAAS,RESOURCES)
 ADMIN=AdminService(SAAS,RESOURCES)
@@ -99,6 +109,7 @@ CAPTCHA=CaptchaService(SAAS,CACHE_SERVICE.client)
 RATE_LIMIT_LOCK=threading.Lock()
 RATE_LIMIT_BUCKETS=defaultdict(deque)
 RATE_LIMIT_RULES={
+    "/api/membership/redeem":(10,300),
     "/api/auth/login":(10,300),"/api/auth/register":(8,3600),"/api/auth/forgot-password":(5,3600),
     "/api/auth/login/replace-device":(10,300),
     "/api/auth/captcha/gen":(40,300),"/api/auth/captcha/check":(40,300),
@@ -205,6 +216,45 @@ def plain_html(value):
 class Handler(SimpleHTTPRequestHandler):
     protocol_version="HTTP/1.1"
     def __init__(self,*args,**kwargs): super().__init__(*args,directory=str(READER),**kwargs)
+    def handle_one_request(self):
+        self._site_context = None
+        try:
+            return super().handle_one_request()
+        finally:
+            context = self._site_context
+            self._site_context = None
+            if context is not None:
+                context.__exit__(None, None, None)
+
+    def parse_request(self):
+        from saas_sites import request_site, site_context
+        if not super().parse_request():
+            return False
+        if urlsplit(self.path).path == '/api/health':
+            return True
+        try:
+            site = request_site(self.headers, self.client_address[0])
+            self._site_context = site_context(site)
+            self._site_context.__enter__()
+            if not self.commercial_request_allowed(self.path):
+                self.close_connection = True
+                return False
+            return True
+        except SaaSError as exc:
+            self.close_connection = True
+            self.reply(exc.payload(), exc.status)
+        except SaaSConfigurationError:
+            self.close_connection = True
+            self.reply({'code': 'site_unavailable', 'error': '站点入口尚未完整配置。'}, 503)
+        return False
+
+    def commercial_request_allowed(self, path):
+        from saas_sites import current_site, is_commercial_path
+        if current_site() != 'intl' and is_commercial_path(path):
+            self.reply({'error': 'not found'}, 404)
+            return False
+        return True
+
     def end_headers(self):
         self.send_header("Permissions-Policy","microphone=(self)")
         self.send_header("X-Content-Type-Options","nosniff")
@@ -242,16 +292,36 @@ class Handler(SimpleHTTPRequestHandler):
             raise SaaSError("invalid_origin","请在当前网站完成验证。",403)
         origin=self.headers.get("Origin","")
         if not origin:return
-        allowed={os.environ.get("APP_BASE_URL","").rstrip("/")}
-        host=self.headers.get("Host","")
-        if ipaddress.ip_address(self.client_address[0]).is_loopback:
-            host=self.headers.get("X-Shiyue-Original-Host",host)
-        allowed.update({"http://"+host,"https://"+host})
+        from saas_sites import app_base_url
+        allowed={app_base_url()}
         if origin not in allowed:
             raise SaaSError("invalid_origin","请在当前网站完成验证。",403)
 
     def do_GET(self):
         route=urlsplit(self.path)
+        if not self.commercial_request_allowed(route.path):return
+        if SAAS.enabled and route.path.startswith("/api/payments/alipay/orders/"):
+            if not self.require_saas_user(verified=True):return
+            try:self.reply(PAYMENTS.order_status(str(self._saas_session["id"]),unquote(route.path.rsplit("/",1)[1])))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"alipay_unavailable","error":str(exc)},503)
+            return
+        if SAAS.enabled and (route.path=="/api/commerce/products" or route.path.startswith("/api/commerce/products/")):
+            try:
+                if route.path=="/api/commerce/products":self.reply(COMMERCE.public_catalog(),cache_control="public, max-age=60");return
+                self.reply(COMMERCE.product(unquote(route.path.rsplit("/",1)[1])),cache_control="public, max-age=60");return
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"commerce_unavailable","error":str(exc)},503)
+            return
+        if SAAS.enabled and route.path.startswith("/api/commerce/orders/"):
+            self.reply({"code":"payment_provider_retired","error":"支付订单接口已停用；请通过云猫购买并在 RynEnglish 兑换。"},410)
+            return
+        if SAAS.enabled and route.path=="/api/billing/config":
+            if not self.require_saas_user(verified=True):return
+            self.reply(BILLING.public_config());return
+        if SAAS.enabled and (route.path in {"/api/membership","/api/membership/usage","/api/membership/orders","/api/membership/plans","/api/membership/requests","/api/membership/change-orders","/api/membership/change-preview","/api/admin/commerce/redemption-batches"} or route.path.startswith("/api/membership/change-orders/")):
+            if not self.require_saas_user(): return
+            self.membership_get(route.path); return
         if route.path in {"/terms","/privacy","/content-policy","/copyright"}:
             if SAAS.enabled:self.reply({"code":"backend_only","error":"该端口仅提供后台 API。"},404)
             else:self.serve_legal_page(route.path)
@@ -281,6 +351,9 @@ class Handler(SimpleHTTPRequestHandler):
             except SaaSError as exc:self.reply(exc.payload(),exc.status)
             except SaaSConfigurationError as exc:self.reply({"code":"resources_unavailable","error":str(exc)},503)
             return
+        if SAAS.enabled and route.path == "/api/admin/commerce/redemption-batches":
+            if not self.require_saas_user():return
+            self.membership_get(route.path);return
         if SAAS.enabled and route.path.startswith("/api/admin/"):
             if not self.require_saas_user():return
             self.admin_get(route);return
@@ -446,7 +519,83 @@ class Handler(SimpleHTTPRequestHandler):
         return True
     def do_POST(self):
         route=urlsplit(self.path)
+        if not self.commercial_request_allowed(route.path):return
         if not self.rate_limit(route.path):return
+        if SAAS.enabled and route.path=="/api/payments/alipay/orders":
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                item=self.json_body();self.reply(PAYMENTS.create_order(str(self._saas_session["id"]),item.get("productVersionId"),item.get("idempotencyKey")),201)
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"alipay_unavailable","error":str(exc)},503)
+            return
+        if SAAS.enabled and route.path.startswith("/api/payments/alipay/orders/") and route.path.endswith("/simulate-paid"):
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                order_id=unquote(route.path[len("/api/payments/alipay/orders/"):-len("/simulate-paid")].rstrip("/"))
+                self.reply(PAYMENTS.simulate_paid(str(self._saas_session["id"]),order_id))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"alipay_unavailable","error":str(exc)},503)
+            return
+        if SAAS.enabled and route.path=="/api/commerce/webhooks/mbdpay":
+            self.reply({"code":"payment_provider_retired","error":"该支付通知接口已停用。"},410);return
+        if SAAS.enabled and route.path=="/api/billing/webhooks/paddle":
+            length=int(self.headers.get("Content-Length","0") or 0)
+            if length<=0 or length>2*1024*1024:
+                self.reply({"code":"invalid_paddle_event","error":"Paddle webhook 请求体无效。"},400);return
+            raw_body=self.rfile.read(length)
+            try:self.reply(BILLING.handle_webhook(raw_body,self.headers.get("Paddle-Signature","")))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"billing_unavailable","error":str(exc)},503)
+            except Exception:self.reply({"code":"billing_webhook_failed","error":"支付通知处理失败，Paddle 将自动重试。"},500)
+            return
+        if SAAS.enabled and route.path=="/api/payments/alipay/notify":
+            length=int(self.headers.get("Content-Length","0") or 0)
+            if length<=0 or length>64*1024:
+                self.reply({"code":"invalid_alipay_notify","error":"支付宝通知请求无效。"},400);return
+            try:
+                values=parse_qs(self.rfile.read(length).decode("utf-8"),keep_blank_values=True)
+                PAYMENTS.notify({key:items[-1] for key,items in values.items()})
+                self.reply_text("success")
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"alipay_unavailable","error":str(exc)},503)
+            except Exception:self.reply({"code":"alipay_notify_failed","error":"支付通知处理失败，请稍后重试。"},500)
+            return
+        if SAAS.enabled and route.path=="/api/membership/requests":
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                item=self.json_body();self.reply(MEMBERSHIPS.request_change(str(self._saas_session["id"]),str(item.get("planVersion","")).strip(),str(item.get("note","")or"")),201)
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"membership_unavailable","error":str(exc)},503)
+            return
+        if SAAS.enabled and route.path=="/api/membership/redeem":
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                if not PAYMENTS.public_config()["redemptionEnabled"]:
+                    raise SaaSError("redemption_disabled", "兑换码开通当前暂未开放。", 503)
+                item=self.json_body()
+                self.reply(REDEMPTIONS.redeem(str(self._saas_session["id"]),item.get("code"),item.get("idempotencyKey")))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"membership_unavailable","error":str(exc)},503)
+            return
+        if SAAS.enabled and route.path=="/api/membership/change-orders":
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                item=self.json_body(); self.reply(MEMBERSHIPS.cancel_change_order(str(self._saas_session["id"]), str(item.get("id", "")).strip()))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            return
+        if SAAS.enabled and route.path=="/api/commerce/orders":
+            self.reply({"code":"payment_provider_retired","error":"请通过云猫购买并在 RynEnglish 兑换。"},410);return
+        if SAAS.enabled and route.path in {"/api/billing/checkout","/api/billing/manage"}:
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                item=self.json_body() if int(self.headers.get("Content-Length","0") or 0)>0 else {}
+                user_id=str(self._saas_session["id"])
+                if route.path=="/api/billing/checkout":
+                    self.reply(BILLING.create_checkout(user_id,item.get("planVersion"),item.get("billingInterval"),item.get("idempotencyKey")),201);return
+                self.reply(BILLING.management_links(user_id));return
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"billing_unavailable","error":str(exc)},503)
+            return
         if route.path.startswith("/api/auth/"):
             self.auth_post(route.path); return
         if SAAS.enabled and (route.path=="/api/workspace/imports" or route.path.startswith("/api/workspace/imports/")):
@@ -542,6 +691,15 @@ class Handler(SimpleHTTPRequestHandler):
             self.reply({"error":str(exc)},500)
     def do_DELETE(self):
         route=urlsplit(self.path)
+        if not self.commercial_request_allowed(route.path):return
+        if SAAS.enabled and route.path.startswith("/api/membership/change-orders/"):
+            if not self.require_saas_user(verified=True) or not self.require_csrf():return
+            try:
+                change_id=unquote(route.path.rsplit("/",1)[1])
+                self.reply(MEMBERSHIPS.cancel_change_order(str(self._saas_session["id"]), change_id))
+            except SaaSError as exc:self.reply(exc.payload(),exc.status)
+            except SaaSConfigurationError as exc:self.reply({"code":"membership_unavailable","error":str(exc)},503)
+            return
         if SAAS.enabled and route.path.startswith("/api/admin/invitation-batches/") and route.path.endswith("/invitations"):
             if not self.require_saas_user() or not self.require_csrf():return
             if not self._saas_session.get("is_admin"):
@@ -609,7 +767,8 @@ class Handler(SimpleHTTPRequestHandler):
         except (KeyError,ValueError):
             return ""
     def session_cookie_headers(self,session_token="",csrf_token="",clear=False):
-        secure="; Secure" if bool(os.environ.get("READER_TLS_CERT")) or os.environ.get("APP_BASE_URL","").startswith("https://") else ""
+        from saas_sites import app_base_url
+        secure="; Secure" if bool(os.environ.get("READER_TLS_CERT")) or app_base_url().startswith("https://") else ""
         if clear:
             return [
                 ("Set-Cookie",f"shiyue_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{secure}"),
@@ -681,6 +840,7 @@ class Handler(SimpleHTTPRequestHandler):
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
         except SaaSConfigurationError as exc:self.reply({"code":"saas_unavailable","error":str(exc)},503)
     def auth_post(self,path):
+        from saas_sites import app_base_url
         if not SAAS.enabled:
             self.reply({"code":"saas_disabled","error":"SaaS 账号功能尚未启用。"},404);return
         try:item=self.json_body()
@@ -693,7 +853,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if not re.fullmatch(r"[A-Za-z0-9_-]{40,100}",browser):browser=secrets.token_urlsafe(32)
                 context=CAPTCHA.prepare(item.get("scene"),item.get("email"),browser)["context"]
                 result=CAPTCHA.generate(context,browser)
-                secure="; Secure" if os.environ.get("APP_BASE_URL","").startswith("https://") else ""
+                secure="; Secure" if app_base_url().startswith("https://") else ""
                 self.reply(result,extra_headers=(("Set-Cookie",f"shiyue_captcha={browser}; Path=/api/auth/; Max-Age=600; HttpOnly; SameSite=Strict{secure}"),));return
             if path=="/api/auth/captcha/check":
                 self.captcha_same_origin()
@@ -728,6 +888,48 @@ class Handler(SimpleHTTPRequestHandler):
                 SAAS.reset_password(item.get("token"),item.get("password"))
                 self.reply({"status":"password_reset"});return
             self.reply({"error":"not found"},404)
+        except SaaSError as exc:
+            self.reply(exc.payload(),exc.status)
+        except SaaSConfigurationError as exc:
+            self.reply({"code":"saas_unavailable","error":str(exc)},503)
+    def membership_get(self,path):
+        try:
+            user_id=str(self._saas_session["id"])
+            if path=="/api/membership": self.reply(MEMBERSHIPS.membership(user_id));return
+            if path=="/api/membership/usage": self.reply(MEMBERSHIPS.usage(user_id));return
+            if path=="/api/membership/orders": self.reply({"orders":MEMBERSHIPS.orders(user_id)});return
+            if path=="/api/membership/change-orders": self.reply({"changeOrders":MEMBERSHIPS.change_orders(user_id)});return
+            if path=="/api/membership/change-preview":
+                target=(parse_qs(urlsplit(self.path).query).get("targetPlan") or [""])[0]
+                self.reply(MEMBERSHIPS.change_preview(user_id, unquote(target)));return
+            if path=="/api/admin/commerce/redemption-batches":
+                if not self._saas_session.get("is_admin"):
+                    self.reply({"code":"admin_required","error":"该操作仅允许管理员执行。"},403);return
+                self.reply(REDEMPTIONS.batches(parse_qs(urlsplit(self.path).query).get("limit",[100])[0]));return
+            if path=="/api/membership/plans":self.reply(MEMBERSHIPS.plans());return
+            if path=="/api/membership/requests":self.reply(MEMBERSHIPS.change_requests(user_id));return
+            self.reply({"error":"not found"},404)
+        except SaaSError as exc:
+            self.reply(exc.payload(),exc.status)
+        except SaaSConfigurationError as exc:
+            self.reply({"code":"saas_unavailable","error":str(exc)},503)
+    def membership_post(self,path):
+        if not self._saas_session.get("is_admin"):
+            self.reply({"code":"admin_required","error":"该操作仅允许管理员执行。"},403);return
+        try:item=self.json_body()
+        except Exception:self.reply({"code":"invalid_payload","error":"请求数据无效。"},400);return
+        if not isinstance(item,dict):self.reply({"code":"invalid_payload","error":"请求数据无效。"},400);return
+        try:
+            actor_id=str(self._saas_session["id"])
+            if path=="/api/admin/manual-orders":
+                result=MEMBERSHIPS.create_manual_order(actor_id,str(item.get("userId","")).strip(),str(item.get("planVersion","")).strip(),item.get("startsAt"),item.get("endsAt"),str(item.get("note","") or ""),item.get("amountCents",0),item.get("idempotencyKey"))
+                self.reply(result,201);return
+            action=str(item.get("action","create")).strip()
+            if action=="create":
+                result=MEMBERSHIPS.create_manual_order(actor_id,str(item.get("userId","")).strip(),str(item.get("planVersion","")).strip(),item.get("startsAt"),item.get("endsAt"),str(item.get("note","") or ""),item.get("amountCents",0),item.get("idempotencyKey"))
+                self.reply(result,201);return
+            result=MEMBERSHIPS.update_subscription(actor_id,str(item.get("subscriptionId","")).strip(),action,item.get("endsAt"),str(item.get("note","") or ""),item.get("idempotencyKey"))
+            self.reply(result);return
         except SaaSError as exc:
             self.reply(exc.payload(),exc.status)
         except SaaSConfigurationError as exc:
@@ -772,6 +974,14 @@ class Handler(SimpleHTTPRequestHandler):
         if route.path=="/api/admin/platform-config" and not self.deployment_allowed():return
         try:
             path,query=route.path,parse_qs(route.query)
+            if path=="/api/admin/plan-versions":self.reply(COMMERCE.plan_versions());return
+            if path=="/api/admin/commerce/products":self.reply(COMMERCE.admin_catalog());return
+            if path=="/api/admin/payment-config":self.reply(PAYMENTS.admin_config());return
+            if path=="/api/admin/payment-orders":self.reply(PAYMENTS.list_orders((query.get("q")or[""])[0],(query.get("status")or[""])[0],(query.get("limit")or[20])[0],(query.get("offset")or[0])[0]));return
+            if path.startswith("/api/admin/payment-orders/"):
+                self.reply(PAYMENTS.admin_order_detail(unquote(path.rsplit("/",1)[1])));return
+            if path=="/api/admin/commerce/redemption-records":self.reply(REDEMPTIONS.admin_records((query.get("q")or[""])[0],(query.get("status")or[""])[0],(query.get("limit")or[20])[0],(query.get("offset")or[0])[0]));return
+            if path=="/api/admin/commerce/entitlements":self.reply(COMMERCE.entitlement_catalog());return
             if path=="/api/admin/auth-config":self.reply(CAPTCHA.config());return
             if path=="/api/admin/dashboard":self.reply(ADMIN.dashboard());return
             if path=="/api/admin/journey-report":self.reply(JOURNEY.report((query.get("days")or[30])[0]));return
@@ -799,6 +1009,41 @@ class Handler(SimpleHTTPRequestHandler):
         if not isinstance(item,dict):self.reply({"code":"invalid_payload","error":"请求数据无效。"},400);return
         try:
             actor_id=str(self._saas_session["id"])
+            if path=="/api/admin/payment-config":
+                self.reply(PAYMENTS.update_config(actor_id,item));return
+            if path.startswith("/api/admin/payment-orders/") and path.endswith("/refund"):
+                order_id=unquote(path[len("/api/admin/payment-orders/"):-len("/refund")].rstrip("/"));self.reply(PAYMENTS.refund(actor_id,order_id,str(item.get("reason", ""))));return
+            if path.startswith("/api/admin/payment-orders/") and path.endswith("/sync-refund"):
+                order_id=unquote(path[len("/api/admin/payment-orders/"):-len("/sync-refund")].rstrip("/"));self.reply(PAYMENTS.sync_refund(actor_id,order_id));return
+            if path=="/api/admin/plan-versions":
+                self.reply(COMMERCE.create_plan_version(actor_id,item.get("id"),item.get("planSlug"),item.get("name"),item.get("rank"),item.get("periodDays"),item.get("quotas"),item.get("pricing")),201);return
+            if path=="/api/admin/manual-orders":
+                result=MEMBERSHIPS.create_manual_order(actor_id,str(item.get("userId","")).strip(),str(item.get("planVersion","")).strip(),item.get("startsAt"),item.get("endsAt"),str(item.get("note","")or""),item.get("amountCents",0),item.get("idempotencyKey"));ADMIN.record_action(actor_id,"manual_order_created",str(item.get("userId","")).strip(),str(item.get("note","")or""),{"orderId":result["order"]["id"],"plan":item.get("planVersion")});self.reply(result,201);return
+            if path=="/api/admin/subscriptions":
+                action=str(item.get("action","create")).strip()
+                if action=="create":
+                    result=MEMBERSHIPS.create_manual_order(actor_id,str(item.get("userId","")).strip(),str(item.get("planVersion","")).strip(),item.get("startsAt"),item.get("endsAt"),str(item.get("note","")or""),item.get("amountCents",0),item.get("idempotencyKey"));ADMIN.record_action(actor_id,"manual_subscription_created",str(item.get("userId","")).strip(),str(item.get("note","")or""),{"subscriptionId":result["subscription"]["id"]});self.reply(result,201);return
+                result=MEMBERSHIPS.update_subscription(actor_id,str(item.get("subscriptionId","")).strip(),action,item.get("endsAt"),str(item.get("note","")or""),item.get("idempotencyKey"));ADMIN.record_action(actor_id,f"subscription_{action}",None,str(item.get("note","")or""),{"subscriptionId":item.get("subscriptionId")});self.reply(result);return
+            if path=="/api/admin/commerce/products":
+                self.reply(COMMERCE.create_product(actor_id,item.get("slug"),item.get("family"),item.get("displayOrder",100)),201);return
+            if path=="/api/admin/commerce/redemption-batches":
+                self.reply(REDEMPTIONS.generate(actor_id,item.get("productVersionId"),item.get("count"),item.get("note","")),201);return
+            if path=="/api/admin/commerce/redemption-codes/revoke":
+                self.reply(REDEMPTIONS.revoke(actor_id,item.get("code"),item.get("reason")));return
+            if path=="/api/admin/commerce/configured-benefits":
+                self.reply(COMMERCE.create_configured_benefit(actor_id,item),201);return
+            if path.startswith("/api/admin/commerce/configured-benefits/"):
+                benefit_id=unquote(path.rsplit("/",1)[1]);self.reply(COMMERCE.update_configured_benefit(actor_id,benefit_id,item));return
+            if path.startswith("/api/admin/commerce/products/") and path.endswith("/versions"):
+                product_id=unquote(path[len("/api/admin/commerce/products/"):-len("/versions")].rstrip("/"));self.reply(COMMERCE.create_version(actor_id,product_id,item),201);return
+            if path.startswith("/api/admin/commerce/products/") and path.endswith("/status"):
+                product_id=unquote(path[len("/api/admin/commerce/products/"):-len("/status")].rstrip("/"));self.reply(COMMERCE.set_product_active(actor_id,product_id,bool(item.get("active"))));return
+            if path.startswith("/api/admin/commerce/versions/") and path.endswith("/publish"):
+                version_id=unquote(path[len("/api/admin/commerce/versions/"):-len("/publish")].rstrip("/"));self.reply(COMMERCE.publish_version(actor_id,version_id));return
+            if path.startswith("/api/admin/commerce/versions/") and path.endswith("/purchase-link"):
+                version_id=unquote(path[len("/api/admin/commerce/versions/"):-len("/purchase-link")].rstrip("/"));self.reply(COMMERCE.update_draft_purchase_url(actor_id,version_id,item.get("purchaseUrl")));return
+            if path.startswith("/api/admin/commerce/products/") and path.endswith("/delete"):
+                product_id=unquote(path[len("/api/admin/commerce/products/"):-len("/delete")].rstrip("/"));self.reply(COMMERCE.delete_unlisted_product(actor_id,product_id));return
             if path=="/api/admin/auth-config":
                 self.reply(CAPTCHA.update_config(actor_id,item));return
             if path=="/api/admin/catalog/delete":
