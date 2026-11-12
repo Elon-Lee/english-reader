@@ -41,6 +41,7 @@
 | 文件与 YouTube 导入、媒体处理 | `tasks/import-media/HANDOFF.md` |
 | 本地安装、启停、登录与排错 | `tasks/local-development/HANDOFF.md` |
 | 运营后台、AI 配置、远程部署 | `tasks/platform-operations/HANDOFF.md` |
+| 国内/国际入口并行、共享业务与国际商业功能恢复（方案待确认） | `tasks/dual-entry-commerce/HANDOFF.md` |
 | 移动端适配 | `tasks/mobile/HANDOFF.md` |
 | 已撤除商业功能的历史边界 | `tasks/public-commerce/HANDOFF.md`、`tasks/payments/HANDOFF.md` |
 
