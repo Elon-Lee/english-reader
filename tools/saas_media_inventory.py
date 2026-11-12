@@ -12,7 +12,7 @@ from pathlib import Path
 
 from saas_auth import SaaSConfigurationError, SaaSService
 from saas_media import MediaService
-from saas_membership import MembershipService
+from saas_resources import ResourceService
 
 
 def main() -> int:
@@ -23,7 +23,7 @@ def main() -> int:
     parser.add_argument("--dry-run",action="store_true")
     args=parser.parse_args();root=args.media_root.expanduser().resolve()
     if not root.is_dir():parser.error(f"媒体目录不存在：{root}")
-    service=SaaSService(os.environ.get("DATABASE_URL",""));service.assert_configured();media=MediaService(service,MembershipService(service),root)
+    service=SaaSService(os.environ.get("DATABASE_URL",""));service.assert_configured();media=MediaService(service,ResourceService(service),root)
     with service.transaction() as connection:
         with connection.cursor() as cursor:
             cursor.execute("SELECT id FROM users WHERE email=%s",(args.owner_email.strip().casefold(),));owner=service._one(cursor)

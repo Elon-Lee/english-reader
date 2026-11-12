@@ -73,7 +73,7 @@ class HttpsEntryIntegrationTests(unittest.TestCase):
                 'remote_root': str(root), 'host': '192.0.2.1', 'use_https': 1,
                 'public_domain': 'rynenglish.com',
             })
-            self.assertEqual(env.read_text(), original + 'APP_BASE_URL=https://rynenglish.com\n')
+            self.assertEqual(env.read_text(), original + 'APP_BASE_URL=https://rynenglish.com\nSMTP_FROM_NAME=纸间微光\n')
             self.assertEqual(env.stat().st_mode & 0o777, 0o600)
 
     def test_upgrade_rediscovers_remote_entry_before_base_url_changes(self):
@@ -140,7 +140,7 @@ class HttpsEntryIntegrationTests(unittest.TestCase):
     def test_same_domain_reuses_running_application_without_recreating_it(self):
         image='sha256:'+'a'*64
         remote=Mock()
-        remote.ssh.side_effect=[image+'\nSHIYUE_BASE_URL=https://rynenglish.com\n','backup complete','healthy']
+        remote.ssh.side_effect=['',image+'\nSHIYUE_BASE_URL=https://rynenglish.com\n','backup complete','healthy']
         target={'host':'192.0.2.1','remote_root':'/srv/shiyue','public_domain':'rynenglish.com'}
         with patch.object(manager,'ensure_remote_https_entry',return_value={'frontendUrl':'https://rynenglish.com'}), \
                 patch.object(manager,'ensure_remote_saas_config') as config:
@@ -175,7 +175,7 @@ esac
             calls=[]
             def ssh(script):
                 calls.append(script)
-                if len(calls)==1:return 'sha256:'+'a'*64+'\nSHIYUE_BASE_URL=https://old.example.com\n'
+                if 'SHIYUE_BASE_URL=' in script:return 'sha256:'+'a'*64+'\nSHIYUE_BASE_URL=https://old.example.com\n'
                 if 'container.json' in script:
                     backup=root/'edge/backups/entry-test'
                     backup.mkdir(parents=True)

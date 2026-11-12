@@ -1,11 +1,12 @@
 # 独立本地开发环境
 
-更新时间：2026-11-08（Asia/Shanghai）。用户要求本地调试不连接远程，并删除远程调试代码，完整记录可跨会话使用的启动流程。
+更新时间：2026-11-09（Asia/Shanghai）。用户要求本地调试不连接远程，并删除远程调试代码，完整记录可跨会话使用的启动流程。
 
 ## 目标与当前状态
 
 - 唯一操作说明：[docs/LOCAL_DEVELOPMENT.md](../../../docs/LOCAL_DEVELOPMENT.md)；根 README 和旧 SAAS_DEPLOYMENT 指南均指向此文档。后续修改启动行为时同步更新该文档，不再复制另一份独立操作步骤。
-- 当前 Mac 已安装项目内 PostgreSQL 16.15、Redis 7.4.7、Node 22.16.0、Python 3.11.18 venv 和 Corretto JDK21；数据库、缓存、验证码、API / SMTP、Vite 已启动，均只监听回环。
+- 当前目录 `/Users/elonlee/workspace/myproject/english-reader` 已启动完整本地栈。此前记录的旧目录已不存在，当前目录原先没有 `.local/local-dev` 或 SaaS venv，本次首次初始化独立数据库并应用至 0044，未恢复线上账号或书籍。
+- 当前工具链：复用系统 PostgreSQL 16.15（项目 tools/postgresql 软链接）、项目 Redis 7.4.7、Node 22.16.0、Python 3.13 venv；项目 JDK 软链接到本机已安装 Corretto 21.0.9。数据库、缓存、验证码、API / SMTP、Vite 已启动，均只监听回环。
 - 固定端口：PG55432，Redis56379，Java18080，API8790，SMTP1025，Vite4173。正式本地库 `shiyue_saas_local`，本地媒体 `.local/local-dev/media`，与线上用户/书籍/密钥完全独立。
 - `start-reader.sh` 默认与 `--saas-local` 均启动完整本地栈；在读取 `.env` / `READER_PYTHON` 前分派到项目 venv。支持 `--status-saas-local`、`--stop-saas-local`、`--restart-saas-local`。无需激活 venv、临时PATH或SSH；后台进程可保留跨终端运行，电脑重启后需再次启动。
 - `tools/run_remote_dev.py` 和其 SSH 监督/隧道测试已删除；Vite API / books / 媒体代理固定本机8790，远程覆盖入口已删除。三入口验证码浏览器脚本改为 `test_local_captcha_browser.cjs`。旧 `.local/remote-dev` 忽略目录仅保留既有资料，不再作为运行或安装依赖。
@@ -35,7 +36,10 @@
 - Chrome无mock验证登录/注册/找回密码三入口图片，以及真实旋转校验→本地管理员登录→工作区/平台权限/本地节点配置；浏览器无外部网络请求。测试凭据仅进程内读取，不写日志。
 - 实际完整停止后全部监听关闭；再次启动后本地账号ID/密码哈希/迁移记录与Redis临时检查值保留；重复启动复用进程，JAR不重复构建。
 - 删除远程入口后新增/保留本地启动8项、部署打包23项通过；清空终端环境的安装器和启动实测通过，注入旧远程DB/Redis/媒体/无效Python变量仍连接本机55432/56379。本地文档相对链接检查、shell/JS语法、Python编译及diff通过；原转发端口关闭，最后Chrome三入口与完整登录复验通过。当前服务全部保持运行。
-- 当前Mac之外的Linux/Apple Silicon安装分支尚待对应机器验收。AI/支付等外部平台配置未迁移，需按具体调试任务在本地另行配置。
+- 当前Mac之外的Linux/Apple Silicon安装分支尚待对应机器验收。AI 等外部平台配置未迁移，需按具体调试任务在本地另行配置；支付功能已在私域改造中撤除。
+- 2026-11-09 启动：安装器 JDK 下载后的 `.sha256` 地址返回 404；本次复用本机现有 Corretto JDK，再运行原安装器完成 Python/npm 依赖与验证码构建（8 项测试通过），未修改安装器或业务源码。新机器无现成 JDK 时此下载步骤仍待修复。
+- 本次实际检查：完整栈状态正常、API/验证码健康 200、前端代理返回旋转验证码开启、未登录账号接口 401、旧会员接口 404；数据库确认 0044 已应用。当前凭据文件权限 0600；全部服务保持运行供用户测试。
+- Chrome 实际首页显示“纸间微光”与受邀注册，页面运行无 JS 错误、无请求失败，唯一非 2xx 为预期的未登录账号接口 401；Vite 入口模块返回 200。启动前后清单、锁文件、启动器与 Vite 配置哈希一致，`git diff --check` 通过。
 
 ## 验证命令
 

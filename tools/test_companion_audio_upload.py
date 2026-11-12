@@ -48,7 +48,7 @@ class CompanionAudioUploadTests(unittest.TestCase):
 
     def test_foreign_user_and_wrong_official_scope_cannot_read_write_or_finalize(self):
         owner,task,body,parts,hashes,upload=self.pending()
-        for actor,service in [(str(self.other['id']),upload),(owner,CompanionAudioUpload(type(self.imports)(self.accounts,self.memberships,self.media,official=True)))]:
+        for actor,service in [(str(self.other['id']),upload),(owner,CompanionAudioUpload(type(self.imports)(self.accounts,self.resources,self.media,official=True)))]:
             for action in [lambda:service.status(actor,task),lambda:service.put(actor,task,'paired.mp3',len(body),0,hashes[0],parts[0]),lambda:service.finish(actor,task,'paired.mp3',len(body),hashes)]:
                 with self.assertRaises(SaaSError):action()
         self.assertFalse(upload._directory(owner,task).exists())

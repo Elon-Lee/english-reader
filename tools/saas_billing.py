@@ -84,7 +84,12 @@ class PaddleBillingService:
         available: dict[str, list[str]] = {}
         for plan_version, interval in self.price_map:
             available.setdefault(plan_version, []).append(interval)
-        checkout_ready = bool(self.api_key and self.client_token and self.price_map)
+        try:
+            self._checkout_base_url()
+            site_ready = True
+        except SaaSConfigurationError:
+            site_ready = False
+        checkout_ready = bool(self.api_key and self.client_token and self.price_map and site_ready)
         return {
             "provider": "paddle",
             "environment": self.environment,
@@ -98,6 +103,12 @@ class PaddleBillingService:
     def _require_checkout(self) -> None:
         if not self.api_key or not self.client_token:
             raise SaaSConfigurationError("Paddle API Key 或客户端 Token 尚未配置。")
+        self._checkout_base_url()
+
+    def _checkout_base_url(self) -> str:
+        from saas_sites import app_base_url, site_context
+        with site_context('intl'):
+            return app_base_url(self.accounts.environment)
 
     def _api(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         self._require_checkout()
@@ -182,6 +193,7 @@ class PaddleBillingService:
                 {
                     "items": [{"price_id": price_id, "quantity": 1}],
                     "collection_mode": "automatic",
+                    "checkout": {"url": self._checkout_base_url() + '/app?tab=membership'},
                     "custom_data": {
                         "local_order_id": order_id,
                         "user_id": user_id,
@@ -216,6 +228,7 @@ class PaddleBillingService:
             "environment": self.environment,
             "clientToken": self.client_token,
             "customerEmail": email,
+            "returnUrl": self._checkout_base_url() + '/app?tab=membership',
         }
 
     def management_links(self, user_id: str) -> dict[str, Any]:
@@ -415,6 +428,12 @@ class PaddleBillingService:
         totals = data.get("details", {}).get("totals", {}) if isinstance(data.get("details"), dict) else {}
         total = totals.get("total")
         currency = str(data.get("currency_code", "CNY") or "CNY")[:3].upper()
+        if order and (order['provider'] != 'paddle' or not str(total or '').isdigit()
+                      or int(total) != int(order['amount_cents']) or currency != order['currency']
+                      or not transaction_id.startswith('txn_')
+                      or (order.get('external_transaction_id') and order['external_transaction_id'] != transaction_id)
+                      or order['status'] not in {'pending', 'paid'}):
+            raise SaaSError('paddle_order_mismatch', 'Paddle 付款与本地订单不匹配。', 409)
         local_id = self._upsert_entitlement(cursor, user_id, plan_version, external_subscription_id, interval, "active", starts_at, ends_at, str(data.get("customer_id", "") or "") or None)
         if order:
             cursor.execute(
@@ -437,4 +456,3 @@ class PaddleBillingService:
         self._upsert_entitlement(cursor, user_id, plan_version, external_id, interval, provider_status, starts_at, ends_at, str(data.get("customer_id", "") or "") or None, cancel_at_period_end)
         if order:
             cursor.execute("UPDATE payment_orders SET external_subscription_id=%s,updated_at=NOW() WHERE id=%s", (external_id, order["id"]))
-

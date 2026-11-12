@@ -53,6 +53,12 @@ class AlipayService:
             raise SaaSConfigurationError("支付宝获批产品标识、应用参数、RSA2 密钥和异步通知地址尚未完整配置。")
         if values["product"] != "face_to_face" or values["approved"] != "1":
             raise SaaSConfigurationError("当前实现只支持已获批的支付宝当面付扫码产品。")
+        if self.environment.get('INTL_APP_BASE_URL') or self.environment.get('INTL_GATEWAY_TOKEN'):
+            from saas_sites import app_base_url, site_context
+            with site_context('intl'):
+                international = app_base_url(self.environment)
+            if not international.startswith('https://') or values['notify_url'] != international + '/api/payments/alipay/notify':
+                raise SaaSConfigurationError('支付宝异步通知必须使用国际入口的 HTTPS 支付回调地址。')
         hashes, serialization, padding = self._crypto()
         try:
             private_key = serialization.load_pem_private_key(values["private_key"].encode(), password=None)

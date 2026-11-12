@@ -22,7 +22,7 @@ from saas_auth import SaaSService
 
 CHROME=Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 NODE=Path(shutil.which("node") or "/usr/local/bin/node")
-SCREENS=("catalog","my-library","workspace","stats","vocab","rewards","membership","admin","settings")
+SCREENS=("catalog","my-library","workspace","stats","vocab","rewards","admin","settings")
 
 
 def stop(process):

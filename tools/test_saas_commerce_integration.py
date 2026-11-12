@@ -11,7 +11,6 @@ from urllib.parse import urlsplit
 from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
 from saas_commerce import CommerceService
 from saas_catalog import CatalogService
-from saas_mbdpay import MbdPayService
 from saas_membership import MembershipService
 from saas_redemptions import RedemptionService
 
@@ -39,7 +38,6 @@ class CommercePostgresTests(unittest.TestCase):
         cls.commerce = CommerceService(cls.accounts)
         cls.memberships = MembershipService(cls.accounts)
         cls.catalog = CatalogService(cls.accounts, cls.memberships)
-        cls.mbdpay = MbdPayService(cls.accounts, cls.memberships)
         cls.redemptions = RedemptionService(cls.accounts, cls.memberships)
 
     def setUp(self):
@@ -95,6 +93,7 @@ class CommercePostgresTests(unittest.TestCase):
         raw = "verify-" + new_id()
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
+                cursor.execute("UPDATE users SET account_resource_policy='commercial' WHERE id=%s", (user['id'],))
                 cursor.execute("INSERT INTO email_verifications(id,user_id,token_hash,expires_at) VALUES(%s,%s,%s,%s)", (new_id(), user["id"], token_hash(raw), utcnow() + timedelta(days=1)))
         self.accounts.verify_email(raw)
         return user

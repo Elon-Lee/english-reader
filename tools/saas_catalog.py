@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from saas_auth import SaaSError, SaaSService, new_id
-from saas_membership import MembershipService, as_json, can_watch_hd_video, timestamp
+from saas_resources import ResourceService, as_json, can_watch_hd_video, timestamp
 from saas_progress import reading_progress
 
 
@@ -42,8 +42,8 @@ def slugify(value: Any) -> str:
 
 
 class CatalogService:
-    def __init__(self, accounts: SaaSService, memberships: MembershipService):
-        self.accounts, self.memberships = accounts, memberships
+    def __init__(self, accounts: SaaSService, resources: ResourceService):
+        self.accounts, self.resources = accounts, resources
 
     def _tags(self, cursor: Any, book_ids: list[str]) -> dict[str, list[dict[str, str]]]:
         if not book_ids: return {}
@@ -83,7 +83,7 @@ class CatalogService:
         }
         if detail:
             result.update({"description": row["description"], "preview": row["preview_json"] if isinstance(row["preview_json"], list) else json.loads(row["preview_json"] or "[]"),
-                           "readerReady": result["inLibrary"], "readerNotice": "加入书架后即可阅读，音视频收藏数量受当前套餐限制。"})
+                           "readerReady": result["inLibrary"], "readerNotice": "加入书架后即可阅读，音视频收藏数量受统一资源限制。"})
         else:
             result["description"] = row.get("description") or ""
         return result
@@ -284,16 +284,16 @@ class CatalogService:
                 cursor.execute("SELECT id FROM users WHERE id=%s AND status='active' FOR UPDATE",(user_id,))
                 if not self.accounts._one(cursor):raise SaaSError("account_unavailable","账号不可用。",403)
                 self._published_book(cursor,catalog_book_id)
-                context=self.memberships._context(cursor,user_id,lock_user=False)
+                context=self.resources._context(cursor,user_id,lock_user=False)
                 cursor.execute("SELECT * FROM user_library WHERE user_id=%s AND catalog_book_id=%s FOR UPDATE",(user_id,catalog_book_id));existing=self.accounts._one(cursor)
                 if not existing:
                     cursor.execute("SELECT resource_type FROM catalog_books WHERE id=%s",(catalog_book_id,));resource=self.accounts._one(cursor) or {}
                     kind="video" if resource.get("resource_type") in {"video","youtube"} else "audio" if resource.get("resource_type")=="audio" else ""
-                    self.memberships.assert_media_capacity(cursor,user_id,context,kind)
+                    self.resources.assert_media_capacity(cursor,user_id,context,kind)
                     cursor.execute("INSERT INTO user_library(id,user_id,catalog_book_id,shelf_state) VALUES(%s,%s,%s,%s)",(new_id(),user_id,catalog_book_id,shelf_state))
                 elif existing["shelf_state"] != shelf_state:
                     cursor.execute("UPDATE user_library SET shelf_state=%s WHERE user_id=%s AND catalog_book_id=%s",(shelf_state,user_id,catalog_book_id))
-                self.memberships._audit(cursor,user_id,None,"catalog_library_add",{"catalogBookId":catalog_book_id})
+                self.resources._audit(cursor,user_id,None,"catalog_library_add",{"catalogBookId":catalog_book_id})
                 # Legacy API alias only: there is no independent unlock state.
                 return {"bookId":catalog_book_id,"inLibrary":True,"unlocked":True,"readerReady":True,"shelfState":shelf_state}
 
@@ -304,7 +304,7 @@ class CatalogService:
                 if not self.accounts._one(cursor):raise SaaSError("account_unavailable","账号不可用。",403)
                 cursor.execute("DELETE FROM user_library WHERE user_id=%s AND catalog_book_id=%s RETURNING id",(user_id,catalog_book_id))
                 if self.accounts._one(cursor):
-                    self.memberships._audit(cursor,user_id,None,"catalog_library_remove",{"catalogBookId":catalog_book_id})
+                    self.resources._audit(cursor,user_id,None,"catalog_library_remove",{"catalogBookId":catalog_book_id})
                 return {"status":"removed","bookId":catalog_book_id,"inLibrary":False,"unlocked":False}
 
     def review(self,actor_id:str,source_book_id:str,rights_status:str,publication_status:str,updates:dict[str,Any]|None=None)->dict[str,Any]:
@@ -343,7 +343,7 @@ class CatalogService:
                     if not tag_row:
                         tag_row={"id":new_id()};cursor.execute("INSERT INTO catalog_tags(id,slug,title) VALUES(%s,%s,%s)",(tag_row["id"],tag_slug,tag))
                     cursor.execute("INSERT INTO catalog_book_tags(catalog_book_id,tag_id) VALUES(%s,%s)",(book_id,tag_row["id"]))
-                self.memberships._audit(cursor,actor_id,actor_id,"catalog_review",{"sourceBookId":source_book_id,"catalogBookId":book_id,"rights":rights_status,"publication":publication_status})
+                self.resources._audit(cursor,actor_id,actor_id,"catalog_review",{"sourceBookId":source_book_id,"catalogBookId":book_id,"rights":rights_status,"publication":publication_status})
                 cursor.execute("SELECT cb.*,(SELECT COALESCE(NULLIF(src.cover_url,''),src.data_json->>'cover') FROM content_books src WHERE src.id=cb.source_content_book_id) AS source_cover,cs.slug AS series_slug,cs.title AS series_title FROM catalog_books cb LEFT JOIN catalog_series cs ON cs.id=cb.series_id WHERE cb.id=%s",(book_id,));row=self.accounts._one(cursor)
                 return {"book":self._book(row,self._tags(cursor,[book_id]).get(book_id,[]),detail=True)}
 
@@ -375,7 +375,7 @@ class CatalogService:
                 cursor.execute("DELETE FROM catalog_books WHERE id=%s",(book["id"],))
                 cursor.execute("DELETE FROM content_books WHERE id=%s",(source_book_id,))
                 cursor.execute('DELETE FROM workspace_settings WHERE key=%s',('source-position:'+source_book_id,))
-                self.memberships._audit(cursor,actor_id,actor_id,"catalog_permanent_delete",{"sourceBookId":source_book_id,"title":book["title"]})
+                self.resources._audit(cursor,actor_id,actor_id,"catalog_permanent_delete",{"sourceBookId":source_book_id,"title":book["title"]})
         from saas_media import MediaService
-        cleanup=MediaService(self.accounts,self.memberships).remove_deleted_files(asset_ids)
+        cleanup=MediaService(self.accounts,self.resources).remove_deleted_files(asset_ids)
         return {"status":"deleted","bookId":source_book_id,**cleanup}

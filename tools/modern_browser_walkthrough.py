@@ -20,7 +20,7 @@ from browser_walkthrough import screenshot
 from saas_auth import ROOT
 
 
-SCREENS = ("workspace", "catalog", "library", "stats", "vocab", "rewards", "membership", "admin", "platform", "settings")
+SCREENS = ("workspace", "catalog", "library", "stats", "vocab", "rewards", "admin", "platform", "settings")
 
 
 def stop(process):

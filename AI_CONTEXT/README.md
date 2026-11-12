@@ -1,160 +1,64 @@
-# RynEnglish AI 共享上下文
+# 纸间微光 AI 共享上下文
 
-更新时间：2026-11-08（Asia/Shanghai）
+更新时间：2026-11-12（Asia/Shanghai）
 
-这是后续 AI 的最小全局上下文。只读取与当前任务相关的任务文档。
+只读取与当前任务对应的交接文档。用户已确认国内/国际双入口：国内保留邀请制个人阅读空间，国际定向恢复原商业流程；两站都要求邀请码。详细边界与真实发布状态见 dual-entry-commerce，不得整站回退旧代码。
 
 ## 当前架构
 
-- 前端：React 18 + Ant Design 5 + Vite，源码在 `frontend/src/`。
-- SaaS 入口：生产根路径 `/` 直接加载 `reader/site/`；`/modern.html` 和 `/modern-assets/*` 只保留 308 兼容跳转。开发入口仍由 Vite 提供。
-- 后端：Python 单体 HTTP 服务 `tools/reader_server.py`，业务拆分在 `tools/saas_*.py`。
-- SaaS 数据：PostgreSQL 端口 55432；正式本地库 `shiyue_saas_local`，隔离测试库 `shiyue_phase1_test`。
-- 旧数据：`.local/library.sqlite3` 和 `books/` 继续保留，不能删除；SaaS 新页面不再使用旧 UI。
-- 媒体访问：SaaS 使用鉴权 `/api/media/{asset_id}` 和媒体变体。
-- 认证：数据库会话 Cookie + CSRF；未登录时 React 渲染登录页。
-- 长任务：导入和部署使用任务 API + 前端轮询，不依赖 WebSocket。
-- 本地开发：唯一入口 `./start-reader.sh --saas-local`（无参数也等同），一键运行本机 PostgreSQL 55432、Redis 56379、Java 验证码 18080、API 8790、SMTP 1025 和 Vite 4173。独立本地数据、原媒体和密钥，不读取旧 `.env`，远程调试启动器/SSH 转发/远程代理已删除；管理员主动远程部署能力保留。首次安装、新会话启动、登录、启停与排错统一见 [`docs/LOCAL_DEVELOPMENT.md`](../docs/LOCAL_DEVELOPMENT.md)，实现状态见 local-development。
-- 京东云节点：`117.72.209.44` 当前版本 `code-20261108-092017-f197eeaa`，应用、PostgreSQL、Redis、验证码及原音处理已验收。原 Cloudflare Tunnel 已恢复并开机自启，当前公网入口 `https://10ye.cc`，后台基础地址已同步。`rynenglish.com` 的 Let's Encrypt/443/续期按用户要求列入备案后待办；节点直连域名暂置空，升级不再尝试申请证书。#89 保留原失败记录；详见 platform-operations。
+- 维护约定：用户已验收国内主页与10ye.cc流程，确认统一归入主线 `main`。后续先区分共享核心/国内扩展/国际扩展；共享业务只改一份、两站回归，单站差异通过 `@site` 组合。每次程序发布从同一提交同时交付国内、国际、博客及共享后端，不单独发布某站。详见 `AGENTS.md` 与 `docs/DEPLOYMENT_SITES.md`；`npm run deploy:jdcloud` 默认保数据升级。
 
-## 全局完成状态
+- 前端：React 18 + Ant Design 5 + Vite，共享 `frontend/src/` 阅读业务，`sites/cn|intl` 分别构建到 `reader/site/` 与 `reader/site-intl/`。两个前端进程代理同一 API。
+- 双站：`blog/` 独立 Astro + Retypeset 构建到 `reader/blog/`；主域名 `rynenglish.com` 提供静态文章，阅读应用使用 `learn.rynenglish.com`，按 Host 隔离资源和 API。发布进度及外部条件见博客分站交接。
+- 后端：Python HTTP 服务 `tools/reader_server.py`，业务模块 `tools/saas_*.py`，PostgreSQL、Redis、Java 旋转验证码。
+- 身份：有效邀请码注册、邮箱验证、数据库会话 Cookie、CSRF、管理员权限及租户隔离。未登录不能读取书城。
+- 资源：`saas_resources.py` 统一控制容量、设备和 AI 使用；原个人账号资源不降低，有效付费权益跨入口一致。国内商业页面/API关闭；国际商业模块受可信入口、权限与渠道门禁控制。保留学习奖励。
+- 媒体：鉴权原音与媒体变体；保留私人上传、官方内容审核、书架、阅读、学习记录和生词复习。
+- 长任务：创建任务后轮询，不额外引入 WebSocket。
+- 历史数据：迁移链、交易记录与用户媒体保留；0045增量区分原私人账号和新国际账号资源策略。不得删除 `.local/`、`books/` 或真实用户数据。
+- 内部 `shiyue` Cookie、数据库、容器与目录标识继续兼容；域名以实际配置为准，改名不自动迁移域名。
+- 本地唯一入口：`./start-reader.sh --saas-local`（无参数等同）。独立 PostgreSQL 55432、Redis 56379、验证码 18080、API 8790、SMTP 1025、Vite 4173。见 [本地开发指南](../docs/LOCAL_DEVELOPMENT.md)。
+- 部署仅本地模式、回环来源、登录管理员可用，写入检查 CSRF。远程模式拒绝平台与部署管理。
 
-- 2026-11-08 京东云整项目清理完成：6 个项目容器、项目镜像、安装目录、外置备份及 HTTPS/隧道服务已移除；重新 SSH 验证项目端口关闭、sshd/Docker 正常。本地卸载任务 #62 完成，发布记录标记 uninstalled，本地开发数据与节点密钥保留。以下上线记录均为清理前历史，不代表当前在线状态。
-- 2026-11-08 “重新部署”不再备份远程数据库；空节点运行镜像和模型准备已修复，数据库/缓存/验证码/应用已恢复，95 项部署回归和真实 CPU 转写通过。随后恢复原 Cloudflare Tunnel，`10ye.cc` 首页/API 严格 TLS 通过；直连域名证书延期至用户备案完成后补装，#89 保留原失败状态。程序升级仍保留远程备份行为；详见 platform-operations。
+## 跨任务状态
 
-- 2026-11-08 本地调试已完全独立：项目内安装 PostgreSQL 16.15 / Redis 7.4.7 / Node 22 / Python venv，使用项目 JDK21 启动真实验证码；原远程调试代码及旧启动指引已删除。一键启停、默认入口、固定本地 API 代理、跨会话配置和完整安装文档已统一；真实 Chrome 验证码登录/管理员权限、隔离库 HTTP smoke、Java8项、相关集成及启停持久化通过。跨系统安装分支尚待目标机器验证；详见 local-development。
-
-- 2026-11-07 程序升级任务#6因本机无JDK导致验证码构建失败，未上传或切换生产。已准备经校验的项目内JDK21、补充构建依赖检查和明确错误，完整升级包本地构建/Java8项/部署43项/UI22项等验证通过；本地后台已重载，可重新启动升级。详见platform-operations。
-
-- 2026-11-07 品牌提交 `7b65f78` 已通过合并提交 `d1ca8d9` 正式合入并推送 main，远程 `feat/rynenglish-brand` 已删除，本地无同名分支。合并保留 main 的上传完整性与 Linux 对齐部署修复；隔离构建、modern/UI、38 项相关回归、JS/Python/diff 通过。原工作区阅读器/导入及额外品牌打包门禁和回归改动独立保留、尚未提交，用户数据和 SSH 调试保持；详见 brand-assets、platform-operations。
-
-- 2026-11-07 阅读界面细节已定向发布入口 `7b99f4600df6`：翻页放慢为 900ms、原书背景覆盖书页、紧凑页码与居中进度保存提示、PC 精读图片铺满列宽。本地标题/图标已同步 RynEnglish 官方品牌。构建、相关测试、本地与生产候选 Chrome 验证通过；发布哈希、248 个保留文件与源站 HTTPS/SaaS/Redis 健康通过，详见 reader、brand-assets、platform-operations。
-
-- 2026-11-07 阅读交互修复已定向发布入口 `596c367b06f6`：普通模式改称精读模式，原 EPUB/PDF 查词悬停背景与指针、翻书动效，EPUB 2/3 原目录与正文标题兜底，同一文件内两章节可准确跳转。该轮使用的远程数据调试现已撤除，后续在独立本地环境验证再发布。无数据库或后台变更；详见 reader、platform-operations。
-
-- 2026-11-07 泛读原文件方案已定向发布京东云，入口版本 `abd3103b9d5f`：PDF 直接显示原页；新导入 EPUB 保存原文件的 spine/版式索引，阅读时加载原 XHTML/CSS/字体/插图，固定版式等比显示、流式版式按窗口分页。精确原文位置独立于原音；试读不暴露全文源索引，旧书不回填。保留 RynEnglish/验证码/分段补传及 237 个既有文件哈希，生产备份与健康校验通过；Linux 隔离库 61 项、候选和生产静态文件的 Chrome 回归通过。详见 reader、import-media、platform-operations。
-
-- 2026-11-07 线上再次停 15% 已定位为配套音频上传中断，原完整性检查正确拒绝残片。已发布配套 MP3 的 256 KiB 校验分段、重试及同任务补传入口（私人/官方），前端版本 `206bdef9aa05`；保留泛读、品牌/验证码和其他媒体路径。Linux 26 项、客户端 4 项与构建/Chrome 验收通过；本次任务已恢复完成，完整原音 16 分 52 秒、词覆盖 98.81%、206 句/89 原文块，测试库已清理。详见 import-media、platform-operations。
-
-- 2026-11-07 泛读模式已定向发布京东云，前端版本 `73a8f1652388`，保留线上 RynEnglish、验证码及上传完整性修复。支持鉴权原 PDF 与新结构化 EPUB：PDF 原页、EPUB 原段落与重排翻页、目录/查词/位置保存重试；泛读暂停原音，不支持资源禁止切换。Linux 隔离 PostgreSQL 的 EPUB 实际导入、真实 PDF 处理及媒体回归共 18 项通过；构建、静态回归及 Chrome 验收通过。旧书不回填，无数据库迁移；公网域名本机仍有 TLS 超时，源站 HTTPS/健康与 SSH 隧道访问正常。详见 reader、import-media、platform-operations。
-
-- 2026-11-07 京东云导入故障确认是上传截断：远端 MP3 与本地完整文件前 3,843,761 字节相同，本地完整文件 8,159,161 字节、16 分 52 秒。已撤回接受部分音频的处理，上传代理/后端校验长度，客户端附带原文件大小；完整原音对齐覆盖 98.81%。安装、重装、升级统一准备 CPU 对齐依赖和校验模型，候选版本必须通过真实推理才切换。生产基线 `code-20261106-113458-43116bfb`，保留 RynEnglish 品牌和验证码；发布与验证结果见 `tasks/import-media/HANDOFF.md`、`tasks/platform-operations/HANDOFF.md`。
-
-- 2026-11-05 京东云已发布验证码开关与 DirectMail，当前版本 `code-20261105-173117-956a2f49`：去掉重复窗口、视口居中、修复 SDK 页面坐标导致验证失败；按用户最新反馈恢复原动物示例图，移除难识别的书籍照片。生产旋转验证码已开启，覆盖登录/注册/找回密码/换设备；本地三流程和线上 Cloudflare 真实浏览器验证通过。SMTP 测试邮件已被接受，实际收件待用户确认。原 5173 和 Cloudflare 入口正常；本机公网域名 80/443 出现拦截/超时，外部访问待确认。详见 `tasks/auth-captcha/HANDOFF.md`。
-
-- 2026-11-05 京东云标准 HTTPS 入口已上线，域名改为 `rynenglish.com`：80 自动 308 到 443，Let's Encrypt 证书有效至 2027-02-03，自动续期 timer active、实际续期 dry-run/重载通过；公网跳转、严格 TLS、首页/API 验收通过。安装/升级脚本及节点域名设置已补齐；仅调整入口和后台基础 URL，保留业务版本与数据。详见 `tasks/platform-operations/HANDOFF.md`。
-
-- 2026-10-27 本地前端端口改为 4173 并已启动，后台 8790；京东云程序升级任务 #26157 完成，生产版本 `code-20261027-151445-6f1c16a2`，公网 HTTPS 5173、Cloudflare 域名及数据库/Redis 健康通过。保留现有用户数据；IP 直连需安装并信任根证书。详见 `tasks/platform-operations/HANDOFF.md`。
-
-- 2026-10-26 首页截图按用户顺序更新第 1/2/4 图：查词浮窗、固定阅读工具、生词复习（采用用户补发的绿色主题图）。截图压缩为 WebP 并遮住个人邮箱；互动演示更换 correct/language，复用当前阅读器查词卡，区分悬停简义与点击语境释义。仅本地、未发布；详见 `tasks/frontend-design/HANDOFF.md`。
-
-- 2026-10-25 首页产品截图更新与布局优化：使用 2026-10-23 最新截图替换过时图片（阅读器单词面板 1800×856、工作空间继续学习 1440×900、学习记录热力图 1440×1000），优化展示样式（12px 圆角、双层投影、渐变蒙版、hover 上浮效果），图片压缩为 JPG 减小 40% 体积。构建及前端检查通过；仅本地，未发布生产。详见 `tasks/frontend-design/HANDOFF.md`。
-
-- 2026-10-25 首页互动演示区修复：补充缺失的 CSS 样式（琥珀色渐变背景、白色卡片、单词高亮与交互样式），修正组件事件处理、状态管理和可访问性属性。构建及前端检查通过；仅本地，未发布生产。详见 `tasks/frontend-design/HANDOFF.md`。
-
-- 2026-10-24 难度级别 CEFR 标准化：导入、书城筛选与展示全部采用 CEFR 级别（A1/A2/B1/B2/C1/C2），迁移脚本已将历史数据的旧分类（starter/elementary/pre-intermediate/upper-intermediate/advanced/proficiency）转为 CEFR 级别。catalog_books 已全量转换，content_books 保留用户上传内容自带的其他元数据。构建、JS 语法及 Python 编译通过；已提交 cc62163 并在本地库应用迁移 0043，未发布生产。详见 `frontend/src/config/levels.mjs` 和 `tools/saas_migrations/0043_cefr_levels.sql`。
-
-- 2026-10-22 学习中心主题切换：账号可选松林绿、雾蓝、鸢尾紫；主题通过现有偏好 API 校验和持久化，首次进入工作区加载，阅读器护眼仍独立。构建、modern smoke、UI 回归、Python 编译及 diff 检查通过；phase7 PostgreSQL 集成需配置专用 `_test` 数据库，尚未运行。详见 `tasks/pc-workspace/HANDOFF.md`。
-
-- 2026-10-22 登录设备限制：平台管理员绕过套餐设备数并仅保留最近 5 条会话；普通用户超限可选择本人旧设备，确认后由服务端原子解绑并自动登录。新增的 phase1 PostgreSQL 用例通过，完整 phase1 另有一项旧首页断言与 API-only 架构不符；本地服务健康、前端构建及通用回归通过，未发布生产。详见 `tasks/backend-saas/HANDOFF.md`。
-
-- 2026-10-22 PC 视觉更新：首页、学习空间与阅读器统一为浅纸白/灰绿阅读工作室，工作区侧栏改用浅色导航，首页展示真实产品截图且不再覆盖浮层。真实 API、学习数据、原音播放和复习流程未改。构建、modern smoke、UI 22 项、JS、Python 编译、diff 检查及本地 Chrome 三页检查通过；仅本地，未发布生产、未优化移动端。指定内网 GPT Image 2 服务未提供该模型且生成端点返回 503，未生成新图并继续使用现有产品截图。详见 `tasks/pc-workspace/HANDOFF.md`。
-
-- 2026-10-21 本地支付改造：购买方式由运营后台动态配置；新增支付宝当面付扫码、服务端异步通知验签/查单、幂等开通、待支付订单恢复、支付宝订单退款与查退款，以及拾页兑换记录管理。正式本地库在备份校验后应用 migration `0041` 并重启 8790；支付 PostgreSQL 集成 4 项、commerce 回归 13 项、HTTP smoke、RSA2/审批/退款单测、构建和前端检查通过。当前 8790 开启仅限本地的模拟支付，运营后台可启用支付宝并走无扣款的下单/开通/退款流程；个人开发者应用已创建但真实支付产品尚未获批，未部署生产。详见 `tasks/payments/HANDOFF.md`。
-
-- 2026-10-21 运营后台本地调整：默认打开概览，转化报表并入概览；内容审核支持批量发布，套餐默认筛选销售中，空版本或全草稿的未上架套餐可删除，待验证账号可标记已验证或删除，邀请码可一键清理过期未用码并删除被清空的批次，审计记录支持操作/关键词筛选与服务端分页。新增回归覆盖删除套餐 404 和空批次清理；21 项隔离 PostgreSQL 回归及前端构建/检查通过；尚未发布生产。详见 platform-operations、backend-saas、pc-workspace。
-
-- 2026-10-21 修复“上传官方内容”跨库系列/标签 ID 不同引发的 slug 唯一键冲突；任务 #25273 已重放成功，6 本内容进入线上待审核、112 个媒体资产同步，SaaS 健康。详见 platform-operations。
-
-- 2026-10-21 平台与部署：上传入口改为“上传官方内容”并说明仅增量上传本地官方内容；部署任务表显示部署日期；已部署节点根据本地部署记录或远端版本显示“重新部署”，状态未知时禁止启动。重装先备份远端数据库，再卸载服务/数据库/缓存并完整安装，确认提示远端数据将由本机快照替换。构建、部署测试及代码检查通过；未执行远程部署。详见 platform-operations。
-
-- 2026-10-21 本地修复 YouTube 已下载中文字幕未接入阅读句子，并按实际译文显示翻译按钮；已有书籍读取时补充响应、不回填。官方/私人导入列表增加明确导入时间。隔离回归与 Chrome 实机验证通过，8790 已重启，未发布生产。详见 import-media、reader。
-
-- 2026-10-21 按用户限定，本地实现新 YouTube 导入人工英文字幕声学 CTC 对齐与不匹配回退；自动字幕等其他路径保持原流程，已有书籍未处理。真实全片/第 11 句检查、错字幕/静音拒绝、真实原音短视频处理至隔离 PostgreSQL 入库及 15 项集成回归通过；确认用户导入结束后已重启 8790，后台与 5173 代理健康，未发布生产。详见 import-media。
-
-- 2026-10-20 阅读媒体新导入词时间轴已本地修复；最新视频第 11 行复查又修正 v2 的 DTW 距离阈值误判及标点共享时间点引发的整句回退，现为 timingVersion 3。全片 1,884 词重跑、人工字幕区间交叉检查及隔离导入回归通过，8790 已重启；依用户要求不写回已有书籍，未发布生产。详见 import-media。
-
-- 2026-10-20 PC 首页学习闭环已本地实现：账号计划、统一续读、复习断点恢复、真实今日成果、阅读结算到本次新词复习再回首页；奖励去除失效权益并区分签到/学习。已备份迁移 0040、重启 8790；46 项隔离库回归、独立库 HTTP smoke、构建及前端检查通过，Chrome 隔离账号主要闭环已验收。未发布生产，详见 pc-workspace、reader、vocabulary-review、backend-saas。
-
-- 2026-10-20 PC 生词复习第一版已本地实现：今日计划、主动回忆、薄弱词巩固、真实结算、断点恢复及回原文；新增迁移 0039 和服务端原子幂等作答。本地已备份迁移、重启，24 项隔离库回归、HTTP smoke、构建及 PC 浏览器验收通过；未发布生产。详见 vocabulary-review。
-
-- 2026-10-20 PC 商业化第二轮已在本地完成：套餐权益逐行对比、首次学习指引、跨页面购买恢复、注册验证提示及真实转化/次日留存报表；本地已备份并应用迁移 0038、重启后台。36 项隔离库回归、35 项 HTTP smoke、构建与前端检查通过，Chrome 已验收主要路径；未发布生产。详见 commercial-design-audit。
-
-- 2026-10-19 本地实现私人/官方导入隔离、运营内容管理官方导入及审核、用户媒体占用只读汇总、读物永久删除清理媒体；新 YouTube 高清最高 480p、流畅最高 240p，历史文件不重编码。45 项隔离库回归及前端检查通过，本地迁移 0037 和后台重启已完成；旧 HTTP smoke 的首页断言仍不兼容 API-only 后台，尚未发布生产。
-
-- 2026-10-19 确认待审核内容采用媒体增量传输与 PostgreSQL 书目合并；移除仅适用旧 SQLite/reader 的失效内容回滚入口、接口和脚本，保留代码回滚。构建及 33 项部署回归通过，完整 HTTP smoke 受测试库缺少 migration 0036 阻断；尚未发布生产。详见 platform-operations。
-
-- 2026-10-19 “平台与部署”限制为本地模式登录管理员：远程隐藏菜单且拒绝部署/平台配置 API，本地启动启用 `SHIYUE_DEPLOYMENT_MODE=local`，后台默认及远程容器为 remote；部署历史增加删除失败/取消任务。验证通过、本地已加载，尚未发布云服务器；详见 platform-operations。
-
-- 2026-10-18 本地统一视频首帧/文字封面与书城按钮，导入历史增加分页和删除失败记录，YouTube 默认系列改频道并新增历史回填迁移 0036；构建入口缓存版本由时间戳改内容哈希。构建、相关回归和 PC 浏览器验收通过，尚未发布生产；2026-10-19 已备份本地正式库并应用 0036，本地调试服务健康。详见 pc-workspace、import-media、backend-saas、platform-operations。
-
-- 2026-10-18 本地视频画质按有效套餐控制：免费版阅读/试读仅流畅，进阶与 Pro 可切换高清；媒体直链同步拦截免费账号，套餐公开页、会员中心与运营说明已更新。构建及隔离库回归通过，本地后台已重启，尚未发布生产。详见 reader、backend-saas、public-commerce 交接。
-- 2026-10-18 本地内容审核移入运营后台；本地打包上传的新/变更书目强制未审核，必须由目标站管理员审核发布后才进入首页书城。重复同步未变更内容保留线上审核；本地构建及隔离 PostgreSQL 回归通过，尚未发布生产。详见 platform-operations、pc-workspace 交接。
-- 2026-10-18 本地套餐触限已接入同页升级闭环：书城/试读收藏、导入额度及阅读器 AI 额度触限展示可升级商品，云猫购买兑换成功刷新权益并提供继续原操作；最高档显示释放名额/额度恢复说明。构建与浏览器模拟接口验证通过，尚未发布生产；详见 public-commerce、pc-workspace 交接。
-- 2026-10-18 本地官方读物已统一为书架收藏状态：取消“已解锁”展示，阅读及原媒体权限跟随当前书架；官方与私人音视频合计严格检查套餐收藏上限。权益并发/幂等已扩展修复并新增 PostgreSQL 回归，新增 migration `0035`；尚未发布生产，详见 backend-saas、pc-workspace、import-media 交接。
-- 2026-10-18 本地修复已登录但 CSRF Cookie 丢失导致所有写 API 403：认证读取轮换 session 并补发会话绑定 CSRF Cookie，前端对 `csrf_failed` 自动恢复并单次重试；旧 session 失效。待浏览器旧会话验收，尚未发布生产，详见 backend-saas 与 pc-workspace 交接。
-- 2026-10-18 本地修复 YouTube 导入长时间停在 45%：Whisper 关闭并丢弃进度输出；已接入阶段进度、转写百分比和遗留任务恢复，卡住的任务已恢复完成。代码及测试通过，运行中的 8790 服务需重启后生效；详见 import-media 交接。
-- 2026-10-18 已实机检查并热修复京东云视频处理：FFmpeg/Node/yt-dlp/Whisper/模型、媒体挂载和 3 秒端到端处理均通过；生产后台已加载导入进度修复版并重启，后续正式 SaaS 升级需带入该代码，详见 import-media 与 platform-operations 交接。
-
-- SaaS 阶段 1–9 后端、迁移、认证、会员、书城、奖励、工作区、导入、媒体、AI、管理后台均已实现并经过本地集成测试。
-- PC React 页面已经覆盖登录、学习空间、书城、书架、学习记录、生词、奖励、会员、运营后台、平台部署、系统设置和阅读器。
-- PC 主要 API 已真实接入；刷新路由、认证闪屏、分页、热力图、任务轮询、批量邀请码和数据库 AI 配置已修正。
-- 阅读器精读模式提供媒体/字幕/释义三栏交互、快捷键与护眼；PDF/新 EPUB 泛读直接渲染鉴权原文件并保存原文索引，旧结构化 EPUB 保留既有段落阅读，不回填历史书籍。
-- 京东云旧 reader 服务已被根路径 React SaaS 替换；生产 PostgreSQL、Redis、SaaS 容器和已公开书籍增量同步已实机验收。
-- 本地和生产已切换云猫寄售套餐：Free/进阶/Pro 三档公开展示；进阶 ¥19、Pro ¥49/30 天，预设 6 折。两款云猫商品已上架、首批库存各 20 张，购买链接已回填两环境，40 个兑换码哈希已同步生产。会员规则为同级立即续费延长有效期、只允许向上升级并按剩余价值折算、不允许降级；本地实现待发布生产。
-- 2026-10-18 京东云生产当前代码版本 `code-20261018-081452-67a2d629`，SaaS 升级任务 #24389 complete；SaaS/Redis、根页面、运行挂载与 migrations 至 `0034` 均通过。旧付费套餐缺失的音视频收藏权益及已有账期已修复；指定生产管理员账号随后按用户要求恢复免费，详见 backend-saas 交接。
-- 2026-10-17 云猫购买到兑换闭环发布 `code-20261017-103944-212bb675`：套餐先进入拾页购买说明页，云猫新标签支付，购买页直接兑换码开通，登录后回跳到原购买页。
-- 2026-10-17 按用户反馈，本地公开套餐页及会员中心续费/升级均改为当前页购买兑换弹窗，避免中间页面；隔离账号验证通过，尚未发布生产。
-- 2026-10-17 修复平台“程序升级”路由误用旧 reader 部署流程，改为 SaaS 专用候选升级，包含远程 PostgreSQL 备份、SQL migrations 完整性核验、候选健康验收和远端 current 版本展示；本地验证完成，尚未发布生产。详见 `tasks/platform-operations/HANDOFF.md`。
-- 2026-10-17 已确认并在本地实现 AI 分析新口径：免费用户按 `Asia/Shanghai` 自然日限制词汇语境 50 次、句法分析 20 次；进阶/Pro 两项不限次数，不扣额度。服务端使用独立每日 usage period，尚未发布生产。
-- 最新构建与测试通过，最近 PC 浏览器验收目录：`.local/debug/modern-walkthrough/20261011T135345Z`。
-
-## 全局未完成
-
-- 移动端展示、底部操作区、手势和弹层交互尚未进入正式优化阶段。
-- 云猫商品上架、库存与购买链接配置已完成；真实资金支付 → 云猫自动发码 → 正式账号兑换的整链路尚需商户本人完成一笔购买验收。
-- 配套 MP3 已支持可恢复分段上传；独立音视频和文档源文件仍使用原上传方式，后续可按资源策略独立扩展。
-- 京东云当前通过 Cloudflare Tunnel 正常服务；`rynenglish.com` 直连 HTTPS 待用户完成备案及云端放行后补装，生产回滚未验收。
-- Dioco 完整词典接口 `base_dict_getFullDict_8` 尚未按用户提供的请求正式接入；当前词汇 AI 走 `/api/word-context`。
-- 旧 UI 文件仍物理保留用于兼容和行为参考；不能删除，SaaS 路由不得再使用它们。
-- `frontend/src/main.jsx` 仍包含部分已停用的旧 React 内联组件，后续可在不改变行为的前提下清理。
+- 国内/国际并行在 `feat/dual-entry-commerce` 实施并经用户验收，本轮归入主线 `main`：国际回环5173、国内5174、共享回环API8790。用户已授权国内5174监听0.0.0.0供IP博客预览，配置 `cn_public_preview:true`；实际发布状态以 [双入口交接](tasks/dual-entry-commerce/HANDOFF.md) 为准，端口文档见 `docs/DEPLOYMENT_SITES.md`。
+- 私域改造 `810f19a`、博客分站 `3c0c77b` 与后续双入口/AI博客改版均包含在本轮主线合并范围；原 `refactor/private-paper-glow`、`feat/paper-glow-blog-domains` 为历史实施分支，后续不作为独立业务主线。本地栈入口 `http://127.0.0.1:4173`。
+- 国内品牌为“纸间微光”，标语“一页一光，静读慢行。”；国际恢复RynEnglish首页与商业素材，通过独立构建隔离。
+- 京东云最新 #19 已保数据升级，`current=code-20261112-180050-05f3c3a1`、源码 `e8b1ccd`，迁移0045。博客改为纸色个人手记，4个AI栏目/12篇新文/共15篇，40个正常公网页面与本地产物逐页一致；IP5174可预览，国际健康正常，数据保留。详见博客分站交接；国内learn解析、京东云域名放行/HTTPS及真实支付渠道仍待外部条件。
+- PC 优先，移动端视觉优化仍待后续独立任务；保留原音播放，不以浏览器 TTS 替代。
 
 ## 任务索引
 
-| 当前工作内容 | 必读任务文档 |
+| 工作内容 | 必读任务文档 |
 |---|---|
-| 品牌图标、网站图标导出 | `tasks/brand-assets/HANDOFF.md` |
-| PC 页面、路由、分页、工作台视觉 | `tasks/pc-workspace/HANDOFF.md` |
-| 书城搜索、筛选、内容发现方案（待评审，未实现） | `tasks/catalog-discovery/HANDOFF.md` |
-| PC 商业化改版、布局配色、购买流程与验收 | `tasks/commercial-design-audit/HANDOFF.md` |
-| 生词复习、练习会话、学习结算与复访闭环 | `tasks/vocabulary-review/HANDOFF.md` |
+| 独立静态博客、主域名与阅读子域名、双站发布 | `tasks/blog-domains/HANDOFF.md` |
+| 私域邀请制、商业功能移除、纸间微光更名 | `tasks/private-paper-glow/HANDOFF.md` |
+| 品牌与网站图标 | `tasks/brand-assets/HANDOFF.md` |
+| PC 页面、路由、分页、工作台 | `tasks/pc-workspace/HANDOFF.md` |
+| 书城搜索、筛选、发现（待评审） | `tasks/catalog-discovery/HANDOFF.md` |
+| 生词复习、学习结算 | `tasks/vocabulary-review/HANDOFF.md` |
 | 阅读器、媒体、字幕、快捷键、词典 | `tasks/reader/HANDOFF.md` |
-| 账号、会员、数据库、API、安全 | `tasks/backend-saas/HANDOFF.md` |
-| 认证验证码开关、天爱旋转验证、DirectMail 发信 | `tasks/auth-captcha/HANDOFF.md` |
-| 公开官网、商品版本、折扣、云猫寄售、套餐兑换 | `tasks/public-commerce/HANDOFF.md` |
-| 支付方式配置、支付宝订单/退款、兑换记录管理 | `tasks/payments/HANDOFF.md` |
-| 文件/YouTube 导入、任务进度、媒体处理 | `tasks/import-media/HANDOFF.md` |
-| 本地独立环境安装、启动、启停、登录、排错 | `tasks/local-development/HANDOFF.md` |
+| 账号、资源、数据库、API、安全 | `tasks/backend-saas/HANDOFF.md` |
+| 验证码、DirectMail | `tasks/auth-captcha/HANDOFF.md` |
+| 文件与 YouTube 导入、媒体处理 | `tasks/import-media/HANDOFF.md` |
+| 本地安装、启停、登录与排错 | `tasks/local-development/HANDOFF.md` |
 | 运营后台、AI 配置、远程部署 | `tasks/platform-operations/HANDOFF.md` |
-| 移动端适配与触摸交互 | `tasks/mobile/HANDOFF.md` |
+| 国内/国际入口并行、共享业务与国际商业功能恢复 | `tasks/dual-entry-commerce/HANDOFF.md` |
+| 移动端适配 | `tasks/mobile/HANDOFF.md` |
+| 国际商业与支付、国内关闭边界 | `tasks/public-commerce/HANDOFF.md`、`tasks/payments/HANDOFF.md` |
 
-如果任务跨多个领域，只读取实际涉及的几个文档。
-
-新的独立任务使用 `TASK_TEMPLATE.md` 创建自己的 `tasks/<task-slug>/HANDOFF.md`。
+历史商业设计审计不再代表当前需求。新独立任务创建 `tasks/<task-slug>/HANDOFF.md`，不要把详细历史堆回全局索引。
 
 ## 默认验证
 
-```bash
+```sh
 npm run build:modern
 npm run test:modern
 npm run test:ui
 npm run check:js
-python3 -m py_compile <本轮修改的 Python 文件>
+python3 -m py_compile <本轮修改的Python文件>
 git diff --check
 ```
 
-涉及认证、写 API 或租户数据时，再运行：
-
-```bash
-./start-reader.sh --saas-smoke 8795
-```
+涉及账号、资源或租户写入时，用专用 `_test` PostgreSQL 运行相关集成及 `./start-reader.sh --saas-smoke 8795`；先明确隔离测试 URL，不得以正式库运行清理数据的测试。

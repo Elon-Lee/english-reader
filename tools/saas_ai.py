@@ -12,7 +12,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from saas_auth import SaaSError, SaaSService, new_id
-from saas_membership import MembershipService, as_json
+from saas_resources import ResourceService, as_json
 
 
 WORD_RE=re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?|\d+")
@@ -29,8 +29,8 @@ def plain_html(value:Any)->str:
 
 
 class WorkspaceAIService:
-    def __init__(self,accounts:SaaSService,memberships:MembershipService,generator:Callable[[str,dict[str,Any]],dict[str,Any]]|None=None):
-        self.accounts,self.memberships=accounts,memberships
+    def __init__(self,accounts:SaaSService,resources:ResourceService,generator:Callable[[str,dict[str,Any]],dict[str,Any]]|None=None):
+        self.accounts,self.resources=accounts,resources
         self.generator=generator or self._dioco_generate
         self.upstream="https://api-cdn-plus.dioco.io"
 
@@ -79,8 +79,8 @@ class WorkspaceAIService:
                 return self._generate_once(user_id,feature,result_type,content_key,input_hash,book_id,prompt)
 
     def _generate_once(self,user_id:str,feature:str,result_type:str,content_key:str,input_hash:str,book_id:str,prompt:dict[str,Any])->dict[str,Any]:
-        quota_key=f"ai:{result_type}:{hashlib.sha256(f'{content_key}:{input_hash}'.encode()).hexdigest()}";reservation=self.memberships.reserve(user_id,feature,quota_key,1,{"bookId":book_id,"contentKey":content_key,"inputHash":input_hash})["reservation"]
-        if reservation.get("state")=="released":reservation=self.memberships.reserve(user_id,feature,f"{quota_key}:retry:{new_id()}",1,{"bookId":book_id,"contentKey":content_key,"inputHash":input_hash,"retry":True})["reservation"]
+        quota_key=f"ai:{result_type}:{hashlib.sha256(f'{content_key}:{input_hash}'.encode()).hexdigest()}";reservation=self.resources.reserve(user_id,feature,quota_key,1,{"bookId":book_id,"contentKey":content_key,"inputHash":input_hash})["reservation"]
+        if reservation.get("state")=="released":reservation=self.resources.reserve(user_id,feature,f"{quota_key}:retry:{new_id()}",1,{"bookId":book_id,"contentKey":content_key,"inputHash":input_hash,"retry":True})["reservation"]
         charged=reservation.get("state")=="reserved"
         try:
             generated=self.generator(result_type,prompt)
@@ -92,11 +92,11 @@ class WorkspaceAIService:
                     VALUES(%s,%s,%s,%s,%s,%s,%s::jsonb,%s) ON CONFLICT (owner_id,result_type,content_key,input_hash) DO NOTHING""",(new_id(),user_id,book_id,result_type,content_key,input_hash,json.dumps(payload,ensure_ascii=False),provider))
                     cursor.execute("SELECT * FROM workspace_ai_results WHERE owner_id=%s AND result_type=%s AND content_key=%s AND input_hash=%s",(user_id,result_type,content_key,input_hash));row=self.accounts._one(cursor)
                     if not row:raise SaaSError("ai_cache_failed","AI 结果保存失败。",503)
-            if charged:self.memberships.settle(user_id,reservation["id"])
+            if charged:self.resources.settle(user_id,reservation["id"])
             return {"payload":as_json(row["payload"]),"provider":row["provider"],"cached":False,"charged":charged}
         except Exception as exc:
             if reservation.get("state")=="reserved":
-                try:self.memberships.release(user_id,reservation["id"])
+                try:self.resources.release(user_id,reservation["id"])
                 except SaaSError:pass
             if isinstance(exc,SaaSError):raise
             raise SaaSError("ai_generation_failed","AI 生成失败，请稍后重试。",502) from exc

@@ -1,0 +1,5 @@
+---
+import { categories } from '@/categories'
+const items = [{ href: '/', title: '首页' }, ...categories.map(c => ({ href: `/categories/${c.slug}/`, title: c.title })), { href: '/archives/', title: '归档' }, { href: '/about/', title: '关于' }]
+---
+<nav class="site-nav" aria-label="站点导航">{items.map(item => <a href={item.href} aria-current={Astro.url.pathname === item.href ? 'page' : undefined}>{item.title}</a>)}</nav>

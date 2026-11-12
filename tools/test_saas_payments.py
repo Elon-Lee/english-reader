@@ -44,6 +44,18 @@ class AlipaySignatureTests(unittest.TestCase):
         with self.assertRaises(SaaSConfigurationError):
             disabled._keys()
 
+    def test_domestic_or_insecure_callback_cannot_enable_international_payment(self):
+        for notify in ('https://cn.example.test/api/payments/alipay/notify', 'http://intl.example.test/api/payments/alipay/notify'):
+            service = AlipayService(None, MembershipService(None), {
+                **self.service.environment, 'INTL_APP_BASE_URL': 'https://intl.example.test', 'ALIPAY_NOTIFY_URL': notify,
+            })
+            self.assertFalse(service.readiness()['configured'])
+        valid = AlipayService(None, MembershipService(None), {
+            **self.service.environment, 'INTL_APP_BASE_URL': 'https://intl.example.test',
+            'ALIPAY_NOTIFY_URL': 'https://intl.example.test/api/payments/alipay/notify',
+        })
+        self.assertTrue(valid.readiness()['configured'])
+
     def test_refund_requires_provider_success_and_exact_full_amount(self):
         self.assertTrue(AlipayService._refund_confirmed({"refund_status": "REFUND_SUCCESS", "refund_amount": "19.00"}, 1900))
         self.assertFalse(AlipayService._refund_confirmed({"refund_status": "REFUND_PROCESSING", "refund_amount": "19.00"}, 1900))

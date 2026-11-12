@@ -3,7 +3,7 @@ from datetime import timedelta
 import json
 
 from saas_auth import SaaSError
-from saas_membership import as_json, timestamp
+from saas_resources import as_json, timestamp
 from saas_rewards import local_day
 
 DEFAULT_PLAN = {'readingMinutes': 10, 'reviewWords': 5, 'weeklyMinutes': 120}

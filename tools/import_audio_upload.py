@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from saas_auth import SaaSError
-from saas_membership import as_json
+from saas_resources import as_json
 
 CHUNK_BYTES=256*1024
 MAX_AUDIO_BYTES=2*1024*1024*1024

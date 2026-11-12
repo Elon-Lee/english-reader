@@ -1,0 +1,139 @@
+---
+import type { MarkdownHeading } from 'astro'
+import TocIcon from '@/assets/icons/toc-icon.svg'
+import { ui } from '@/i18n/ui'
+import { getPageInfo } from '@/utils/page'
+
+interface Props {
+  headings: MarkdownHeading[]
+}
+
+const { currentLang } = getPageInfo(Astro.url.pathname)
+const currentUI = ui[currentLang as keyof typeof ui] ?? {}
+
+const { headings = [] } = Astro.props
+const filteredHeadings = headings.filter(heading => heading.depth >= 2 && heading.depth <= 4)
+---
+
+{filteredHeadings.length > 0 && (
+  // TOC Container
+  <div
+    id="toc-container"
+    class="mb-6 uno-round-border bg-secondary/5 2xl:(fixed left-0 top-44.5 max-w-[min(calc(50vw-38rem),13rem)] border-none bg-secondary/0)"
+  >
+    {/* TOC Toggle */}
+    <div class="relative h-12 w-full">
+      <button
+        type="button"
+        id="toc-toggle"
+        aria-label="展开或收起文章目录"
+        aria-expanded="false"
+        aria-controls="toc-accordion-wrapper"
+        class="absolute inset-0 flex cursor-pointer items-center 2xl:(static flex c-secondary/60 transition-colors ease-out hover:c-primary)"
+      >
+        {/* Title on Mobile */}
+        <span id="toc-mobile-text">
+          {currentUI.toc}
+        </span>
+
+        {/* Icon on Desktop */}
+        <TocIcon
+          id="toc-desktop-icon"
+          aria-hidden="true"
+          class="ml-4 hidden aspect-square w-4.2 2xl:(mt-4 block origin-center active:scale-90!)"
+          fill="currentColor"
+        />
+      </button>
+    </div>
+
+    {/* Expandable Content Wrapper with Accordion Animation */}
+    <div id="toc-accordion-wrapper" hidden>
+      <nav
+        id="toc-accordion-content"
+        aria-label="文章目录"
+      >
+        {/* TOC List */}
+        <ul id="toc-links-list">
+          {filteredHeadings.map(heading => (
+            <li
+              class:list={{
+                'ml-0': heading.depth === 2,
+                'ml-4': heading.depth === 3,
+                'ml-8': heading.depth === 4,
+              }}
+            >
+              <a
+                href={`#${heading.slug}`}
+                class:list={[
+                  { 'no-heti toc-links-h2': heading.depth === 2 },
+                  { 'no-heti toc-links-h3': heading.depth === 3 },
+                  { 'no-heti toc-links-h4': heading.depth === 4 },
+                ]}
+              >
+                {heading.text}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+    </div>
+  </div>
+)}
+
+<script>
+const is2xl = window.matchMedia('(min-width: 1536px)')
+let ticking = false
+let lastLink: HTMLAnchorElement | null = null
+
+function setExpanded(expanded: boolean) {
+  document.getElementById('toc-toggle')?.setAttribute('aria-expanded', String(expanded))
+  const panel = document.getElementById('toc-accordion-wrapper')
+  if (panel) panel.hidden = !expanded
+}
+function toggleDirectory() {
+  setExpanded(document.getElementById('toc-toggle')?.getAttribute('aria-expanded') !== 'true')
+}
+function resetForViewport() {
+  setExpanded(is2xl.matches)
+}
+
+function updateCurrentHeading() {
+  const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('#toc-links-list a'))
+  let current = links[0]
+  for (const link of links) {
+    const heading = document.getElementById(decodeURIComponent(link.hash.slice(1)))
+    if (heading && heading.getBoundingClientRect().top <= 140) current = link
+  }
+  if (current && current !== lastLink) {
+    lastLink?.removeAttribute('aria-current')
+    current.setAttribute('aria-current', 'location')
+    if (is2xl.matches) current.scrollIntoView({ block: 'nearest' })
+    lastLink = current
+  }
+  ticking = false
+}
+function handleScroll() {
+  if (!ticking) {
+    window.requestAnimationFrame(updateCurrentHeading)
+    ticking = true
+  }
+}
+function setup() {
+  ticking = false
+  lastLink = null
+  if (!document.getElementById('toc-links-list')) return
+  resetForViewport()
+  document.getElementById('toc-toggle')?.addEventListener('click', toggleDirectory)
+  is2xl.addEventListener('change', resetForViewport)
+  updateCurrentHeading()
+  document.addEventListener('scroll', handleScroll, { passive: true })
+}
+function cleanup() {
+  document.getElementById('toc-toggle')?.removeEventListener('click', toggleDirectory)
+  is2xl.removeEventListener('change', resetForViewport)
+  document.removeEventListener('scroll', handleScroll)
+  lastLink = null
+}
+document.addEventListener('astro:page-load', setup)
+document.addEventListener('astro:before-swap', cleanup)
+</script>

@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react'
 import { Form, Input, Modal, Progress, Segmented, Select, Tooltip, Typography } from 'antd'
 import { CloudUploadOutlined, QuestionCircleOutlined } from '@ant-design/icons'
 import { csrfHeaders, getJson, postJson, requestJson } from '../api/client'
-import { handleMembershipLimit } from '../api/membershipLimit'
 import { bookLevels } from '../utils/levels.mjs'
 import { MAX_TOPICS, bookTopics } from '../utils/topics.mjs'
 import { selectImportFiles } from '../utils/importFiles.mjs'
@@ -82,11 +81,11 @@ export default function ImportModal({ open, onClose, onResume, onCreated, messag
       if (source === 'youtube') void postJson(`${base}/${encodeURIComponent(taskId)}/complete`, {}).then(async result => {
         await onCreated?.()
         if (result.task?.status === 'complete') messageApi.success(official ? '官方内容已导入，请审核后发布' : '内容已导入学习空间')
-      }).catch(async error => { await onCreated?.(); if (official || !handleMembershipLimit(error, { onContinue: onResume })) messageApi.error(error.message || '导入处理失败') })
+      }).catch(async error => { await onCreated?.(); messageApi.error(error.message || '导入处理失败') })
     } catch (error) {
       if (pendingTask && error.preserveTask) { onClose(); await onCreated?.() }
       else if (pendingTask) await postJson(`${base}/${encodeURIComponent(pendingTask)}/cancel`, {}).catch(() => {})
-      if (official || !handleMembershipLimit(error, { onClose, onContinue: onResume })) messageApi.error(error.message || '导入失败')
+      messageApi.error(error.message || '导入失败')
     } finally { setSubmitting(false) }
   }
   return <Modal title={official ? '内容导入' : '导入新的学习内容'} open={open} onCancel={submitting ? undefined : onClose} onOk={() => form.submit()} confirmLoading={submitting} okButtonProps={{ disabled: matching }} okText={uploadProgress > 0 && uploadProgress < 100 ? `上传 ${uploadProgress}%` : '创建导入任务'} cancelText="稍后再说"><Form form={form} layout="vertical" onFinish={submit} disabled={submitting}><Form.Item label="内容来源" name="source" initialValue="file"><Segmented block options={[{ label: '上传文件', value: 'file' }, { label: 'YouTube', value: 'youtube' }]} /></Form.Item><Form.Item label="读物标题" name="title"><Input placeholder="可选，默认使用文件名" /></Form.Item><Form.Item label="系列" name="series"><Input placeholder="可选，例如 Oxford Bookworms" /></Form.Item><Form.Item label={<span>等级 <Tooltip title="选择读物适合的词汇与阅读难度等级"><QuestionCircleOutlined /></Tooltip></span>} name="level"><Select allowClear placeholder="选择等级" options={bookLevels.map(level => ({ value: level.value, label: <span>{level.value} · {level.label} <Tooltip title={level.detail}><QuestionCircleOutlined /></Tooltip></span> }))} /></Form.Item><Form.Item label={<span>主题 <Tooltip title="用于书城主题筛选和中文搜索，最多选择 3 个"><QuestionCircleOutlined /></Tooltip></span>} name="topics" extra="审核发布后作为书城标签展示。"><Select mode="multiple" allowClear maxCount={MAX_TOPICS} placeholder="选择主题" options={bookTopics.map(topic => ({ value: topic, label: topic }))} /></Form.Item>{source === 'youtube' ? <Form.Item label="YouTube 链接" name="input" rules={[{ required: true, message: '请输入 YouTube 链接' }]}><Input type="url" prefix={<CloudUploadOutlined />} placeholder="粘贴 YouTube 链接" /></Form.Item> : <Form.Item label="学习文件" extra="可同时选择文档和同名 MP3。"><input aria-label="学习文件" key={open ? 'open' : 'closed'} type="file" multiple disabled={submitting} accept=".txt,.md,.markdown,.pdf,.epub,.mp3,.mp4,.mov,.m4v,.mkv,.webm" onChange={chooseFiles} />{file && <div>{file.name}</div>}</Form.Item>}{source === 'file' && <div role="status" style={{ marginBottom: 16 }}>{localAudio ? <Text type="success">已匹配音频：{localAudio.name}（将一起上传）</Text> : matching ? <Text>正在匹配已上传音频…</Text> : matchedAudio ? <Text type="success">已匹配音频：{matchedAudio.filename}</Text> : matchError ? <Text type="danger">{matchError}</Text> : file && /\.(epub|pdf|txt|md|markdown)$/i.test(file.name) ? <Text type="secondary">未找到已上传的同名 MP3；可重新选择文档和 MP3 一起上传，或仅导入正文。</Text> : null}</div>}{submitting && source === 'file' && <Progress percent={uploadProgress} status={uploadProgress >= 100 ? 'success' : 'active'} />}<Text type="secondary">{official ? '导入后属于官方内容，审核发布后才进入书城。' : '导入后仅自己可见，不进入内容管理。'}支持 TXT、Markdown、PDF、EPUB、MP3、MP4、MOV、M4V、MKV、WebM。</Text></Form></Modal>

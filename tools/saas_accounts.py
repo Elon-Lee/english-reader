@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import Any
 
 from saas_auth import SaaSError, SaaSService, hash_password, new_id, utcnow
-from saas_membership import as_json, timestamp
+from saas_resources import as_json, timestamp
 
 
 DELETION_GRACE_DAYS = 30
@@ -20,10 +20,9 @@ class AccountLifecycleService:
     def export(self,user_id:str)->dict[str,Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT id,email,display_name,timezone,plan_version,email_verified_at,created_at,last_login_at FROM users WHERE id=%s",(user_id,));user=self.accounts._one(cursor)
+                cursor.execute("SELECT id,email,display_name,timezone,email_verified_at,created_at,last_login_at FROM users WHERE id=%s",(user_id,));user=self.accounts._one(cursor)
                 if not user:raise SaaSError("user_not_found","用户不存在。",404)
                 cursor.execute("SELECT id,label,user_agent,first_seen_at,last_seen_at,revoked_at FROM devices WHERE user_id=%s",(user_id,));devices=[{"id":r["id"],"label":r["label"],"userAgent":r["user_agent"],"firstSeenAt":timestamp(r["first_seen_at"]),"lastSeenAt":timestamp(r["last_seen_at"]),"revoked":bool(r["revoked_at"])} for r in self.accounts._many(cursor)]
-                cursor.execute("SELECT plan_version_id,status,starts_at,ends_at,note FROM subscriptions WHERE user_id=%s ORDER BY created_at",(user_id,));subscriptions=[{"planVersion":r["plan_version_id"],"status":r["status"],"startsAt":timestamp(r["starts_at"]),"endsAt":timestamp(r["ends_at"]),"note":r["note"]} for r in self.accounts._many(cursor)]
                 cursor.execute("SELECT feature,quantity,reason,created_at FROM usage_ledger WHERE user_id=%s ORDER BY created_at",(user_id,));usage=[{"feature":r["feature"],"quantity":int(r["quantity"]),"reason":r["reason"],"createdAt":timestamp(r["created_at"])} for r in self.accounts._many(cursor)]
                 cursor.execute("SELECT event_type,points,reward_day,created_at FROM reward_ledger WHERE user_id=%s ORDER BY created_at",(user_id,));rewards=[{"eventType":r["event_type"],"points":int(r["points"]),"day":r["reward_day"].isoformat() if r["reward_day"] else None,"createdAt":timestamp(r["created_at"])} for r in self.accounts._many(cursor)]
                 cursor.execute("SELECT checkin_day,kind,streak_count FROM checkins WHERE user_id=%s ORDER BY checkin_day",(user_id,));checkins=[{"day":r["checkin_day"].isoformat(),"kind":r["kind"],"streak":int(r["streak_count"])} for r in self.accounts._many(cursor)]
@@ -35,7 +34,7 @@ class AccountLifecycleService:
                 cursor.execute("SELECT book_id,sentence_id,word_index,payload FROM content_word_annotations WHERE owner_id=%s ORDER BY book_id,sentence_id,word_index",(user_id,));annotations=[{"bookId":r["book_id"],"sentenceId":r["sentence_id"],"wordIndex":int(r["word_index"]),"payload":as_json(r["payload"])} for r in self.accounts._many(cursor)]
                 cursor.execute("SELECT day,payload FROM content_learning_daily WHERE owner_id=%s ORDER BY day",(user_id,));learning_days=[{"day":r["day"].isoformat(),"payload":as_json(r["payload"])} for r in self.accounts._many(cursor)]
                 cursor.execute("SELECT content_book_id,result_type,content_key,payload,provider,created_at,updated_at FROM workspace_ai_results WHERE owner_id=%s ORDER BY created_at",(user_id,));ai_results=[{"bookId":r["content_book_id"],"type":r["result_type"],"contentKey":r["content_key"],"payload":as_json(r["payload"]),"provider":r["provider"],"createdAt":timestamp(r["created_at"]),"updatedAt":timestamp(r["updated_at"])} for r in self.accounts._many(cursor)]
-                return {"exportedAt":timestamp(utcnow()),"account":{"id":user["id"],"email":user["email"],"displayName":user["display_name"],"timezone":user["timezone"],"planVersion":user["plan_version"],"emailVerified":bool(user["email_verified_at"]),"createdAt":timestamp(user["created_at"]),"lastLoginAt":timestamp(user["last_login_at"])},"devices":devices,"subscriptions":subscriptions,"usage":usage,"rewards":rewards,"checkins":checkins,"officialLibrary":library,"privateBooks":private_books,"vocabulary":vocabulary,"annotations":annotations,"learningDays":learning_days,"aiResults":ai_results,"assets":assets}
+                return {"exportedAt":timestamp(utcnow()),"account":{"id":user["id"],"email":user["email"],"displayName":user["display_name"],"timezone":user["timezone"],"emailVerified":bool(user["email_verified_at"]),"createdAt":timestamp(user["created_at"]),"lastLoginAt":timestamp(user["last_login_at"])},"devices":devices,"usage":usage,"rewards":rewards,"checkins":checkins,"officialLibrary":library,"privateBooks":private_books,"vocabulary":vocabulary,"annotations":annotations,"learningDays":learning_days,"aiResults":ai_results,"assets":assets}
 
     def deletion_status(self,user_id:str)->dict[str,Any]:
         with self.accounts.transaction() as connection:

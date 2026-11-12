@@ -1,0 +1,13 @@
+---
+import { allLocales } from '@/config'
+import { categories } from '@/categories'
+import { getLangFromLocale, getLangRouteParam } from '@/i18n/lang'
+import Layout from '@/layouts/Layout.astro'
+import PostCard from '@/components/PostCard.astro'
+import { getPosts } from '@/utils/content'
+export function getStaticPaths() { return allLocales.flatMap(lang => categories.map(category => ({ params: { lang: getLangRouteParam(lang), category: category.slug }, props: { category } }))) }
+interface Props { category: typeof categories[number] }
+const { category } = Astro.props
+const posts = (await getPosts(getLangFromLocale(Astro.currentLocale))).filter(post => post.data.category === category.slug)
+---
+<Layout postTitle={category.title} postDescription={category.description}><section class="page-heading"><p class="eyebrow">栏目 / {posts.length} 篇手记</p><h1>{category.title}</h1><p>{category.description}</p></section><div class="category-tabs" aria-label="浏览栏目">{categories.map(c => <a href={`/categories/${c.slug}/`} aria-current={c.slug === category.slug ? 'page' : undefined}>{c.title}</a>)}</div><div class="post-grid category-posts">{posts.map(post => <PostCard post={post} />)}</div></Layout>

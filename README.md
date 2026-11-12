@@ -1,4 +1,6 @@
-# RynEnglish
+# 纸间微光
+
+个人阅读空间，仅通过有效邀请码注册。站内保留阅读、原音听读、私人资料导入和学习记录；不提供商品购买、支付或会员订阅。
 
 React + Ant Design 前端，Python SaaS 后端，PostgreSQL 16、Redis 7 和本地 Java 旋转验证码服务。
 

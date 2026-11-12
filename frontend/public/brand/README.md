@@ -1,16 +1,8 @@
-# RynEnglish
+# 纸间微光
 
-Slogan: **Every Page, A Deeper Understanding.**
+标语：在纸页之间，留住一点光。
 
-The R/e monogram places a small e at the upper right of the capital R,
-using pine green (`#285c45`), paper white
-(`#faf8ef`) and warm gold (`#d7ba80`). The icon is drawn as SVG paths and
-does not require a font. Use the React `BrandLogo` component for the wordmark.
+`paper-glow-mark.svg` 使用松林绿、纸白和暖金色，图形由展开的书页与微光组成，
+采用 SVG 路径，不依赖字体。React 界面使用 `BrandLogo` 组件统一展示中文名称。
 
-- `rynenglish-mark.svg`: master vector icon, 64 × 64 viewBox.
-- `rynenglish-icon-512.png`, `rynenglish-icon-320.png`: transparent PNG exports.
-- `rynenglish-apple-touch.png`: 180 × 180 touch icon.
-- `rynenglish-favicon.ico`: 16, 32 and 48 px variants.
-
-These are public source assets copied by Vite. Use a new filename or a
-versioned URL for future changes because production caches them as immutable.
+品牌资源由 Vite 复制到构建目录。修改时更新文件名或 URL 版本，避免长期缓存。

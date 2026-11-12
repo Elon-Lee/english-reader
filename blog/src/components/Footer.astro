@@ -1,0 +1,4 @@
+---
+import { icpRecord, themeConfig } from '@/config'
+---
+<footer class="site-footer"><div><strong>纸间微光</strong><span>把问题写下来，让思考慢一点。</span></div><p><a href="/archives/">文章归档</a> · <a href="/tags/">标签</a> · <a href="/rss.xml">RSS 订阅</a></p><p>© {new Date().getFullYear()} {themeConfig.site.author} · Astro / Retypeset</p>{icpRecord && <p><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">{icpRecord}</a></p>}</footer>

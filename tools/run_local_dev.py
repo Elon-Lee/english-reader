@@ -70,7 +70,7 @@ def environment(config, source=None):
         'SHIYUE_SAAS_AUTO_MIGRATE': '1', 'BOOTSTRAP_ADMIN_EMAIL': '', 'BOOTSTRAP_ADMIN_PASSWORD': '',
         'READER_HOST': '127.0.0.1', 'READER_PORT': '8790', 'APP_BASE_URL': 'http://127.0.0.1:4173',
         'MEDIA_ROOT': str(STATE / 'media'),
-        'SMTP_HOST': '127.0.0.1', 'SMTP_PORT': '1025', 'SMTP_FROM': 'debug@rynenglish.local',
+        'SMTP_HOST': '127.0.0.1', 'SMTP_PORT': '1025', 'SMTP_FROM': 'debug@paper-glow.local',
         'SMTP_USER': '', 'SMTP_PASSWORD': '', 'SHIYUE_DEBUG_SMTP_PORT': '1025',
         'PYTHONDONTWRITEBYTECODE': '1', 'NO_PROXY': 'localhost,127.0.0.1,::1', 'no_proxy': 'localhost,127.0.0.1,::1',
     })

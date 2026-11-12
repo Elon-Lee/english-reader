@@ -10,6 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from saas_auth import SaaSError, SaaSConfigurationError, SaaSService, new_id, utcnow
+from saas_resources import ResourceService, FEATURES as RESOURCE_FEATURES
 
 
 FEATURES = (
@@ -90,6 +91,7 @@ def parse_time(value: Any, field: str) -> datetime:
 class MembershipService:
     def __init__(self, accounts: SaaSService):
         self.accounts = accounts
+        self.resources = ResourceService(accounts)
 
     @staticmethod
     def _recommended_plan(plan_version: str) -> str | None:
@@ -190,49 +192,13 @@ class MembershipService:
         return consumed, max(0, reserved)
 
     def _feature_summary(self, cursor: Any, context: dict[str, Any], feature: str) -> dict[str, Any]:
-        if feature in AI_FEATURES and context["plan"]["slug"] != "free":
+        if feature not in RESOURCE_FEATURES:
             return {"feature": feature, "limit": None, "used": 0, "credits": 0, "reserved": 0, "available": None, "unlimited": True, "resetAt": None}
-        context = self._quota_context(cursor, context, feature)
-        limits = as_json(context["period"]["limits_json"])
-        limit = int(limits.get(feature, 0))
-        if feature in {"video_library_capacity", "audio_library_capacity"}:
-            media_type = FEATURE_DEFINITIONS[feature]["capacity"]
-            used = self._media_library_count(cursor, str(context["user"]["id"]), media_type)
-            return {"feature": feature, "limit": limit, "used": used, "credits": 0, "reserved": 0, "available": max(0, limit - used)}
-        net_used, reserved = self._usage_numbers(cursor, context["period"]["id"], feature)
-        used, credits = max(0, net_used), max(0, -net_used)
-        return {
-            "feature": feature,
-            "limit": limit,
-            "used": used,
-            "credits": credits,
-            "reserved": reserved,
-            "available": max(0, limit - net_used - reserved),
-            "unlimited": False,
-            "resetAt": timestamp(context["period"]["ends_at"]) if feature in AI_FEATURES else None,
-        }
+        shared = self.resources._context(cursor, str(context['user']['id']))
+        return self.resources._feature_summary(cursor, shared, feature)
 
     def _quota_context(self, cursor: Any, context: dict[str, Any], feature: str) -> dict[str, Any]:
-        if feature not in AI_FEATURES or context["plan"]["slug"] != "free":
-            return context
-        local_now = utcnow().astimezone(SHANGHAI)
-        start_local = datetime.combine(local_now.date(), datetime.min.time(), tzinfo=SHANGHAI)
-        end_local = start_local + timedelta(days=1)
-        period_key = f"ai-day:{local_now.date().isoformat()}"
-        limits = as_json(context["plan"]["quotas_json"])
-        limits.update(DAILY_AI_LIMITS)
-        cursor.execute(
-            """INSERT INTO usage_periods(id,user_id,subscription_id,plan_version_id,period_key,starts_at,ends_at,limits_json)
-            VALUES(%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
-            ON CONFLICT (user_id,period_key) DO NOTHING""",
-            (new_id(), context["user"]["id"], context["subscription"]["id"] if context["subscription"] else None,
-             context["plan"]["id"], period_key, start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc), json.dumps(limits)),
-        )
-        cursor.execute("SELECT * FROM usage_periods WHERE user_id=%s AND period_key=%s FOR UPDATE", (context["user"]["id"], period_key))
-        daily_period = self.accounts._one(cursor)
-        if not daily_period:
-            raise RuntimeError("daily AI usage period creation failed")
-        return {**context, "period": daily_period}
+        return self.resources._context(cursor, str(context['user']['id']))
 
     def _public_context(self, cursor: Any, context: dict[str, Any], include_usage: bool = False) -> dict[str, Any]:
         plan, period, subscription = context["plan"], context["period"], context["subscription"]
@@ -259,8 +225,10 @@ class MembershipService:
             "changeOrders": change_orders,
             "mediaCapacity": self._media_capacity(cursor, str(context["user"]["id"]), as_json(period["limits_json"])),
         }
-        if include_usage:
-            result["usage"] = [self._feature_summary(cursor, context, feature) for feature in FEATURES]
+        shared = self.resources._public_context(cursor, self.resources._context(cursor, str(context["user"]["id"])), include_usage)
+        for key in ("limits", "canWatchHdVideo", "mediaCapacity", "usage"):
+            if key in shared:
+                result[key] = shared[key]
         return result
 
     def _change_details(self, cursor: Any, user_id: str, target_plan_id: str, now: datetime | None = None) -> dict[str, Any]:
@@ -389,15 +357,7 @@ class MembershipService:
         return result
 
     def assert_media_capacity(self, cursor: Any, user_id: str, context: dict[str, Any], kind: str) -> dict[str, int]:
-        if kind not in {"video", "audio"}:
-            return {"used": 0, "limit": 0, "available": 0}
-        feature = f"{kind}_library_capacity"
-        limits = as_json(context["period"]["limits_json"])
-        limit = int(limits.get(feature, 0) or 0)
-        used = self._media_library_count(cursor, user_id, kind)
-        if used >= limit:
-            raise SaaSError("media_capacity_exceeded", f"当前套餐最多收藏 {limit} 个{ '视频' if kind == 'video' else '音频'}（公版与私人内容合计）。", 409, {"feature": feature, "plan": context["plan"]["id"], "used": used, "limit": limit, "recommendedPlan": self._recommended_plan(context["plan"]["id"])})
-        return {"used": used, "limit": limit, "available": max(0, limit - used)}
+        return self.resources.assert_media_capacity(cursor, user_id, self.resources._context(cursor, user_id), kind)
 
     def membership(self, user_id: str, include_usage: bool = False) -> dict[str, Any]:
         with self.accounts.transaction() as connection:
@@ -437,96 +397,13 @@ class MembershipService:
                 return {"request":{"id":request_id,"currentPlan":context["plan"]["id"],"requestedPlan":requested["id"],"requestedName":requested["display_name"],"status":"pending","note":str(note or "")[:1000],"createdAt":timestamp(utcnow())}}
 
     def reserve(self, user_id: str, feature: str, idempotency_key: str, quantity: int = 1, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-        feature = self._feature(feature)
-        key = str(idempotency_key or "").strip()
-        if not key or len(key) > 255:
-            raise SaaSError("invalid_idempotency_key", "操作标识无效。", 400)
-        try:
-            quantity = int(quantity)
-        except (TypeError, ValueError) as exc:
-            raise SaaSError("invalid_quantity", "额度数量无效。", 400) from exc
-        if quantity < 1:
-            raise SaaSError("invalid_quantity", "额度数量必须大于零。", 400)
-        payload = metadata or {}
-        with self.accounts.transaction() as connection:
-            with connection.cursor() as cursor:
-                context = self._context(cursor, user_id)
-                quota_context = self._quota_context(cursor, context, feature)
-                cursor.execute(
-                    "SELECT * FROM quota_reservations WHERE user_id=%s AND feature=%s AND idempotency_key=%s FOR UPDATE",
-                    (user_id, feature, key),
-                )
-                existing = self.accounts._one(cursor)
-                if existing:
-                    if int(existing["quantity"]) != quantity:
-                        raise SaaSError("idempotency_conflict", "同一操作标识不能用于不同的额度数量。", 409)
-                    return {"reservation": self._reservation(existing), "membership": self._public_context(cursor, context, True), "idempotent": True}
-                if feature in AI_FEATURES and context["plan"]["slug"] != "free":
-                    reservation = {
-                        "id": new_id(), "user_id": user_id, "usage_period_id": context["period"]["id"], "feature": feature,
-                        "idempotency_key": key, "quantity": quantity, "state": "settled", "metadata_json": payload,
-                    }
-                    cursor.execute(
-                        """INSERT INTO quota_reservations(id,user_id,usage_period_id,feature,idempotency_key,quantity,state,metadata_json,settled_at)
-                        VALUES(%s,%s,%s,%s,%s,%s,'settled',%s::jsonb,NOW())""",
-                        (reservation["id"], user_id, reservation["usage_period_id"], feature, key, quantity, json.dumps(payload)),
-                    )
-                    return {"reservation": self._reservation(reservation), "membership": self._public_context(cursor, context, True), "idempotent": False}
-                quota_context = self._quota_context(cursor, context, feature)
-                summary = self._feature_summary(cursor, quota_context, feature)
-                if quantity > summary["available"]:
-                    plan_id = context["plan"]["id"]
-                    raise SaaSError(
-                        "quota_exceeded", "当前套餐的该项额度已用完。", 409,
-                        {"feature": feature, "plan": plan_id, "used": summary["used"], "limit": summary["limit"],
-                         "resetAt": timestamp(context["period"]["ends_at"]), "recommendedPlan": self._recommended_plan(plan_id)},
-                    )
-                reservation = {
-                    "id": new_id(), "user_id": user_id, "usage_period_id": quota_context["period"]["id"], "feature": feature,
-                    "idempotency_key": key, "quantity": quantity, "state": "reserved", "metadata_json": payload,
-                }
-                cursor.execute(
-                    """INSERT INTO quota_reservations(id,user_id,usage_period_id,feature,idempotency_key,quantity,state,metadata_json)
-                    VALUES(%s,%s,%s,%s,%s,%s,%s,%s::jsonb)""",
-                    (reservation["id"], user_id, reservation["usage_period_id"], feature, key, quantity, "reserved", json.dumps(payload)),
-                )
-                return {"reservation": self._reservation(reservation), "membership": self._public_context(cursor, context, True), "idempotent": False}
+        return self.resources.reserve(user_id, feature, idempotency_key, quantity, metadata)
 
     def settle(self, user_id: str, reservation_id: str, reason: str = "consumption") -> dict[str, Any]:
-        if reason not in {"consumption", "storage_settlement"}:
-            raise SaaSError("invalid_settlement", "额度结算类型无效。", 400)
-        with self.accounts.transaction() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT * FROM quota_reservations WHERE id=%s AND user_id=%s FOR UPDATE", (reservation_id, user_id))
-                reservation = self.accounts._one(cursor)
-                if not reservation:
-                    raise SaaSError("reservation_not_found", "额度预占不存在。", 404)
-                if reservation["state"] == "released":
-                    raise SaaSError("reservation_released", "该额度预占已释放。", 409)
-                if reservation["state"] == "reserved":
-                    cursor.execute("UPDATE quota_reservations SET state='settled',settled_at=NOW() WHERE id=%s", (reservation_id,))
-                    cursor.execute(
-                        """INSERT INTO usage_ledger(id,user_id,usage_period_id,feature,quantity,reason,reservation_id,idempotency_key,metadata_json)
-                        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb) ON CONFLICT (reservation_id) DO NOTHING""",
-                        (new_id(), user_id, reservation["usage_period_id"], reservation["feature"], reservation["quantity"], reason,
-                         reservation_id, reservation["idempotency_key"], json.dumps(as_json(reservation["metadata_json"]))),
-                    )
-                cursor.execute("SELECT * FROM quota_reservations WHERE id=%s", (reservation_id,))
-                return self._reservation(self.accounts._one(cursor) or reservation)
+        return self.resources.settle(user_id, reservation_id, reason)
 
     def release(self, user_id: str, reservation_id: str) -> dict[str, Any]:
-        with self.accounts.transaction() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT * FROM quota_reservations WHERE id=%s AND user_id=%s FOR UPDATE", (reservation_id, user_id))
-                reservation = self.accounts._one(cursor)
-                if not reservation:
-                    raise SaaSError("reservation_not_found", "额度预占不存在。", 404)
-                if reservation["state"] == "settled":
-                    raise SaaSError("reservation_settled", "已结算额度不能释放。", 409)
-                if reservation["state"] == "reserved":
-                    cursor.execute("UPDATE quota_reservations SET state='released',released_at=NOW() WHERE id=%s", (reservation_id,))
-                cursor.execute("SELECT * FROM quota_reservations WHERE id=%s", (reservation_id,))
-                return self._reservation(self.accounts._one(cursor) or reservation)
+        return self.resources.release(user_id, reservation_id)
 
     def consume(self, user_id: str, feature: str, idempotency_key: str, quantity: int = 1, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         reservation = self.reserve(user_id, feature, idempotency_key, quantity, metadata)["reservation"]

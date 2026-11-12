@@ -1,0 +1,27 @@
+---
+import { allLocales } from '@/config'
+import { categories } from '@/categories'
+import { getLangFromLocale, getLangRouteParam } from '@/i18n/lang'
+import Layout from '@/layouts/Layout.astro'
+import PostCard from '@/components/PostCard.astro'
+import { getPosts } from '@/utils/content'
+export function getStaticPaths() { return allLocales.map(lang => ({ params: { lang: getLangRouteParam(lang) } })) }
+const posts = await getPosts(getLangFromLocale(Astro.currentLocale))
+const featured = posts.find(post => post.data.abbrlink === 'clear-prompt') ?? posts[0]
+const latest = posts.filter(post => post.id !== featured?.id).slice(0, 6)
+---
+<Layout>
+  <section class="journal-hero">
+    <div class="hero-copy"><p class="eyebrow"><span /> 一份慢慢生长的个人手记</p><h1>从一个问题，<br />慢慢走近 <em>AI。</em></h1><p class="hero-description">关于人工智能，也关于阅读、提问与日常。<br />把复杂的概念拆小，把细小的发现写下来。</p><div class="hero-actions"><a class="paper-button" href="#latest">翻开最新一页 ↗</a><a href="/archives/">文章归档 →</a></div><p class="hero-footnote">不急着知道所有答案，先留住一个好问题。</p></div>
+    <div class="hero-art"><img src="/images/paper-light.svg" alt="摊开的书页、书签与一盏温暖的微光" width="480" height="360" /><span class="art-caption">NOTES, QUESTIONS & LITTLE LIGHTS</span></div>
+  </section>
+  <section class="category-section" aria-labelledby="category-heading"><div class="section-heading"><div><p class="eyebrow">沿着兴趣，翻到下一页</p><h2 id="category-heading">四个小小的书签</h2></div><span class="section-note">CATEGORIES / 04</span></div><div class="category-grid">{categories.map((category, index) => <a class="category-card" href={`/categories/${category.slug}/`}><div><span class="category-number">0{index + 1}</span><span class="category-symbol" aria-hidden="true">{category.symbol}</span></div><h3>{category.title}</h3><p>{category.description}</p><span class="category-count">{posts.filter(post => post.data.category === category.slug).length} 篇文字 <span aria-hidden="true">↗</span></span></a>)}</div></section>
+  <div class="journal-columns"><div>
+    {featured && <section class="featured-section" aria-labelledby="featured-heading"><div class="section-heading"><h2 id="featured-heading">这一篇，先读</h2><span class="section-note">EDITOR'S PICK</span></div><PostCard post={featured} featured /></section>}
+    <section id="latest" aria-labelledby="latest-heading"><div class="section-heading"><div><p class="eyebrow">新写下的几页</p><h2 id="latest-heading">最近的文字</h2></div><a class="text-link" href="/archives/">全部文章 →</a></div><div class="post-grid">{latest.map(post => <PostCard post={post} />)}</div></section>
+  </div><aside class="journal-sidebar">
+    <section class="author-note"><span class="note-mark" aria-hidden="true">纸</span><p class="eyebrow">你好，这里是纸间微光</p><h2>给思考留一处<br />安静的角落。</h2><p>用文字整理对 AI 的好奇，也记录阅读里的停顿。这里的手记不追求速成，更在意每一步是否想清楚。</p><a class="text-link" href="/about/">读一读这份小笺 →</a><div class="note-stats"><div><strong>{posts.length}</strong><span>篇手记</span></div><div><strong>{categories.length}</strong><span>个栏目</span></div></div></section>
+    <section class="reading-path"><p class="eyebrow">从这里开始</p><h2>一条轻盈的阅读路线</h2><ol><li><a href="/posts/tokens-and-context/">先认识：词元与上下文</a></li><li><a href="/posts/clear-prompt/">再试着：把问题说清楚</a></li><li><a href="/posts/reading-before-asking/">回到阅读：先留自己的判断</a></li></ol></section>
+    <section class="sidebar-subscribe"><span aria-hidden="true">✳</span><h2>偶尔翻一翻</h2><p>用你喜欢的阅读器订阅，新的文字会顺着 RSS 抵达。</p><a href="/rss.xml">订阅纸间微光 ↗</a></section>
+  </aside></div>
+</Layout>

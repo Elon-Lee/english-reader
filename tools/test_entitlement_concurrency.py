@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real PostgreSQL races for library access and membership writes; test DB only."""
+"""Real PostgreSQL races for private access and resource accounting; test DB only."""
 import json
 import tempfile
 import threading
@@ -12,12 +12,9 @@ from unittest.mock import patch
 import test_saas_phase3_integration as fixtures
 from saas_auth import SaaSError, new_id, utcnow
 from saas_admin import AdminService
-from saas_commerce import CommerceService
 from saas_ai import WorkspaceAIService as AIService
 from saas_imports import WorkspaceImportService
 from saas_media import MediaService
-from saas_mbdpay import MbdPayService
-from saas_redemptions import RedemptionService
 from saas_rewards import RewardService, MONTHLY_GROWTH_CAP, local_day
 from saas_workspace import WorkspaceService
 
@@ -41,10 +38,7 @@ class EntitlementConcurrencyTests(unittest.TestCase):
             return list(workers.map(run, range(count)))
 
     def limits(self, **limits):
-        self.memberships.usage(str(self.alice['id']))
-        with self.accounts.transaction() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("UPDATE usage_periods SET limits_json=limits_json || %s::jsonb WHERE user_id=%s", (json.dumps(limits), self.alice['id']))
+        self.resources.limits.update(limits)
 
     def scalar(self, query, values=()):
         with self.accounts.transaction() as connection:
@@ -65,11 +59,11 @@ class EntitlementConcurrencyTests(unittest.TestCase):
         self.assertFalse(detail['inLibrary']); self.assertFalse(detail['unlocked'])
         with self.assertRaises(SaaSError): self.catalog.reader(user, book)
         with self.assertRaises(SaaSError): WorkspaceService(self.accounts).save_progress(user, book, 's101-0')
-        with self.assertRaises(SaaSError): AIService(self.accounts, self.memberships).context(user, book, 's101-0', 0, 'Sample')
-        with self.assertRaises(SaaSError): RewardService(self.accounts, self.memberships).complete_book(user, book)
+        with self.assertRaises(SaaSError): AIService(self.accounts, self.resources).context(user, book, 's101-0', 0, 'Sample')
+        with self.assertRaises(SaaSError): RewardService(self.accounts, self.resources).complete_book(user, book)
         with tempfile.TemporaryDirectory() as root:
             Path(root, 'official.mp3').write_bytes(b'original audio')
-            media = MediaService(self.accounts, self.memberships, Path(root))
+            media = MediaService(self.accounts, self.resources, Path(root))
             asset = media.register(str(self.admin['id']), str(self.admin['id']), 'official', 'official.mp3', 'audio', 'audio/mpeg', book)
             with self.assertRaises(SaaSError): media.stream(user, asset['id'])
             self.catalog.add_or_unlock(user, book, False)
@@ -98,48 +92,22 @@ class EntitlementConcurrencyTests(unittest.TestCase):
                 self.catalog.add_or_unlock(user, other, False)
                 with self.assertRaises(SaaSError): self.catalog.add_or_unlock(user, chosen, True)
                 with self.assertRaises(SaaSError): self.catalog.reader(user, chosen)
-                capacity = self.memberships.usage(user)['mediaCapacity'][kind]
+                capacity = self.resources.usage(user)['mediaCapacity'][kind]
                 self.assertEqual((capacity['used'], capacity['limit']), (2, 2))
 
-    def test_quota_settlement_release_race_and_credit_adjustment(self):
+    def test_quota_settlement_release_race(self):
         user = str(self.alice['id']); feature = 'ai_context_generations'
-        reservation = self.memberships.reserve(user, feature, 'race-reserve')['reservation']
-        results = self.race(lambda i: self.memberships.settle(user, reservation['id']) if i % 2 else self.memberships.release(user, reservation['id']))
+        reservation = self.resources.reserve(user, feature, 'race-reserve')['reservation']
+        results = self.race(lambda i: self.resources.settle(user, reservation['id']) if i % 2 else self.resources.release(user, reservation['id']))
         self.assertTrue(any(isinstance(r, dict) for r in results))
         state = self.scalar('SELECT state FROM quota_reservations WHERE id=%s', (reservation['id'],))
         count = self.scalar('SELECT COUNT(*) FROM usage_ledger WHERE reservation_id=%s', (reservation['id'],))
         self.assertEqual(count, int(state == 'settled'))
-        self.race(lambda _: self.memberships.credit(user, feature, 3, 'same-credit'))
-        self.race(lambda _: AdminService(self.accounts, self.memberships).adjust_quota(str(self.admin['id']), user, feature, 2, 'concurrency', 'same-adjust'))
-        self.assertEqual(self.scalar("SELECT SUM(quantity) FROM usage_ledger WHERE user_id=%s AND idempotency_key IN ('same-credit','same-adjust')", (user,)), -5)
-        with self.assertRaises(SaaSError): self.memberships.settle(str(self.bob['id']), reservation['id'])
+        with self.assertRaises(SaaSError): self.resources.settle(str(self.bob['id']), reservation['id'])
 
-    def test_manual_order_and_invite_allowance_idempotency(self):
-        actor = str(self.admin['id']); user = str(self.alice['id'])
-        start = utcnow() - timedelta(minutes=1); end = start + timedelta(days=30)
-        results = self.race(lambda _: self.memberships.create_manual_order(actor, user, 'advanced-v1', start, end, idempotency_key='manual-repeat'))
-        self.assertTrue(all(isinstance(r, dict) for r in results))
-        self.assertEqual(len({r['order']['id'] for r in results}), 1)
-        self.assertEqual(self.scalar('SELECT COUNT(*) FROM subscriptions WHERE user_id=%s', (user,)), 1)
-        with self.assertRaises(SaaSError) as conflict:
-            self.memberships.create_manual_order(actor, user, 'pro-v1', start, end, idempotency_key='manual-repeat')
-        self.assertEqual(conflict.exception.code, 'idempotency_conflict')
-        admin = AdminService(self.accounts, self.memberships)
-        grants = self.race(lambda _: admin.grant_invite_allowance(actor, user, 2, 'same campaign', idempotency_key='invite-repeat'))
-        self.assertEqual(len({r['id'] for r in grants}), 1)
-        self.assertEqual(self.scalar('SELECT SUM(quantity_remaining) FROM member_invite_allowances WHERE user_id=%s', (user,)), 2)
-        rewards = RewardService(self.accounts, self.memberships)
-        invites = self.race(lambda _: rewards.issue_invite(user, 'same-member-invite'))
-        self.assertEqual(len({r['id'] for r in invites}), 1)
-        invites = self.race(lambda i: rewards.issue_invite(user, f'new-member-invite-{i}'))
-        self.assertEqual(sum(isinstance(r, dict) for r in invites), 1)
-        self.assertEqual(self.scalar('SELECT SUM(quantity_remaining) FROM member_invite_allowances WHERE user_id=%s', (user,)), 0)
-        extensions = self.race(lambda _: self.memberships.update_subscription(actor, results[0]['subscription']['id'], 'extend', end + timedelta(days=1), idempotency_key='same-extension'))
-        self.assertTrue(all(isinstance(r, dict) for r in extensions))
-        self.assertEqual(self.scalar('SELECT ends_at FROM subscriptions WHERE id=%s', (results[0]['subscription']['id'],)), end + timedelta(days=1))
 
     def test_rewards_duplicate_events_and_concurrent_spending(self):
-        user = str(self.alice['id']); rewards = RewardService(self.accounts, self.memberships)
+        user = str(self.alice['id']); rewards = RewardService(self.accounts, self.resources)
         self.race(lambda _: rewards.checkin(user))
         self.assertEqual(self.scalar('SELECT COUNT(*) FROM checkins WHERE user_id=%s', (user,)), 1)
         self.race(lambda _: rewards.activity(user, 60, 1, 0, 'same-activity'))
@@ -154,7 +122,7 @@ class EntitlementConcurrencyTests(unittest.TestCase):
         self.assertGreaterEqual(rewards.status(user)['balance'], 0)
 
     def test_parallel_growth_awards_respect_monthly_cap(self):
-        user = str(self.alice['id']); rewards = RewardService(self.accounts, self.memberships)
+        user = str(self.alice['id']); rewards = RewardService(self.accounts, self.resources)
         def award(index):
             with self.accounts.transaction() as connection:
                 with connection.cursor() as cursor:
@@ -163,33 +131,12 @@ class EntitlementConcurrencyTests(unittest.TestCase):
         self.assertEqual(sum(rows), MONTHLY_GROWTH_CAP)
         self.assertEqual(rewards.status(user)['balance'], MONTHLY_GROWTH_CAP)
 
-    def test_cloudcat_same_key_different_codes_and_single_code_multiple_users(self):
-        redemptions = RedemptionService(self.accounts, self.memberships)
-        commerce = CommerceService(self.accounts); actor = str(self.admin['id'])
-        product = commerce.create_product(actor, 'race-' + new_id(), 'advanced')
-        version = commerce.create_version(actor, product['id'], {
-            'name': 'Concurrency month card', 'shortName': 'Month', 'durationDays': 30,
-            'tagline': 'Concurrency validation', 'description': 'Isolated test membership.',
-            'amountCents': 1900, 'featureLimits': {'video_library_capacity': 20, 'audio_library_capacity': 50, 'storage_bytes': 5},
-            'configuredBenefitIds': [],
-        })
-        commerce.publish_version(actor, version['id'])
-        batch = redemptions.generate(actor, version['id'], 3, 'test concurrency')
-        codes = batch['codes']; user = str(self.alice['id'])
-        results = self.race(lambda i: redemptions.redeem(user, codes[i % 2], 'same-operation'))
-        self.assertTrue(all(isinstance(r, dict) for r in results))
-        self.assertEqual(len({r['changeOrder']['id'] for r in results}), 1)
-        self.assertEqual(self.scalar('SELECT COUNT(*) FROM commerce_redemption_codes WHERE redeemed_by=%s', (user,)), 1)
-        users = (user, str(self.bob['id']))
-        results = self.race(lambda i: redemptions.redeem(users[i % 2], codes[2]))
-        winners = {r['changeOrder']['id'] for r in results if isinstance(r, dict)}
-        self.assertEqual(len(winners), 1)
 
     def test_import_create_complete_and_cancel_concurrency(self):
         user = str(self.alice['id'])
         with tempfile.TemporaryDirectory() as root:
-            media = MediaService(self.accounts, self.memberships, Path(root))
-            imports = WorkspaceImportService(self.accounts, self.memberships, media)
+            media = MediaService(self.accounts, self.resources, Path(root))
+            imports = WorkspaceImportService(self.accounts, self.resources, media)
             rows = self.race(lambda _: imports.create(user, 'text', 'same import', 'same.txt', 'same-import'))
             self.assertEqual(len({r['task']['id'] for r in rows}), 1)
             task = rows[0]['task']['id']
@@ -216,7 +163,7 @@ class EntitlementConcurrencyTests(unittest.TestCase):
     def test_storage_limit_and_ai_generation_concurrency(self):
         user = str(self.alice['id']); self.limits(storage_bytes=10)
         with tempfile.TemporaryDirectory() as root:
-            media = MediaService(self.accounts, self.memberships, Path(root))
+            media = MediaService(self.accounts, self.resources, Path(root))
             for i in range(12): Path(root, f'{i}.bin').write_bytes(b'123456')
             rows = self.race(lambda i: media.register(user, user, 'private', f'{i}.bin'))
             self.assertEqual(sum(isinstance(r, dict) for r in rows), 1)
@@ -224,7 +171,7 @@ class EntitlementConcurrencyTests(unittest.TestCase):
         book = self.publish(900); self.catalog.add_or_unlock(user, book, False)
         calls = []
         def generator(*args): calls.append(1); return {'text': 'Real test explanation'}
-        ai = AIService(self.accounts, self.memberships, generator)
+        ai = AIService(self.accounts, self.resources, generator)
         rows = self.race(lambda _: ai.context(user, book, 's900-0', 0, 'Sample'))
         self.assertTrue(all(isinstance(r, dict) for r in rows))
         self.assertEqual(len(calls), 1)
@@ -237,8 +184,8 @@ class EntitlementConcurrencyTests(unittest.TestCase):
             with connection.cursor() as cursor:
                 cursor.execute("UPDATE catalog_books SET resource_type='audio' WHERE id=%s", (official,))
         with tempfile.TemporaryDirectory() as root:
-            media = MediaService(self.accounts, self.memberships, Path(root))
-            imports = WorkspaceImportService(self.accounts, self.memberships, media)
+            media = MediaService(self.accounts, self.resources, Path(root))
+            imports = WorkspaceImportService(self.accounts, self.resources, media)
             task = imports.create(user, 'mp3', 'Last slot', 'last.mp3', 'last-audio')['task']['id']
             imports.upload(user, task, 'last.mp3', b'original test audio', 'audio/mpeg')
             def extracted(source, task_id, title):
@@ -246,7 +193,7 @@ class EntitlementConcurrencyTests(unittest.TestCase):
             with patch.object(imports, '_audio_book', side_effect=extracted):
                 rows = self.race(lambda i: imports.complete(user, task) if i == 0 else self.catalog.add_or_unlock(user, official, False), count=2)
             self.assertEqual(sum(isinstance(r, dict) for r in rows), 1)
-            self.assertEqual(self.memberships.usage(user)['mediaCapacity']['audio']['used'], 1)
+            self.assertEqual(self.resources.usage(user)['mediaCapacity']['audio']['used'], 1)
             if isinstance(rows[0], SaaSError):
                 self.assertEqual(rows[0].code, 'media_capacity_exceeded')
                 self.assertEqual(self.scalar("SELECT COUNT(*) FROM media_assets WHERE owner_id=%s AND status='active'", (user,)), 1)
@@ -254,8 +201,8 @@ class EntitlementConcurrencyTests(unittest.TestCase):
     def test_cancel_during_upload_does_not_restore_task_or_keep_storage(self):
         user = str(self.alice['id'])
         with tempfile.TemporaryDirectory() as root:
-            media = MediaService(self.accounts, self.memberships, Path(root))
-            imports = WorkspaceImportService(self.accounts, self.memberships, media)
+            media = MediaService(self.accounts, self.resources, Path(root))
+            imports = WorkspaceImportService(self.accounts, self.resources, media)
             task = imports.create(user, 'text', 'Cancelled upload', 'cancel.txt', 'upload-cancel')['task']['id']
             register = media.register
             def register_then_cancel(*args, **kwargs):
@@ -267,39 +214,7 @@ class EntitlementConcurrencyTests(unittest.TestCase):
             self.assertEqual(self.scalar('SELECT status FROM workspace_import_tasks WHERE id=%s', (task,)), 'cancelled')
             self.assertEqual(self.scalar("SELECT COUNT(*) FROM media_assets WHERE owner_id=%s AND status='active'", (user,)), 0)
 
-    def test_legacy_payment_callbacks_repeat_and_renew_without_lost_days(self):
-        user = str(self.alice['id']); orders = [new_id() for _ in range(4)]
-        with self.accounts.transaction() as connection:
-            with connection.cursor() as cursor:
-                for order in orders:
-                    cursor.execute("""INSERT INTO payment_orders(id,user_id,plan_version_id,provider,amount_cents,idempotency_key,duration_days)
-                        VALUES(%s,%s,'advanced-v1','mbdpay',1900,%s,30)""", (order, user, order))
-        service = MbdPayService(self.accounts, self.memberships)
-        with patch.object(service, '_verified_remote_order', return_value={'state': 1, 'amount': 1900}):
-            rows = self.race(lambda i: service.handle_webhook({'type': 'charge_succeeded', 'data': {'out_trade_no': orders[i % 4]}}))
-        self.assertTrue(all(isinstance(r, dict) for r in rows))
-        self.assertEqual(sum(r['status'] == 'processed' for r in rows), 4)
-        self.assertEqual(self.scalar('SELECT COUNT(*) FROM subscriptions WHERE user_id=%s', (user,)), 1)
-        self.assertGreater(self.scalar('SELECT MAX(ends_at) FROM subscriptions WHERE user_id=%s', (user,)), utcnow() + timedelta(days=119))
 
-    def test_commerce_concurrent_versions_and_single_published_version(self):
-        actor = str(self.admin['id']); commerce = CommerceService(self.accounts)
-        product = commerce.create_product(actor, 'parallel-product-' + new_id(), 'advanced')
-        def create(index):
-            return commerce.create_version(actor, product['id'], {
-                'name': f'Parallel version {index}', 'shortName': 'Parallel', 'durationDays': 30,
-                'tagline': 'Concurrency', 'description': 'Test immutable entitlement versions.',
-                'amountCents': 1900, 'featureLimits': {'video_library_capacity': 20, 'audio_library_capacity': 50, 'storage_bytes': 5}, 'configuredBenefitIds': [],
-            })
-        versions = self.race(create, count=4)
-        self.assertTrue(all(isinstance(row, dict) for row in versions))
-        self.assertEqual(self.scalar('SELECT COUNT(DISTINCT version_number) FROM commerce_product_versions WHERE product_id=%s', (product['id'],)), 4)
-        published = self.race(lambda i: commerce.publish_version(actor, versions[i]['id']), count=4)
-        self.assertTrue(all(isinstance(row, dict) for row in published))
-        self.assertEqual(self.scalar("SELECT COUNT(*) FROM commerce_product_versions WHERE product_id=%s AND status='published'", (product['id'],)), 1)
-        current = self.scalar("SELECT id FROM commerce_product_versions WHERE product_id=%s AND status='published'", (product['id'],))
-        repeated = self.race(lambda _: commerce.publish_version(actor, current))
-        self.assertTrue(all(row['idempotent'] for row in repeated))
 
 
 if __name__ == '__main__':

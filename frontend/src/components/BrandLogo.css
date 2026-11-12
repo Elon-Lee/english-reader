@@ -2,7 +2,6 @@
 .ryn-brand-mark { display: block; flex: 0 0 auto; width: 40px; height: 40px; }
 .ryn-brand-copy { min-width: 0; }
 .ryn-brand-name { display: block; color: #244a38; font-size: 22px; font-weight: 700; letter-spacing: -.7px; line-height: 1.2; white-space: nowrap; }
-.ryn-brand-name > span:last-child { font-weight: 450; }
 .ryn-brand-slogan { display: block; max-width: 255px; margin-top: 4px; color: #65786b; font-size: 10px; font-weight: 400; letter-spacing: .02em; line-height: 1.45; }
 .ryn-brand-workspace { height: auto; min-height: 88px; padding: 18px 20px; }
 .ryn-brand-workspace .ryn-brand-mark { width: 36px; height: 36px; }

@@ -4,7 +4,10 @@
 .local/
 books/.reader/
 tools/__pycache__/
+**/__pycache__/
 books
 .DS_Store
 node_modules
 .playwright-mcp
+reader/blog/
+reader/site-intl/

@@ -16,6 +16,34 @@ class CommerceService:
         self.accounts = accounts
         self.payments = payments
 
+    def plan_versions(self) -> dict[str, Any]:
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT pv.*,p.slug AS plan_slug FROM plan_versions pv JOIN plans p ON p.id=pv.plan_id ORDER BY pv.rank,pv.created_at")
+                return {"planVersions":[{"id":r["id"],"planSlug":r["plan_slug"],"name":r["display_name"],"rank":int(r["rank"]),"periodDays":int(r["period_days"]),"quotas":as_json(r["quotas_json"]),"pricing":as_json(r["pricing_json"]),"active":bool(r["active"]),"createdAt":timestamp(r["created_at"])} for r in self.accounts._many(cursor)]}
+    def create_plan_version(self, actor_id: str, version_id: str, plan_slug: str, display_name: str, rank: Any, period_days: Any, quotas: Any, pricing: Any) -> dict[str, Any]:
+        version_id=str(version_id or "").strip();plan_slug=str(plan_slug or "").strip();display_name=str(display_name or "").strip()
+        if not re.fullmatch(r"[a-z][a-z0-9-]{2,63}",version_id):raise SaaSError("invalid_plan_version","套餐版本 ID 无效。",400)
+        if not display_name:raise SaaSError("invalid_plan_version","套餐显示名称不能为空。",400)
+        if not isinstance(quotas,dict):raise SaaSError("invalid_plan_version","套餐额度必须是对象。",400)
+        try: rank_value,days=int(rank),int(period_days)
+        except (TypeError,ValueError) as exc:raise SaaSError("invalid_plan_version","套餐等级或账期无效。",400) from exc
+        if rank_value<0 or days<1:raise SaaSError("invalid_plan_version","套餐等级或账期无效。",400)
+        normalized={}
+        for feature in FEATURES:
+            try: value=int(quotas[feature])
+            except (KeyError,TypeError,ValueError) as exc:raise SaaSError("invalid_plan_version",f"缺少或无效额度：{feature}",400) from exc
+            if value<0:raise SaaSError("invalid_plan_version",f"额度不能为负数：{feature}",400)
+            normalized[feature]=value
+        if not isinstance(pricing,dict):pricing={}
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT id FROM plans WHERE slug=%s FOR UPDATE",(plan_slug,));plan=self.accounts._one(cursor)
+                if not plan:raise SaaSError("unknown_plan","套餐不存在。",404)
+                cursor.execute("INSERT INTO plan_versions(id,plan_id,display_name,rank,period_days,quotas_json,pricing_json) VALUES(%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb)",(version_id,plan["id"],display_name,rank_value,days,json.dumps(normalized),json.dumps(pricing)))
+                self._audit(cursor,actor_id,"plan_version_created",{"versionId":version_id,"planSlug":plan_slug})
+                return {"id":version_id,"planSlug":plan_slug,"name":display_name,"rank":rank_value,"periodDays":days,"quotas":normalized,"pricing":pricing}
+
     @staticmethod
     def _benefits(value: Any) -> list[str]:
         if isinstance(value, list):
@@ -435,4 +463,3 @@ class CommerceService:
                     raise SaaSError("configured_benefit_not_found", "配置权益不存在。", 404)
                 self._audit(cursor, actor_id, "commerce_configured_benefit_updated", {"benefitId": benefit_id, "active": active})
         return {"id": benefit_id, "code": row["code"], "name": name, "description": description, "defaultText": default_text, "active": active}
-

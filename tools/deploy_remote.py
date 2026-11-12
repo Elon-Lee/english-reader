@@ -49,7 +49,7 @@ def follow_job(job_id,timeout):
 
 
 def main():
-    parser=argparse.ArgumentParser(description="构建并部署 RynEnglish 远程阅读节点")
+    parser=argparse.ArgumentParser(description="构建并部署纸间微光远程阅读节点")
     parser.add_argument("--package-only",action="store_true",help="只构建发布包，不连接服务器")
     parser.add_argument("--target",help="部署节点 ID 或完整名称")
     mode=parser.add_mutually_exclusive_group()
@@ -58,7 +58,11 @@ def main():
     mode.add_argument("--saas",action="store_true",help="完整部署 SaaS、PostgreSQL、Redis 和公共资源；启用已配置的 HTTPS 入口")
     mode.add_argument("--sync-public",action="store_true",help="只增量同步 SaaS 公共书目与媒体")
     mode.add_argument("--https-entry",action="store_true",help="仅安装/更新标准 HTTPS 入口及域名，不发布业务代码或替换数据库")
-    parser.add_argument("--domain",help="标准 HTTPS 域名，例如 rynenglish.com（不带协议或路径）")
+    parser.add_argument("--domain",help="标准 HTTPS 域名，例如 example.com（不带协议或路径）")
+    parser.add_argument("--app-domain",help="升级时的阅读应用域名；必须与 --blog-domain 一起使用")
+    parser.add_argument("--blog-domain",help="升级时的独立博客域名；必须与 --app-domain 一起使用")
+    parser.add_argument("--intl-domain",help="升级时启用独立国际入口域名；必须与国内双域名一起提供")
+    parser.add_argument("--defer-https",action="store_true",help="仅完成源站升级，保留双域名 DNS/HTTPS 待办，不申请证书")
     parser.add_argument("--host",help="仅入口模式的 SSH 地址，可替代 --target")
     parser.add_argument("--identity-file",help="现有 SSH 私钥文件；使用已验证的默认 known_hosts")
     parser.add_argument("--smtp-config",help="可选的 0600 SMTP 配置文件，安全合并到远端 saas.env")
@@ -68,6 +72,16 @@ def main():
     parser.add_argument("--acme-email",help="可选的 ACME 账户联系邮箱；留空不注册邮箱")
     parser.add_argument("--timeout",type=int,default=1800,help="最长等待秒数，默认 1800")
     args=parser.parse_args()
+    if bool(args.app_domain)!=bool(args.blog_domain):parser.error('--app-domain 与 --blog-domain 必须一起提供')
+    if args.intl_domain and not args.app_domain:parser.error('--intl-domain 必须与 --app-domain 和 --blog-domain 一起提供')
+    sites=None
+    if args.defer_https and (args.full or args.saas or args.sync_public or args.https_entry or args.package_only):
+        parser.error('--defer-https 仅用于保留数据的程序升级')
+    if args.app_domain:
+        if args.full or args.saas or args.sync_public or args.https_entry or args.package_only:
+            parser.error('双站域名参数仅用于保留数据的程序升级')
+        sites={'public_domain':manager.normalize_domain(args.app_domain),'blog_domain':manager.normalize_domain(args.blog_domain)}
+        if args.intl_domain:sites['intl_domain']=manager.normalize_domain(args.intl_domain)
     if args.package_only:
         package_only();return
     if args.https_entry:
@@ -103,6 +117,7 @@ def main():
     if args.saas:job_id=manager.start_saas_deploy(target["id"])
     elif args.sync_public:job_id=manager.start_saas_public_sync(target["id"])
     elif args.full:job_id=manager.start_saas_deploy(target["id"])
+    elif sites or args.defer_https:job_id=manager.start_saas_upgrade(target["id"],site_domains=sites,defer_https=args.defer_https)
     else:job_id=manager.start_saas_upgrade(target["id"])
     print(f"部署任务：{job_id}",flush=True)
     follow_job(job_id,max(30,args.timeout))

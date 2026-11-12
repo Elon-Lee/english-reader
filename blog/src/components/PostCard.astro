@@ -1,0 +1,11 @@
+---
+import type { Post } from '@/types'
+import { getCategory } from '@/categories'
+import { getPostPath } from '@/i18n/path'
+import { getLangFromLocale } from '@/i18n/lang'
+interface Props { post: Post; featured?: boolean }
+const { post, featured = false } = Astro.props
+const category = getCategory(post.data.category)
+const href = getPostPath(post.data.abbrlink || post.id, getLangFromLocale(Astro.currentLocale))
+---
+<article class:list={['post-card', { 'featured-card': featured }]}><div class="card-meta"><a href={`/categories/${category.slug}/`}>{category.title}</a><span>{featured ? '编辑精选' : '阅读手记'}</span></div><h3><a href={href}>{post.data.title}</a></h3><p>{post.data.description}</p><div class="card-bottom"><time datetime={post.data.published.toISOString()}>{post.data.published.toISOString().slice(0, 10)}</time><span>约 {Math.max(1, Math.round(post.remarkPluginFrontmatter.minutes))} 分钟</span><a href={href} aria-label={`阅读：${post.data.title}`}>读下去 ↗</a></div></article>

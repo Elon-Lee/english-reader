@@ -7,7 +7,7 @@ from datetime import date
 from typing import Any
 
 from saas_auth import SaaSError, SaaSService, new_id, utcnow
-from saas_membership import as_json, can_watch_hd_video, timestamp
+from saas_resources import as_json, can_watch_hd_video, timestamp
 from saas_rewards import local_day
 from saas_progress import reading_progress
 from saas_journey import learning_milestone
@@ -75,8 +75,8 @@ class WorkspaceService:
                 cursor.execute('DELETE FROM workspace_settings WHERE user_id=%s AND key=%s',(user_id,'source-position:'+book_id))
                 cursor.execute("INSERT INTO security_events(id,user_id,event_type,metadata_json) VALUES(%s,%s,'workspace_permanent_delete',%s::jsonb)",(new_id(),user_id,json.dumps({"bookId":book_id,"title":title})))
         from saas_media import MediaService
-        from saas_membership import MembershipService
-        cleanup=MediaService(self.accounts,MembershipService(self.accounts)).remove_deleted_files(asset_ids)
+        from saas_resources import ResourceService
+        cleanup=MediaService(self.accounts,ResourceService(self.accounts)).remove_deleted_files(asset_ids)
         return {"status":"deleted","bookId":book_id,"title":title,**cleanup}
 
     def reader(self,user_id:str,book_id:str)->dict[str,Any]:

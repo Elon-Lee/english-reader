@@ -19,11 +19,9 @@ from urllib.parse import urlsplit
 from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
 from saas_catalog import CatalogService
 from saas_media import MediaService
-from saas_membership import MembershipService
+from saas_resources import ResourceService
 from saas_workspace import WorkspaceService
 from saas_journey import JourneyService
-from saas_redemptions import RedemptionService
-from saas_commerce import CommerceService
 
 TEST_URL=os.environ.get("SHIYUE_SAAS_TEST_DATABASE_URL","")
 
@@ -32,11 +30,27 @@ def assert_safe_database(url:str)->None:
         raise RuntimeError("SHIYUE_SAAS_TEST_DATABASE_URL 必须指向名称以 _test 结尾的专用数据库。")
 
 class PrivateWorkspaceTests(unittest.TestCase):
+    def test_guide_rejects_removed_commercial_actions_and_ignores_old_reminders(self):
+        journey = JourneyService(self.accounts)
+        user_id = str(self.owner['id'])
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("INSERT INTO workspace_settings(user_id,key,value_json) VALUES(%s,'pending_purchase','{}'::jsonb)", (user_id,))
+        self.assertNotIn('pendingPurchase', journey.state(user_id))
+        for action in ('plan_selected', 'purchase_departure', 'clear_purchase'):
+            with self.assertRaises(SaaSError) as rejected:
+                journey.update(user_id, {'action': action})
+            self.assertEqual(rejected.exception.code, 'not_found')
+            self.assertEqual(rejected.exception.status, 404)
+        with self.assertRaises(SaaSError) as rejected:
+            journey.update(user_id, {'action': 'first_reading'})
+        self.assertEqual(rejected.exception.code, 'invalid_journey_action')
+
     @classmethod
     def setUpClass(cls):
         assert_safe_database(TEST_URL);cls.temp=tempfile.TemporaryDirectory(prefix="shiyue-phase7-");cls.root=Path(cls.temp.name)/"media";cls.root.mkdir()
         cls.environment={"DATABASE_URL":TEST_URL,"SHIYUE_SAAS_ENABLED":"1","SESSION_SECRET":"test-only-session-secret-that-is-at-least-32-characters","BOOTSTRAP_ADMIN_EMAIL":"admin@local.test","BOOTSTRAP_ADMIN_PASSWORD":"phase7 admin password","MEDIA_ROOT":str(cls.root)}
-        cls.accounts=SaaSService(TEST_URL,cls.environment);cls.accounts.migrate();cls.memberships=MembershipService(cls.accounts);cls.workspace=WorkspaceService(cls.accounts);cls.catalog=CatalogService(cls.accounts,cls.memberships);cls.media=MediaService(cls.accounts,cls.memberships,cls.root)
+        cls.accounts=SaaSService(TEST_URL,cls.environment);cls.accounts.migrate();cls.resources=ResourceService(cls.accounts);cls.workspace=WorkspaceService(cls.accounts);cls.catalog=CatalogService(cls.accounts,cls.resources);cls.media=MediaService(cls.accounts,cls.resources,cls.root)
 
     @classmethod
     def tearDownClass(cls):cls.temp.cleanup()
@@ -48,7 +62,7 @@ class PrivateWorkspaceTests(unittest.TestCase):
             with connection.cursor() as cursor:
                 cursor.execute("""TRUNCATE TABLE workspace_activity_events,workspace_progress,workspace_settings,security_events,account_deletion_requests,asset_usage,asset_variants,media_assets,admin_audit_logs,platform_settings,
                 member_invite_rewards,member_invites,member_invite_allowances,reward_activity_events,reward_daily_activity,reward_redemptions,reward_ledger,checkins,
-                official_book_unlocks,user_library,catalog_book_tags,catalog_books,catalog_tags,catalog_series,membership_audit,usage_ledger,quota_reservations,usage_periods,subscriptions,manual_orders,assets,
+                official_book_unlocks,user_library,catalog_book_tags,catalog_books,catalog_tags,catalog_series,resource_audit,usage_ledger,quota_reservations,usage_periods,subscriptions,manual_orders,assets,
                 content_sentence_grammar,content_learning_daily,content_word_annotations,content_vocabulary,content_books,invitation_uses,invitations,password_reset_tokens,email_verifications,user_sessions,devices,user_roles,users,roles RESTART IDENTITY CASCADE""")
         self.admin=self.accounts.bootstrap_admin();assert self.admin
         invitation=self.accounts.create_invitation("WORKSPACE-TEST",max_uses=10,created_by=str(self.admin["id"]))
@@ -227,16 +241,6 @@ class PrivateWorkspaceTests(unittest.TestCase):
         with self.assertRaises(SaaSError) as denied:self.workspace.save_vocabulary(str(self.other["id"]),catalog_id,"s1",0,{"word":"My","rating":"hard"})
         self.assertEqual(denied.exception.code,"learning_book_not_found")
 
-    def journey_product(self):
-        commerce=CommerceService(self.accounts);admin_id=str(self.admin['id'])
-        product=commerce.create_product(admin_id,'journey-'+new_id()[:8],'advanced',999)
-        version=commerce.create_version(admin_id,product['id'],{
-            'name':'学习旅程测试月卡','shortName':'测试月卡','tagline':'隔离测试','description':'仅用于集成测试',
-            'durationDays':30,'amountCents':1900,'purchaseUrl':'https://catfk.com/shop/TEST1234',
-            'featureLimits':{'video_library_capacity':20,'audio_library_capacity':50,'storage_bytes':5},'configuredBenefitIds':[],
-        })
-        commerce.publish_version(admin_id,version['id'])
-        return version['id']
 
     def test_journey_guide_requires_saved_business_data_and_is_owner_scoped(self):
         journey=JourneyService(self.accounts);owner_id,other_id=str(self.owner['id']),str(self.other['id'])
@@ -256,41 +260,7 @@ class PrivateWorkspaceTests(unittest.TestCase):
                 cursor.execute("SELECT event_type,COUNT(*) AS total FROM product_journey_events WHERE user_id=%s GROUP BY event_type",(owner_id,))
                 self.assertEqual({row['event_type']:row['total'] for row in self.accounts._many(cursor)},{'first_reading':1,'first_word_saved':1})
 
-    def test_purchase_recovery_is_idempotent_expires_and_cannot_forge_learning(self):
-        journey=JourneyService(self.accounts);owner_id,other_id=str(self.owner['id']),str(self.other['id']);product=self.journey_product()
-        selected={'action':'plan_selected','productVersionId':product,'idempotencyKey':'milestone:first_reading'}
-        self.assertEqual(journey.update(owner_id,selected)['pendingPurchase']['phase'],'selected')
-        journey.update(owner_id,selected)
-        self.assertIsNone(journey.state(other_id)['pendingPurchase'])
-        with self.assertRaises(SaaSError) as conflict:journey.update(owner_id,{**selected,'action':'purchase_departure'})
-        self.assertEqual(conflict.exception.code,'idempotency_conflict')
-        journey.update(owner_id,{'action':'purchase_departure','productVersionId':product,'idempotencyKey':'depart'})
-        self.assertEqual(journey.update(owner_id,{**selected,'idempotencyKey':'reopen'})['pendingPurchase']['phase'],'departed')
-        self.workspace.activity(owner_id,self.book_id,60,1,'s1','real-milestone')
-        with self.accounts.transaction() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT COUNT(*) AS total FROM product_journey_events WHERE user_id=%s AND event_type='first_reading'",(owner_id,))
-                self.assertEqual(self.accounts._one(cursor)['total'],1)
-                cursor.execute("UPDATE workspace_settings SET value_json=jsonb_set(value_json,'{expiresAt}','0'::jsonb) WHERE user_id=%s AND key='pending_purchase'",(owner_id,))
-        self.assertIsNone(journey.state(owner_id)['pendingPurchase'])
-        journey.update(owner_id,{**selected,'idempotencyKey':'new-selection'})
-        self.assertIsNone(journey.update(owner_id,{'action':'clear_purchase'})['pendingPurchase'])
-        for payload in ({'action':'first_reading'}, {'action':'plan_selected','productVersionId':'free-plan-v1','idempotencyKey':'free'}, {'action':'plan_selected','productVersionId':'missing','idempotencyKey':'missing'}):
-            with self.assertRaises(SaaSError):journey.update(owner_id,payload)
 
-    def test_applied_matching_redemption_clears_purchase_recovery(self):
-        journey=JourneyService(self.accounts);owner_id=str(self.owner['id']);product=self.journey_product()
-        journey.update(owner_id,{'action':'plan_selected','productVersionId':product,'idempotencyKey':'select'})
-        journey.update(owner_id,{'action':'purchase_departure','productVersionId':product,'idempotencyKey':'depart'})
-        redemptions=RedemptionService(self.accounts,self.memberships)
-        batch=redemptions.generate(str(self.admin['id']),product,1,'isolated journey test')
-        self.assertIsNotNone(journey.state(owner_id)['pendingPurchase'])
-        redemptions.redeem(owner_id,batch['codes'][0],'journey-redeem')
-        self.assertIsNone(journey.state(owner_id)['pendingPurchase'])
-        self.assertEqual(journey.report()['purchase'],{'selected':1,'departed':1,'redeemed':1})
-        # A later renewal selection is a new intent, even before the old reminder expires.
-        renewed=journey.update(owner_id,{'action':'plan_selected','productVersionId':product,'idempotencyKey':'select-next-renewal'})
-        self.assertEqual(renewed['pendingPurchase']['phase'],'selected')
 
     def test_report_observes_completed_next_day_and_both_learning_milestones(self):
         journey=JourneyService(self.accounts);owner_id,other_id=str(self.owner['id']),str(self.other['id'])
@@ -324,16 +294,14 @@ class PrivateWorkspaceTests(unittest.TestCase):
                 cursor.execute("UPDATE content_books SET duration=10 WHERE id=%s",(self.book_id,))
                 cursor.execute("INSERT INTO catalog_books(id,source_content_book_id,title,rights_status,publication_status) VALUES(%s,%s,'Trial','licensed','published')",(catalog_id,self.book_id))
         with self.assertRaises(SaaSError):self.media.stream(viewer_id,asset['id'])
-        with self.assertRaises(SaaSError) as high:self.media.trial_stream(viewer_id,asset['id'],catalog_id)
-        self.assertEqual(high.exception.code,'video_quality_membership_required')
+        self.assertTrue(self.media.trial_stream(viewer_id,asset["id"],catalog_id)["path"].is_file())
         preview=self.media.trial_stream(viewer_id,asset['id'],catalog_id,'low')
         probe=subprocess.run(['ffprobe','-v','error','-show_entries','format=duration','-of','csv=p=0',str(preview['path'])],check=True,capture_output=True,text=True)
         self.assertGreaterEqual(float(probe.stdout),.96)
         self.assertLessEqual(float(probe.stdout),1.04)
         reader=self.catalog.reader(viewer_id,catalog_id,trial=True)['book']
-        self.assertFalse(reader['canWatchHdVideo'])
+        self.assertTrue(reader['canWatchHdVideo'])
         self.assertTrue(any('trialBook=' in item['url'] for item in reader['mediaAssets']))
-        self.memberships.create_manual_order(str(self.admin['id']),viewer_id,'advanced-v1',utcnow()-timedelta(minutes=1),utcnow()+timedelta(days=30))
         self.assertTrue(self.catalog.reader(viewer_id,catalog_id,trial=True)['book']['canWatchHdVideo'])
         self.assertTrue(self.media.trial_stream(viewer_id,asset['id'],catalog_id)['path'].is_file())
         with self.assertRaises(SaaSError):self.media.trial_stream(viewer_id,asset['id'],'unrelated-book')

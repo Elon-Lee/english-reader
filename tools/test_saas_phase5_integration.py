@@ -10,12 +10,12 @@ import subprocess
 import sys
 import time
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
 from saas_admin import AdminService
 from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
-from saas_membership import FEATURES, MembershipService
+from saas_resources import FEATURES, ResourceService
 from saas_rewards import RewardService
 
 TEST_URL=os.environ.get("SHIYUE_SAAS_TEST_DATABASE_URL","")
@@ -29,15 +29,14 @@ class PhaseFivePostgresTests(unittest.TestCase):
     def setUpClass(cls):
         assert_safe_database(TEST_URL)
         cls.environment={"DATABASE_URL":TEST_URL,"SHIYUE_SAAS_ENABLED":"1","SESSION_SECRET":"test-only-session-secret-that-is-at-least-32-characters","BOOTSTRAP_ADMIN_EMAIL":"admin@local.test","BOOTSTRAP_ADMIN_PASSWORD":"phase5 admin password"}
-        cls.accounts=SaaSService(TEST_URL,cls.environment);cls.accounts.migrate();cls.memberships=MembershipService(cls.accounts);cls.rewards=RewardService(cls.accounts,cls.memberships);cls.admin_service=AdminService(cls.accounts,cls.memberships)
+        cls.accounts=SaaSService(TEST_URL,cls.environment);cls.accounts.migrate();cls.resources=ResourceService(cls.accounts);cls.rewards=RewardService(cls.accounts,cls.resources);cls.admin_service=AdminService(cls.accounts,cls.resources)
 
     def setUp(self):
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("""TRUNCATE TABLE admin_audit_logs,platform_settings,member_invite_rewards,member_invites,member_invite_allowances,reward_activity_events,reward_daily_activity,reward_redemptions,reward_ledger,checkins,
-                official_book_unlocks,user_library,catalog_book_tags,catalog_books,catalog_tags,catalog_series,membership_audit,usage_ledger,quota_reservations,usage_periods,subscriptions,manual_orders,assets,
+                official_book_unlocks,user_library,catalog_book_tags,catalog_books,catalog_tags,catalog_series,resource_audit,usage_ledger,quota_reservations,usage_periods,subscriptions,manual_orders,assets,
                 content_sentence_grammar,content_learning_daily,content_word_annotations,content_vocabulary,content_books,invitation_uses,invitations,invitation_batches,password_reset_tokens,email_verifications,user_sessions,devices,user_roles,users,roles RESTART IDENTITY CASCADE""")
-                cursor.execute("DELETE FROM plan_versions WHERE id='advanced-v2'")
         self.admin=self.accounts.bootstrap_admin();assert self.admin
         invitation=self.accounts.create_invitation("ADMIN-TEST",max_uses=10,created_by=str(self.admin["id"]))
         self.user=self.accounts.register("operator-user@local.test","operator user password",invitation["code"])["user"]
@@ -59,6 +58,10 @@ class PhaseFivePostgresTests(unittest.TestCase):
         users=self.admin_service.users()["users"]
         self.assertTrue(any(row["email"]=="operator-user@local.test" for row in users))
         self.assertNotIn("passwordHash",users[0])
+        self.assertNotIn("planVersion",users[0])
+        self.assertNotIn("subscriptions",self.admin_service.user_detail(str(self.user["id"])))
+        self.assertNotIn("orders",self.admin_service.user_detail(str(self.user["id"])))
+        self.assertNotIn("activeSubscriptions",dashboard)
         exported=self.admin_service.export_summary();self.assertIn("dashboard",exported);self.assertTrue(all("password" not in key.casefold() for row in exported["users"] for key in row))
 
     def test_invitation_batches_detail_and_delete_only_unused(self):
@@ -75,6 +78,21 @@ class PhaseFivePostgresTests(unittest.TestCase):
         used_id=next(row["id"] for row in detail["invitations"] if row["code"]==used_code)
         with self.assertRaises(SaaSError) as blocked:self.admin_service.delete_unused_invitations(actor,batch_id,[used_id])
         self.assertEqual(blocked.exception.code,"invitation_in_use")
+
+    def test_single_and_batch_invitation_expiry_is_parsed_and_enforced(self):
+        actor=str(self.admin['id']);expiry=(utcnow()+timedelta(days=2)).replace(microsecond=0)
+        single=self.admin_service.create_invitation(actor,'DATED-SINGLE',1,expiry.isoformat())
+        self.assertEqual(datetime.fromisoformat(single['expiresAt']),expiry)
+        batch=self.admin_service.create_invitations(actor,'',1,2,expiry.isoformat())
+        self.assertEqual(datetime.fromisoformat(batch['batch']['expiresAt']),expiry)
+        self.accounts.register('dated-invite@local.test','dated invitation password',batch['invitations'][0]['code'])
+        expired=self.admin_service.create_invitation(actor,'DATED-EXPIRED',1,(utcnow()-timedelta(days=1)).isoformat())
+        with self.assertRaises(SaaSError) as denied:
+            self.accounts.register('expired-invite@local.test','expired invitation password',expired['code'])
+        self.assertEqual(denied.exception.code,'invalid_invitation')
+        with self.assertRaises(SaaSError) as invalid:
+            self.admin_service.create_invitations(actor,'',1,1,'invalid-date')
+        self.assertEqual(invalid.exception.code,'invalid_time')
 
     def test_invitation_usage_counts_match_detail_and_exclude_used_from_expired(self):
         actor=str(self.admin["id"])
@@ -147,25 +165,6 @@ class PhaseFivePostgresTests(unittest.TestCase):
         self.assertEqual(len(next_page["items"]),1)
         self.assertNotEqual(page["items"][0]["id"],next_page["items"][0]["id"])
 
-    def test_adjustments_allowances_status_and_audit(self):
-        actor,user_id=str(self.admin["id"]),str(self.user["id"])
-        granted=self.admin_service.adjust_quota(actor,user_id,"ai_context_generations",5,"support grant","admin-adjust-1")
-        self.assertEqual(granted["available"],55)
-        deducted=self.admin_service.adjust_quota(actor,user_id,"ai_context_generations",-2,"correction","admin-adjust-2")
-        self.assertEqual(deducted["available"],53)
-        allowance=self.admin_service.grant_invite_allowance(actor,user_id,2,"campaign allocation")
-        self.assertEqual(allowance["quantity"],2)
-        self.memberships.create_manual_order(actor,user_id,"advanced-v1",utcnow()-timedelta(minutes=1),utcnow()+timedelta(days=30),"paid")
-        detail=self.admin_service.user_detail(user_id)
-        self.assertEqual(detail["user"]["id"],user_id)
-        self.assertEqual(detail["subscriptions"][0]["planVersion"],"advanced-v1")
-        self.assertEqual(detail["orders"][0]["planVersion"],"advanced-v1")
-        first=self.rewards.issue_invite(user_id);second=self.rewards.issue_invite(user_id)
-        self.assertNotEqual(first["code"],second["code"])
-        self.assertEqual(self.rewards.status(user_id)["inviteAllowance"],0)
-        audit=self.admin_service.audit()["items"]
-        self.assertTrue(any(item["action"]=="quota_adjustment" for item in audit))
-        self.assertTrue(any(item["action"]=="invite_allowance_granted" for item in audit))
 
     def test_suspend_revokes_sessions_and_requires_reason(self):
         actor,user_id=str(self.admin["id"]),str(self.user["id"])
@@ -180,17 +179,6 @@ class PhaseFivePostgresTests(unittest.TestCase):
         self.admin_service.set_user_status(actor,user_id,"active","cleared")
         self.assertIsNotNone(self.accounts.login("operator-user@local.test","operator user password","phase5-user-device-1","Phase5 test"))
 
-    def test_new_plan_version_is_immutable_and_existing_period_stays_v1(self):
-        actor,user_id=str(self.admin["id"]),str(self.user["id"])
-        before=self.memberships.membership(user_id,True)
-        quotas={feature:before["plan"]["quotas"][feature] for feature in FEATURES};quotas["ai_context_generations"]=999
-        created=self.admin_service.create_plan_version(actor,"advanced-v2","advanced","进阶版 v2",1,30,quotas,{"currency":"CNY","monthly_cents":4900})
-        self.assertEqual(created["quotas"]["ai_context_generations"],999)
-        with self.accounts.transaction() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT limits_json->>'ai_context_generations' FROM usage_periods WHERE user_id=%s",(user_id,))
-                self.assertEqual(cursor.fetchone()[0],"50")
-        self.assertTrue(any(item["id"]=="advanced-v2" for item in self.admin_service.plan_versions()["planVersions"]))
 
     def test_http_admin_permissions_csrf_and_operations(self):
         with socket.socket() as probe:probe.bind(("127.0.0.1",0));port=probe.getsockname()[1]
@@ -217,9 +205,11 @@ class PhaseFivePostgresTests(unittest.TestCase):
             pending_delete=self.accounts.register("http-pending-delete@local.test","pending delete password",self.accounts.create_invitation("HTTP-PENDING-DELETE",created_by=str(self.admin["id"]))["code"])["user"]
             connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(connection);connection.request("DELETE",f"/api/admin/users/{pending_delete['id']}",headers={"Cookie":cookies,"X-CSRF-Token":csrf});response=connection.getresponse();deleted=json.loads(response.read());self.assertEqual(response.status,200);self.assertEqual(deleted["status"],"deleted");connection.close();connections.remove(connection)
             audit=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(audit);audit.request("GET","/api/admin/audit?limit=1&offset=0&q=http",headers={"Cookie":cookies});response=audit.getresponse();audit_data=json.loads(response.read());self.assertEqual(response.status,200);self.assertGreaterEqual(audit_data["total"],1);self.assertLessEqual(len(audit_data["items"]),1);audit.close();connections.remove(audit)
-            product_connection=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(product_connection);product_connection.request("POST","/api/admin/commerce/products",json.dumps({"slug":"http-delete-draft","family":"advanced"}),{"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf});response=product_connection.getresponse();product=json.loads(response.read());self.assertEqual(response.status,201)
-            product_connection.request("POST",f"/api/admin/commerce/products/{product['id']}/versions",json.dumps({"name":"HTTP 草稿","shortName":"HTTP 草稿","tagline":"路由验收","description":"隔离测试草稿。","durationDays":30,"originalAmountCents":100,"discountPercent":100,"featureLimits":{"video_library_capacity":2,"audio_library_capacity":5,"storage_bytes":1},"configuredBenefitIds":[]}),{"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf});response=product_connection.getresponse();self.assertEqual(response.status,201);response.read()
-            product_connection.request("POST",f"/api/admin/commerce/products/{product['id']}/delete",b"{}",{"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf});response=product_connection.getresponse();deleted_product=json.loads(response.read());self.assertEqual(response.status,200);self.assertTrue(deleted_product["deleted"]);product_connection.close();connections.remove(product_connection)
+            for retired in ("/api/admin/commerce/products", "/api/admin/subscriptions", "/api/admin/manual-orders", "/api/admin/payment-config"):
+                removed=http.client.HTTPConnection("127.0.0.1",port,timeout=5);connections.append(removed)
+                removed.request("POST",retired,b"{}",{"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf})
+                response=removed.getresponse();response.read();self.assertEqual(response.status,404)
+                removed.close();connections.remove(removed)
         finally:
             for connection in connections:connection.close()
             process.terminate()

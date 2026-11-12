@@ -196,7 +196,7 @@ class ReviewTests(unittest.TestCase):
 
     def test_learning_streak_ignores_checkin_and_future_days(self):
         learning = LearningService(self.workspace, self.review)
-        rewards = RewardService(self.accounts, self.memberships)
+        rewards = RewardService(self.accounts, self.resources)
         rewards.checkin(self.uid)
         self.assertEqual(learning.state(self.uid)['learningStreak'], 0)
         today = learning.state(self.uid)['today']['day']
@@ -222,7 +222,7 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(self.review.state(str(self.other['id']))['active'], None)
 
     def test_retired_reward_cannot_consume_points(self):
-        rewards = RewardService(self.accounts, self.memberships)
+        rewards = RewardService(self.accounts, self.resources)
         with self.accounts.transaction() as connection:
             connection.execute("INSERT INTO reward_ledger(id,user_id,month_key,event_type,event_key,points) VALUES(%s,%s,'2026-10','test','reward-balance',200)", (new_id(),self.uid))
             connection.execute("INSERT INTO reward_catalog(id,code,title,cost_points,reward_type,feature,quantity) VALUES('retired-test','retired-test','旧奖励',80,'quota_credit','official_unlocks',1) ON CONFLICT DO NOTHING")
@@ -241,16 +241,13 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(session['current']['item']['bookId'], 'review-official')
         self.assertEqual(self.answer(session)['status'], 'completed')
 
-    def test_paid_account_cannot_redeem_already_unlimited_ai(self):
-        rewards = RewardService(self.accounts, self.memberships)
-        free_rewards = rewards.catalog(self.uid)['rewards']
-        ai_reward = next(item for item in free_rewards if item['feature'] == 'ai_context_generations')
-        self.memberships.create_manual_order(str(self.admin['id']), self.uid, 'advanced-v1', utcnow()-timedelta(minutes=1), utcnow()+timedelta(days=30))
-        self.assertNotIn(ai_reward['code'], [item['code'] for item in rewards.catalog(self.uid)['rewards']])
-        before = rewards.status(self.uid)['balance']
-        with self.assertRaises(SaaSError) as exc: rewards.redeem(self.uid, ai_reward['code'], 'paid-ai')
-        self.assertEqual(exc.exception.code, 'reward_unnecessary')
-        self.assertEqual(rewards.status(self.uid)['balance'], before)
+    def test_all_accounts_receive_same_ai_reward_choices(self):
+        rewards = RewardService(self.accounts, self.resources)
+        expected = {item['code'] for item in rewards.catalog(self.uid)['rewards']}
+        with self.accounts.transaction() as connection:
+            connection.execute("UPDATE users SET plan_version='pro-v1' WHERE id=%s", (self.uid,))
+        self.assertEqual({item['code'] for item in rewards.catalog(self.uid)['rewards']}, expected)
+        self.assertIn('ai_context_10', expected)
 
     def test_catalog_continuation_respects_removed_publication(self):
         with self.accounts.transaction() as connection:

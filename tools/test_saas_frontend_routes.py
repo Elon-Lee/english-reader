@@ -30,11 +30,18 @@ class FrontendRoutesTests(unittest.TestCase):
         cls.directory.cleanup()
 
     def test_public_deep_links_serve_react_entry(self):
-        for path in ('/pricing', '/purchase/pro-30', '/purchase/advanced-30?purchase=advanced-30', '/terms', '/privacy', '/content-policy', '/refunds', '/copyright'):
+        for path in ('/', '/app', '/login', '/register', '/terms', '/privacy', '/content-policy', '/copyright'):
             with self.subTest(path=path), urlopen(self.base + path) as response:
                 self.assertEqual(response.status, 200)
                 self.assertEqual(response.headers['Cache-Control'], 'no-cache')
                 self.assertIn(b'id="root"', response.read())
+
+    def test_retired_commercial_routes_return_not_found(self):
+        for path in ('/pricing', '/purchase/pro-30', '/purchase/advanced-30?purchase=advanced-30', '/refunds'):
+            with self.subTest(path=path), self.assertRaises(HTTPError) as error:
+                urlopen(self.base + path)
+            self.assertEqual(error.exception.code, 404)
+            error.exception.close()
 
     def test_missing_assets_do_not_serve_html(self):
         with self.assertRaises(HTTPError) as error:

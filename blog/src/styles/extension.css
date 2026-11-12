@@ -1,0 +1,28 @@
+/* TOC >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> */
+#toc-mobile-text {
+  --at-apply: 'ml-4 font-semibold 2xl:hidden';
+}
+#toc-links-list {
+  --at-apply: 'mb-2.5 mt-1 list-none pl-0 2xl:(mb-1 space-y-1) space-y-1.1';
+  scroll-target-group: auto;
+}
+a[aria-current="location"] {
+    --at-apply: '2xl:(c-primary font-medium)';
+}
+.toc-links-h2, .toc-links-h3, .toc-links-h4 {
+  --at-apply: 'text-balance text-sm font-normal no-underline after:bottom-0.15em 2xl:(text-3.2 c-secondary/80 hover:c-primary hover:font-medium)';
+  transition: color 0.15s ease-out, font-weight 0.15s ease-out;
+}
+
+/* Overflow and Scrollbar */
+#toc-accordion-content {
+  --at-apply: 'max-h-59 overflow-y-auto pl-4 pr-6 2xl:(max-h-[calc(100vh-27.5rem)] scrollbar-hidden)';
+  scrollbar-width: thin;
+  scrollbar-color: oklch(var(--un-preset-theme-colors-secondary) / 0.15) transparent;
+}
+#toc-accordion-content::-webkit-scrollbar {
+  --at-apply: 'hidden';
+}
+
+/* Native hidden keeps collapsed links outside keyboard navigation. */
+#toc-accordion-wrapper[hidden] { display: none; }

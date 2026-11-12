@@ -1,0 +1,4 @@
+/* 系统字体：无需下载字体，不依赖第三方字体服务。 */
+html {
+  font-family: Georgia, "Songti SC", "STSong", "Noto Serif CJK SC", SimSun, serif;
+}

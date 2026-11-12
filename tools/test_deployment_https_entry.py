@@ -62,6 +62,20 @@ sys.exit('unexpected fake docker invocation '+repr(a))
 
 
 class HttpsEntryTests(unittest.TestCase):
+    def test_dual_sites_have_separate_certificate_blocks_and_unknown_host_rejection(self):
+        script=https_entry.install_script({'remote_root':'/srv/shiyue','public_domain':'learn.rynenglish.com','blog_domain':'rynenglish.com'})
+        config=https_entry._https_config('learn.rynenglish.com','rynenglish.com')
+        self.assertIn('server_name learn.rynenglish.com;',config)
+        self.assertIn('server_name rynenglish.com;',config)
+        self.assertIn('/live/learn.rynenglish.com/fullchain.pem',config)
+        self.assertIn('/live/rynenglish.com/fullchain.pem',config)
+        self.assertIn('ssl_reject_handshake on',config)
+        self.assertIn('for cert_domain in learn.rynenglish.com rynenglish.com',script)
+        self.assertEqual(subprocess.run(['bash','-n'],input=script,text=True,capture_output=True).returncode,0)
+        self.assertIn('"blog_domain": "rynenglish.com"',script)
+        with self.assertRaises(ValueError):
+            https_entry.install_script({'remote_root':'/srv/shiyue','public_domain':'rynenglish.com','blog_domain':'rynenglish.com'})
+
     def setUp(self):
         self.assertIsNotNone(https_entry, 'HTTPS entry module must be implemented')
 
@@ -120,6 +134,20 @@ class HttpsEntryTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which('bash'), 'bash required for script tests')
 class InstallExecutionTests(unittest.TestCase):
+    def test_dual_install_and_renew_include_both_separate_certificates(self):
+        self.target.update(public_domain='learn.rynenglish.com',blog_domain='rynenglish.com')
+        result=self.install()
+        self.assertEqual(result.returncode,0,result.stderr)
+        manifest=json.loads(Path(self.paths['manifest']).read_text())
+        self.assertEqual(manifest['version'],2)
+        self.assertEqual(manifest['blog_domain'],'rynenglish.com')
+        issues=[c for c in self.calls() if 'certonly' in c]
+        self.assertEqual([c[c.index('--domain')+1] for c in issues],['learn.rynenglish.com','rynenglish.com'])
+        before=len(self.calls())
+        self.assertEqual(self.renew().returncode,0)
+        renews=[c for c in self.calls()[before:] if 'renew' in c]
+        self.assertEqual([c[c.index('--cert-name')+1] for c in renews],['learn.rynenglish.com','rynenglish.com'])
+
     def setUp(self):
         self.assertIsNotNone(https_entry, 'HTTPS entry module must be implemented')
         self.tmp=tempfile.TemporaryDirectory(prefix='https-entry-')

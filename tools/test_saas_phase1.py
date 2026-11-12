@@ -15,9 +15,9 @@ class PhaseOneContractTests(unittest.TestCase):
         self.assertTrue(verify_password(password, first))
         self.assertFalse(verify_password("not the password", first))
 
-    def test_email_and_device_plan_normalization(self):
+    def test_email_normalization_and_uniform_device_limit(self):
         self.assertEqual(normalize_email("  Reader@Example.COM "), "reader@example.com")
-        self.assertEqual([device_limit(value) for value in ("free-v1", "advanced-v1", "pro-v1")], [1, 2, 5])
+        self.assertEqual(device_limit(), 5)
 
     def test_initial_migration_has_required_tables_and_constraints(self):
         sql = (MIGRATIONS_DIR / "0001_accounts.sql").read_text(encoding="utf-8")

@@ -8,7 +8,7 @@ class RemoteReaderPresentationTests(unittest.TestCase):
     def test_initial_html_uses_neutral_copy(self):
         html=(ROOT/"reader/index.html").read_text()
         self.assertIn('runtime-pending',html)
-        self.assertIn('id="brandModeLabel">ENGLISH READER',html)
+        self.assertIn('id="brandModeLabel">个人阅读空间',html)
         self.assertIn('id="settingsModeLabel">READER SETTINGS',html)
         self.assertNotIn('id="brandModeLabel">LOCAL READER',html)
 

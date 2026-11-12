@@ -1,4 +1,4 @@
-"""Account-scoped learning guidance, purchase recovery, and aggregate funnels."""
+"""Account-scoped learning guidance and learning activity summaries."""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,8 @@ from datetime import timedelta
 from typing import Any
 
 from saas_auth import SaaSError, SaaSService, new_id, utcnow
-from saas_membership import as_json, timestamp
+from saas_resources import as_json, timestamp
+from saas_sites import current_site
 
 
 def learning_milestone(cursor: Any, user_id: str, event: str) -> None:
@@ -38,6 +39,9 @@ class JourneyService:
                 AND NOT EXISTS(SELECT 1 FROM catalog_books c WHERE c.source_content_book_id=b.id)) AS has_book""",
             (user_id, user_id, user_id, user_id, user_id))
         learning = self.accounts._one(cursor)
+        if current_site() != 'intl':
+            return {"guide": {"dismissed": bool(settings.get("learning_guide", {}).get("dismissed")),
+                              "hasBook": bool(learning["has_book"]), "hasRead": bool(learning["has_read"]), "hasWord": bool(learning["has_word"])}}
         pending = settings.get("pending_purchase") or None
         if pending:
             cursor.execute("""SELECT cp.slug,cpv.display_name,cpv.plan_version_id FROM commerce_product_versions cpv
@@ -69,6 +73,8 @@ class JourneyService:
 
     def update(self, user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         action = payload.get("action")
+        if action in {'plan_selected', 'purchase_departure', 'clear_purchase'} and current_site() != 'intl':
+            raise SaaSError('not_found', 'not found', 404)
         if action not in {"dismiss_guide", "restore_guide", "clear_purchase", "plan_selected", "purchase_departure"}:
             raise SaaSError("invalid_journey_action", "操作无效。", 400)
         with self.accounts.transaction() as connection:
@@ -153,14 +159,5 @@ class JourneyService:
                           AND a.reading_seconds>0 AND (a.created_at AT TIME ZONE 'Asia/Shanghai')::date=first_day+1))) AS returned
                     FROM stages""", (since,))
                 learning = {key: int(value) for key, value in self.accounts._one(cursor).items()}
-                cursor.execute("""WITH selected AS (SELECT user_id,MIN(created_at) AS selected_at
-                    FROM product_journey_events WHERE event_type='plan_selected' AND created_at>=%s GROUP BY user_id),
-                    departed AS (SELECT s.user_id,MIN(e.created_at) AS departed_at FROM selected s
-                      JOIN product_journey_events e ON e.user_id=s.user_id AND e.event_type='purchase_departure'
-                      AND e.created_at>=s.selected_at GROUP BY s.user_id)
-                    SELECT (SELECT COUNT(*) FROM selected) AS selected,(SELECT COUNT(*) FROM departed) AS departed,
-                      (SELECT COUNT(*) FROM departed d WHERE EXISTS(SELECT 1 FROM membership_change_orders o
-                        WHERE o.user_id=d.user_id AND o.source='cloudcat' AND o.status='applied' AND o.created_at>=d.departed_at)) AS redeemed""", (since,))
-                purchase = {key: int(value) for key, value in self.accounts._one(cursor).items()}
                 return {"days": days, "measurementStartedAt": timestamp(started), "since": timestamp(since),
-                        "timezone": "Asia/Shanghai", "learning": learning, "purchase": purchase}
+                        "timezone": "Asia/Shanghai", "learning": learning}

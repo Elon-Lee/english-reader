@@ -108,7 +108,7 @@ function DocumentReader({ book, title, appearance, active, readingLocation, onPo
   const percent = Math.round(((page + 1) / pages) * 100)
   const navigationChapters = originalPdf ? Array.from({ length: pages }, (_, i) => ({ id: `pdf-${i}`, title: `第 ${i + 1} 页`, page: i + 1 })) : chapters
   return <section className="extensive-reader" aria-label="泛读模式">
-    <div className="extensive-running-head"><Button type="text" aria-label="目录" icon={<UnorderedListOutlined />} onClick={() => setContents(true)}>目录</Button><span>{currentSection?.title || title}</span><span className="extensive-edition">{originalPdf ? '原版书页' : 'RynEnglish · 泛读'}</span></div>
+    <div className="extensive-running-head"><Button type="text" aria-label="目录" icon={<UnorderedListOutlined />} onClick={() => setContents(true)}>目录</Button><span>{currentSection?.title || title}</span><span className="extensive-edition">{originalPdf ? '原版书页' : '纸间微光 · 泛读'}</span></div>
     <div className="extensive-page-stage">
       <Tooltip title="上一页 · ←"><Button className="extensive-turn extensive-turn-prev" type="text" aria-label="上一页" icon={<LeftOutlined />} disabled={!page} onClick={() => go(page - 1)} /></Tooltip>
       <div ref={paper} className={`extensive-paper ${originalPdf ? 'is-pdf' : ''}`}>
@@ -135,7 +135,7 @@ function DocumentReader({ book, title, appearance, active, readingLocation, onPo
     <footer className="extensive-navigation">
       <div className="extensive-page-info"><span>{trial ? '试读' : '阅读进度'} {percent}%</span><div><span>当前页</span><span className="extensive-page-number"><InputNumber style={{ '--page-digits': String(page + 1).length }} aria-label="跳转页码" min={1} max={pages} value={page + 1} controls={false} onChange={value => { if (value) go(value - 1) }} /><span>/{pages}页</span></span></div><span>{originalPdf ? '保留原始排版与页数' : '← → 翻页 · 点击单词查词'}</span></div>
       <Slider aria-label="阅读翻页进度" min={1} max={Math.max(1, pages)} value={page + 1} tooltip={{ formatter: value => `第 ${value} 页` }} onChange={value => go(value - 1)} />
-      <div className="extensive-footnote"><span>{originalPdf ? 'PDF 原版' : `保留原文段落 · ${pageMap.current[page]?.pageLabel ? `原书页码 ${pageMap.current[page].pageLabel} · ` : ''}页数随字号调整`}</span><span role="status">{trial?'试读进度不保存':positionSave?.state==='error'?<Button size="small" type="link" danger title={positionSave.error} onClick={onRetryPosition}>重试保存进度</Button>:positionSave?.state==='saved'?'进度已保存':positionSave?.state==='saving'?'正在保存进度…':'进度自动保留'}</span><span>RynEnglish</span></div>
+      <div className="extensive-footnote"><span>{originalPdf ? 'PDF 原版' : `保留原文段落 · ${pageMap.current[page]?.pageLabel ? `原书页码 ${pageMap.current[page].pageLabel} · ` : ''}页数随字号调整`}</span><span role="status">{trial?'试读进度不保存':positionSave?.state==='error'?<Button size="small" type="link" danger title={positionSave.error} onClick={onRetryPosition}>重试保存进度</Button>:positionSave?.state==='saved'?'进度已保存':positionSave?.state==='saving'?'正在保存进度…':'进度自动保留'}</span><span>纸间微光</span></div>
     </footer>
     <Drawer className="extensive-contents" title={originalPdf?'原文页码':'目录'} placement="left" width={340} open={contents} onClose={() => setContents(false)}><p className="extensive-contents-title">{title}</p><nav aria-label="章节目录">{navigationChapters.map((chapter, index) => <button key={chapter.id || index} onClick={() => jump(chapter)}><small>{String(index + 1).padStart(2, '0')}</small><span>{chapter.title}</span></button>)}</nav></Drawer>
   </section>

@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from urllib.parse import urlsplit
 
-from saas_auth import SaaSService, new_id, token_hash, utcnow
+from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
 from saas_billing import PaddleBillingService
 from saas_membership import MembershipService
 
@@ -21,6 +21,23 @@ TEST_URL = os.environ.get("SHIYUE_SAAS_TEST_DATABASE_URL", "")
 
 
 class PaddleBillingPostgresTests(unittest.TestCase):
+    def test_completed_transaction_rejects_amount_currency_and_provider_mismatch(self):
+        for provider, amount, currency in (('paddle', '1', 'CNY'), ('paddle', '3900', 'USD'), ('alipay', '3900', 'CNY')):
+            order_id = new_id()
+            with self.accounts.transaction() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("""INSERT INTO payment_orders(id,user_id,plan_version_id,provider,billing_interval,amount_cents,idempotency_key)
+                        VALUES(%s,%s,'advanced-v1',%s,'month',3900,%s)""", (order_id, self.user['id'], provider, new_id()))
+            data = {'id': 'txn_' + new_id(), 'subscription_id': 'sub_' + new_id(), 'currency_code': currency,
+                    'custom_data': {'local_order_id': order_id},
+                    'billing_period': {'starts_at': utcnow().isoformat(), 'ends_at': (utcnow() + timedelta(days=30)).isoformat()},
+                    'details': {'totals': {'total': amount}}}
+            with self.assertRaises(SaaSError) as rejected:
+                with self.accounts.transaction() as connection:
+                    with connection.cursor() as cursor:
+                        self.billing._complete_transaction(cursor, data)
+            self.assertEqual(rejected.exception.code, 'paddle_order_mismatch')
+
     @classmethod
     def setUpClass(cls):
         if not urlsplit(TEST_URL).path.rsplit("/", 1)[-1].endswith("_test"):

@@ -120,13 +120,8 @@ def verify_password(password: str, encoded: str) -> bool:
         return False
 
 
-def device_limit(plan_version: str) -> int:
-    value = str(plan_version or "free-v2").casefold()
-    if value.startswith("pro-"):
-        return 5
-    if value.startswith("advanced-") or value.startswith("advance-"):
-        return 2
-    return 1
+def device_limit() -> int:
+    return 5
 
 
 class SaaSService:
@@ -252,15 +247,15 @@ class SaaSService:
                     password_value = validate_password(configured_password)
                     user_id = new_id()
                     cursor.execute(
-                        """INSERT INTO users(id,email,password_hash,display_name,email_verified_at,plan_version)
-                        VALUES(%s,%s,%s,%s,NOW(),'pro-v1')""",
+                        """INSERT INTO users(id,email,password_hash,display_name,email_verified_at)
+                        VALUES(%s,%s,%s,%s,NOW())""",
                         (user_id, admin_email, hash_password(password_value), "管理员"),
                     )
                 cursor.execute(
                     "INSERT INTO user_roles(user_id,role_id) VALUES(%s,%s) ON CONFLICT DO NOTHING",
                     (user_id, admin_role),
                 )
-                cursor.execute("SELECT id,email,display_name,plan_version,email_verified_at FROM users WHERE id=%s", (user_id,))
+                cursor.execute("SELECT id,email,display_name,email_verified_at FROM users WHERE id=%s", (user_id,))
                 return self._one(cursor)
 
     def reset_admin_password(self, email: str | None = None, password: str | None = None) -> None:
@@ -316,6 +311,8 @@ class SaaSService:
         return raw
 
     def register(self, email: Any, password: Any, invitation_code: Any, display_name: Any = "", ip_address: str = "") -> dict[str, Any]:
+        from saas_sites import current_site
+        commercial = current_site() == "intl"
         normalized_email = normalize_email(email)
         password_value = validate_password(password)
         code = re.sub(r"\s+", "", str(invitation_code or "").upper())
@@ -338,25 +335,18 @@ class SaaSService:
                     raise SaaSError("email_exists", "该邮箱已注册，请直接登录。", 409)
                 user_id = new_id()
                 cursor.execute(
-                    """INSERT INTO users(id,email,password_hash,display_name,plan_version)
-                    VALUES(%s,%s,%s,%s,'free-v2')""",
-                    (user_id, normalized_email, hash_password(password_value), str(display_name or "").strip()[:100]),
+                    """INSERT INTO users(id,email,password_hash,display_name,account_resource_policy)
+                    VALUES(%s,%s,%s,%s,%s)""",
+                    (user_id, normalized_email, hash_password(password_value), str(display_name or "").strip()[:100], "commercial" if commercial else "private"),
                 )
                 cursor.execute(
                     "INSERT INTO invitation_uses(id,invitation_id,user_id,email,ip_address) VALUES(%s,%s,%s,%s,%s)",
                     (new_id(), invitation["id"], user_id, normalized_email, str(ip_address or "")[:128]),
                 )
                 cursor.execute("UPDATE invitations SET used_count=used_count+1 WHERE id=%s", (invitation["id"],))
-                # Only invitations explicitly issued as member invites can
-                # create referral rewards; administrator/channel invitation
-                # codes never silently become referral relationships.
-                cursor.execute("SELECT id,inviter_id,invitee_id FROM member_invites WHERE invitation_id=%s FOR UPDATE", (invitation["id"],))
-                member_invite = self._one(cursor)
-                if member_invite and not member_invite["invitee_id"] and member_invite["inviter_id"] != user_id:
-                    cursor.execute("UPDATE member_invites SET invitee_id=%s,status='registered',registered_at=NOW() WHERE id=%s", (user_id, member_invite["id"]))
                 verification_token = self._new_verification(cursor, user_id)
                 cursor.execute("UPDATE invitations SET verification_email_count=verification_email_count+1 WHERE id=%s", (invitation["id"],))
-                cursor.execute("SELECT id,email,display_name,plan_version,email_verified_at FROM users WHERE id=%s", (user_id,))
+                cursor.execute("SELECT id,email,display_name,email_verified_at FROM users WHERE id=%s", (user_id,))
                 user = self._one(cursor) or {}
         delivered = self._send_verification(normalized_email, verification_token)
         return {"user": self.public_user(user), "verificationRequired": True, "emailDelivery": delivered}
@@ -377,7 +367,7 @@ class SaaSService:
                     raise SaaSError("invalid_verification", "验证链接无效或已过期。", 400)
                 cursor.execute("UPDATE email_verifications SET consumed_at=NOW() WHERE id=%s", (record["id"],))
                 cursor.execute("UPDATE users SET email_verified_at=NOW(),updated_at=NOW() WHERE id=%s", (record["user_id"],))
-                cursor.execute("SELECT id,email,display_name,plan_version,email_verified_at FROM users WHERE id=%s", (record["user_id"],))
+                cursor.execute("SELECT id,email,display_name,email_verified_at FROM users WHERE id=%s", (record["user_id"],))
                 return {"user": self.public_user(self._one(cursor) or {})}
 
     def login(self, email: Any, password: Any, device_key: Any, user_agent: str = "", ip_address: str = "", replace_device_id: Any = "") -> dict[str, Any]:
@@ -401,25 +391,9 @@ class SaaSService:
                     (user["id"],),
                 )
                 user["is_admin"] = bool((self._one(cursor) or {}).get("is_admin"))
-                # Membership expiry must also take effect for device limits,
-                # even if the member has not opened the membership screen.
-                cursor.execute("UPDATE subscriptions SET status='expired',updated_at=NOW() WHERE user_id=%s AND status IN ('active','grace_period') AND ends_at<=NOW()", (user["id"],))
-                cursor.execute(
-                    """SELECT pv.id,pv.quotas_json FROM subscriptions s JOIN plan_versions pv ON pv.id=s.plan_version_id
-                    WHERE s.user_id=%s AND s.status IN ('active','grace_period') AND s.starts_at<=NOW() AND s.ends_at>NOW()
-                    ORDER BY pv.rank DESC,s.ends_at DESC,s.created_at DESC LIMIT 1""",
-                    (user["id"],),
-                )
-                effective = self._one(cursor)
-                if not effective:
-                    cursor.execute("SELECT id,quotas_json FROM plan_versions WHERE id='free-v2'")
-                    effective = self._one(cursor)
-                if not effective:
-                    raise SaaSConfigurationError("会员套餐 migration 缺失；请先执行 `python3 tools/saas_migrate.py --migrate`。")
-                user["plan_version"] = effective["id"]
-                cursor.execute("UPDATE users SET plan_version=%s,updated_at=NOW() WHERE id=%s", (effective["id"], user["id"]))
-                quotas = effective["quotas_json"] if isinstance(effective["quotas_json"], dict) else json.loads(effective["quotas_json"])
-                limit = max(1, int(quotas.get("devices", device_limit(str(user["plan_version"])))) )
+                from saas_resources import ResourceService
+                resources = ResourceService(self)
+                limit = int(resources._context(cursor, str(user["id"]), lock_user=False)["limits"]["devices"])
                 cursor.execute("SELECT * FROM devices WHERE user_id=%s AND device_key=%s FOR UPDATE", (user["id"], key))
                 device = self._one(cursor)
                 if not device or device["revoked_at"]:
@@ -434,7 +408,7 @@ class SaaSService:
                         active_devices = [{"id": row["id"], "label": row["label"], "userAgent": row["user_agent"], "firstSeenAt": iso(row["first_seen_at"]), "lastSeenAt": iso(row["last_seen_at"])} for row in self._many(cursor)]
                         raise SaaSError(
                             "device_limit_exceeded",
-                            "已达到当前套餐的同时登录设备上限，请先在已登录设备中移除旧设备。",
+                            "已达到同时登录设备上限，请先在已登录设备中移除旧设备。",
                             409,
                             {"limit": limit, "activeDevices": count, "devices": active_devices},
                         )
@@ -481,7 +455,7 @@ class SaaSService:
         with self.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    """SELECT s.id AS session_id,s.csrf_hash,s.device_id,u.id,u.email,u.display_name,u.status,u.plan_version,u.email_verified_at,
+                    """SELECT s.id AS session_id,s.csrf_hash,s.device_id,u.id,u.email,u.display_name,u.status,u.email_verified_at,
                     EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id AND r.name='admin') AS is_admin
                     FROM user_sessions s JOIN users u ON u.id=s.user_id JOIN devices d ON d.id=s.device_id
                     WHERE s.token_hash=%s AND s.revoked_at IS NULL AND s.expires_at>NOW() AND d.revoked_at IS NULL""",
@@ -677,22 +651,21 @@ class SaaSService:
             "id": user.get("id"),
             "email": user.get("email"),
             "displayName": user.get("display_name", ""),
-            "planVersion": user.get("plan_version", "free-v2"),
             "emailVerified": bool(user.get("email_verified_at")),
             "isAdmin": bool(user.get("is_admin", False)),
         }
 
     def _send_verification(self, email: str, raw_token: str) -> bool:
         url = self._app_url("/verify-email?token=" + quote(raw_token))
-        return self._send_mail(email, "验证你的 RynEnglish 邮箱", f"请在 24 小时内打开以下链接验证邮箱：\n{url}\n\nRynEnglish\nEvery Page, A Deeper Understanding.\n")
+        return self._send_mail(email, "验证你的 纸间微光 邮箱", f"请在 24 小时内打开以下链接验证邮箱：\n{url}\n\n纸间微光\n一页一光，静读慢行。\n")
 
     def _send_password_reset(self, email: str, raw_token: str) -> bool:
         url = self._app_url("/reset-password?token=" + quote(raw_token))
-        return self._send_mail(email, "重置 RynEnglish 密码", f"请在 2 小时内打开以下链接重置密码：\n{url}\n\nRynEnglish\nEvery Page, A Deeper Understanding.\n")
+        return self._send_mail(email, "重置 纸间微光 密码", f"请在 2 小时内打开以下链接重置密码：\n{url}\n\n纸间微光\n一页一光，静读慢行。\n")
 
     def _app_url(self, path: str) -> str:
-        base = self.environment.get("APP_BASE_URL", "").strip().rstrip("/")
-        return (base or "http://localhost:8765") + path
+        from saas_sites import app_base_url
+        return app_base_url(self.environment) + path
 
     def _send_mail(self, recipient: str, subject: str, text: str) -> bool:
         host = self.environment.get("SMTP_HOST", "").strip()

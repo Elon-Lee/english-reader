@@ -6,6 +6,7 @@ import base64
 import os
 import unittest
 from datetime import timedelta
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -15,6 +16,8 @@ from saas_auth import SaaSError, SaaSService, new_id, token_hash, utcnow
 from saas_membership import MembershipService
 from saas_payments import AlipayService
 from saas_redemptions import RedemptionService
+from saas_journey import JourneyService
+from saas_sites import site_context
 
 
 TEST_URL = os.environ.get("SHIYUE_SAAS_TEST_DATABASE_URL", "")
@@ -53,6 +56,9 @@ class AlipayPostgresTests(unittest.TestCase):
         self.product_version_id = "advanced-30-v2"
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
+                migrations = Path(__file__).with_name('saas_migrations')
+                for name in ('0020_restore_public_commerce_seed.sql', '0026_cloudcat_monthly_products.sql', '0028_publish_default_plan_cards.sql', '0030_default_month_card_tier_rank.sql'):
+                    cursor.execute((migrations / name).read_text())
                 cursor.execute("UPDATE commerce_product_versions SET status='published',published_at=COALESCE(published_at,NOW()) WHERE id=%s", (self.product_version_id,))
                 cursor.execute("UPDATE plan_versions SET active=TRUE WHERE id='commerce-advanced-30-v2'")
 
@@ -112,6 +118,9 @@ class AlipayPostgresTests(unittest.TestCase):
         paid = self.payments.order_status(str(self.user["id"]), created["orderId"])
         self.assertEqual(paid["status"], "paid")
         self.assertIsNotNone(paid["endsAt"])
+        with site_context('intl'):
+            cleared = JourneyService(self.accounts).update(str(self.user['id']), {'action': 'clear_purchase'})
+            self.assertIsNone(cleared['pendingPurchase'])
         admin_order = self.payments.admin_order_detail(created["orderId"])
         self.assertEqual(admin_order["tradeNo"], trade_number)
         self.assertEqual(self.payments.list_orders(status="paid", query=self.user["email"])["total"], 1)

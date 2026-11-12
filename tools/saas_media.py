@@ -15,15 +15,15 @@ from pathlib import Path
 from typing import Any
 
 from saas_auth import SaaSError, SaaSService, new_id
-from saas_membership import MembershipService, as_json, can_watch_hd_video, timestamp
+from saas_resources import ResourceService, as_json, can_watch_hd_video, timestamp
 
 TRIAL_CLIP_LOCK = threading.Lock()
 
 
 class MediaService:
-    def __init__(self, accounts: SaaSService, memberships: MembershipService, media_root: Path | None = None):
+    def __init__(self, accounts: SaaSService, resources: ResourceService, media_root: Path | None = None):
         root = media_root or Path(accounts.environment.get("MEDIA_ROOT", "") or os.environ.get("MEDIA_ROOT", "") or (accounts and Path(__file__).resolve().parents[1] / "books"))
-        self.accounts, self.memberships, self.media_root = accounts, memberships, root.expanduser().resolve()
+        self.accounts, self.resources, self.media_root = accounts, resources, root.expanduser().resolve()
 
     def _safe_path(self, relative: Any) -> tuple[str, Path]:
         value = str(relative or "").strip().replace("\\", "/")
@@ -74,9 +74,9 @@ class MediaService:
         if bytes_to_add<0:raise SaaSError("invalid_media_size","媒体大小无效。",400)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
-                context=self.memberships._context(cursor,user_id);limit=int(as_json(context["period"]["limits_json"]).get("storage_bytes",0));used=self._private_bytes(cursor,user_id)
+                context=self.resources._context(cursor,user_id);limit=int(as_json(context["period"]["limits_json"]).get("storage_bytes",0));used=self._private_bytes(cursor,user_id)
                 if used+bytes_to_add>limit:
-                    raise SaaSError("quota_exceeded","私人学习空间不足。",409,{"feature":"storage_bytes","plan":context["plan"]["id"],"used":used,"limit":limit,"resetAt":timestamp(context["period"]["ends_at"]),"recommendedPlan":self.memberships._recommended_plan(context["plan"]["id"])})
+                    raise SaaSError("quota_exceeded","私人学习空间不足。",409,{"feature":"storage_bytes","used":used,"limit":limit,"resetAt":timestamp(context["period"]["ends_at"])})
                 return {"used":used,"limit":limit,"available":max(0,limit-used)}
 
     def register(self, actor_id: str, owner_id: str, scope: str, storage_path: str, kind: str = "media", content_type: str = "", catalog_book_id: str | None = None, content_book_id: str | None = None, variants: list[dict[str, Any]] | None = None, *, allow_staging: bool = False) -> dict[str, Any]:
@@ -103,9 +103,9 @@ class MediaService:
                         cursor.execute("SELECT id FROM catalog_books WHERE id=%s FOR UPDATE",(catalog_book_id,))
                         if not cursor.fetchone():raise SaaSError("catalog_book_not_found","官方读物不存在。",404)
                 if scope=="private":
-                    context=self.memberships._context(cursor,owner_id);limit=int(as_json(context["period"]["limits_json"]).get("storage_bytes",0));used=self._private_bytes(cursor,owner_id)
+                    context=self.resources._context(cursor,owner_id);limit=int(as_json(context["period"]["limits_json"]).get("storage_bytes",0));used=self._private_bytes(cursor,owner_id)
                     if used+total>limit:
-                        raise SaaSError("quota_exceeded","私人学习空间不足。",409,{"feature":"storage_bytes","plan":context["plan"]["id"],"used":used,"limit":limit,"resetAt":timestamp(context["period"]["ends_at"]),"recommendedPlan":self.memberships._recommended_plan(context["plan"]["id"])})
+                        raise SaaSError("quota_exceeded","私人学习空间不足。",409,{"feature":"storage_bytes","used":used,"limit":limit,"resetAt":timestamp(context["period"]["ends_at"])})
                 cursor.execute("SELECT id FROM media_assets WHERE storage_path=%s FOR UPDATE",(primary["storage_path"],))
                 if self.accounts._one(cursor):raise SaaSError("media_path_exists","该媒体路径已经登记。",409)
                 asset_id=new_id();generated=sum(item["byte_size"] for item in parsed_variants)
@@ -159,9 +159,9 @@ class MediaService:
                     pending.append(item)
                 added=sum(item["byte_size"] for item in pending)
                 if added:
-                    context=self.memberships._context(cursor,asset["owner_id"]);limit=int(as_json(context["period"]["limits_json"]).get("storage_bytes",0));used=self._private_bytes(cursor,asset["owner_id"])
+                    context=self.resources._context(cursor,asset["owner_id"]);limit=int(as_json(context["period"]["limits_json"]).get("storage_bytes",0));used=self._private_bytes(cursor,asset["owner_id"])
                     if asset["scope"]=="private" and used+added>limit:
-                        raise SaaSError("quota_exceeded","私人学习空间不足。",409,{"feature":"storage_bytes","plan":context["plan"]["id"],"used":used,"limit":limit,"resetAt":timestamp(context["period"]["ends_at"]),"recommendedPlan":self.memberships._recommended_plan(context["plan"]["id"])})
+                        raise SaaSError("quota_exceeded","私人学习空间不足。",409,{"feature":"storage_bytes","used":used,"limit":limit,"resetAt":timestamp(context["period"]["ends_at"])})
                     for item in pending:
                         cursor.execute("INSERT INTO asset_variants(id,asset_id,variant_name,content_type,byte_size,sha256,storage_path) VALUES(%s,%s,%s,%s,%s,%s,%s)",(new_id(),asset_id,item["variant_name"],item["content_type"],item["byte_size"],item["sha256"],item["storage_path"]))
                     cursor.execute("UPDATE media_assets SET generated_bytes=generated_bytes+%s WHERE id=%s",(added,asset_id))
@@ -190,8 +190,6 @@ class MediaService:
             cursor.execute("SELECT * FROM asset_variants WHERE asset_id=%s AND variant_name=%s AND deleted_at IS NULL",(asset_id,variant_name));variant=self.accounts._one(cursor)
             if not variant:raise SaaSError("media_variant_not_found","媒体变体不存在。",404)
             target={"storage_path":variant["storage_path"],"content_type":variant["content_type"],"byte_size":int(variant["byte_size"]),"variant_name":variant_name}
-        if str(target["content_type"]).startswith("video/") and str(variant_name or "").casefold() != "low" and not can_watch_hd_video(cursor,user_id):
-            raise SaaSError("video_quality_membership_required","高清播放需要有效的付费会员，请切换流畅版本。",403)
         cursor.execute("""INSERT INTO asset_usage(asset_id,user_id,access_count,first_accessed_at,last_accessed_at,charged_bytes)
         VALUES(%s,%s,1,NOW(),NOW(),0) ON CONFLICT (asset_id,user_id) DO UPDATE SET access_count=asset_usage.access_count+1,last_accessed_at=NOW()""",(asset_id,user_id))
         return {"asset":asset,"target":target}
@@ -221,8 +219,6 @@ class MediaService:
                     cursor.execute('SELECT * FROM asset_variants WHERE asset_id=%s AND variant_name=%s AND deleted_at IS NULL', (asset_id, variant_name))
                     target = self.accounts._one(cursor)
                     if not target: raise SaaSError('media_not_found', '试读媒体不存在。', 404)
-                if str(target['content_type']).startswith('video/') and str(variant_name or '').casefold() != 'low' and not can_watch_hd_video(cursor,user_id):
-                    raise SaaSError('video_quality_membership_required', '高清试读需要有效的付费会员，请切换流畅版本。', 403)
         _, source = self._safe_path(target['storage_path'])
         content_type = str(target['content_type'])
         if not source.is_file(): raise SaaSError('media_not_found', '媒体文件不存在。', 404)
@@ -297,7 +293,7 @@ class MediaService:
                 total=int(asset["original_bytes"])+int(asset["generated_bytes"])
                 cursor.execute("UPDATE media_assets SET status='deleted',deleted_at=NOW() WHERE id=%s",(asset_id,));cursor.execute("UPDATE asset_variants SET deleted_at=NOW() WHERE asset_id=%s AND deleted_at IS NULL",(asset_id,))
                 if asset["scope"]=="private":
-                    context=self.memberships._context(cursor,asset["owner_id"])
+                    context=self.resources._context(cursor,asset["owner_id"])
                     cursor.execute("""INSERT INTO usage_ledger(id,user_id,usage_period_id,feature,quantity,reason,idempotency_key,metadata_json)
                     VALUES(%s,%s,%s,'storage_bytes',%s,'storage_settlement',%s,%s::jsonb) ON CONFLICT DO NOTHING""",(new_id(),asset["owner_id"],context["period"]["id"],-total,f"asset:{asset_id}:release",json.dumps({"assetId":asset_id,"bytes":total})))
                 cursor.execute("INSERT INTO security_events(id,user_id,event_type,metadata_json) VALUES(%s,%s,'media_deleted',%s::jsonb)",(new_id(),asset["owner_id"],json.dumps({"assetId":asset_id,"actorId":actor_id})))

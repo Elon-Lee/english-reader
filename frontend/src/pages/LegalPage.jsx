@@ -4,10 +4,9 @@ import { PublicHeader } from './PublicSite'
 import terms from '../../../reader/legal/terms.html?raw'
 import privacy from '../../../reader/legal/privacy.html?raw'
 import contentPolicy from '../../../reader/legal/content-policy.html?raw'
-import refunds from '../../../reader/legal/refunds.html?raw'
 import copyright from '../../../reader/legal/copyright.html?raw'
 
-const sources = { '/terms': terms, '/privacy': privacy, '/content-policy': contentPolicy, '/refunds': refunds, '/copyright': copyright }
+const sources = { '/terms': terms, '/privacy': privacy, '/content-policy': contentPolicy, '/copyright': copyright }
 export const isLegalPath = path => Object.hasOwn(sources, path)
 export const legalPageTitle = path => sources[path]?.match(/<title>(.*?)<\/title>/)?.[1]
 

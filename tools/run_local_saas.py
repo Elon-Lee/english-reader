@@ -47,14 +47,15 @@ class SMTPServer(socketserver.ThreadingTCPServer):
 
 def local_environment(port, smtp_port, environment=None):
     """Use local deployment permissions while retaining explicitly configured dependencies."""
-    source = dict(os.environ if environment is None else environment)
+    source = {key: value for key, value in dict(os.environ if environment is None else environment).items()
+              if not key.startswith(("ALIPAY_", "PADDLE_", "MBDPAY_", "MBD_", "CLOUDCAT_"))}
     return {
         **source,
         "SHIYUE_DEPLOYMENT_MODE": "local", "SHIYUE_RUNTIME_MODE": "saas", "SHIYUE_SAAS_ENABLED": "1",
         "READER_HOST": source.get("READER_HOST") or "127.0.0.1", "READER_PORT": str(port),
         "APP_BASE_URL": source.get("APP_BASE_URL") or f"http://localhost:{port}",
         "SMTP_HOST": "127.0.0.1", "SMTP_PORT": str(smtp_port),
-        "SMTP_USER": "", "SMTP_PASSWORD": "", "SMTP_FROM": "debug@shiyue.local",
+        "SMTP_USER": "", "SMTP_PASSWORD": "", "SMTP_FROM": "debug@shiyue.local", "SMTP_FROM_NAME": "纸间微光",
     }
 
 
@@ -64,7 +65,7 @@ def main()->int:
     walkthrough=os.environ.get("SHIYUE_RUN_WALKTHROUGH","").strip().lower() in {"1","true","yes","on"};secret=secrets.token_urlsafe(32) if walkthrough else ""
     environment=local_environment(port,smtp_port)
     if walkthrough:environment.update({"SHIYUE_BROWSER_AUDIT_SECRET":secret,"SHIYUE_BROWSER_AUDIT_EMAIL":str(os.environ.get("BOOTSTRAP_ADMIN_EMAIL","")).strip(),"SHIYUE_BROWSER_AUDIT_PASSWORD":str(os.environ.get("SHIYUE_BROWSER_PASSWORD",""))})
-    before=set(outbox.glob("*.eml"));sent=SaaSService(environment=environment)._send_mail("debug-recipient@local.test","RynEnglish 本地 SMTP 自检","本邮件只保存到本机调试目录。")
+    before=set(outbox.glob("*.eml"));sent=SaaSService(environment=environment)._send_mail("debug-recipient@local.test","纸间微光本地 SMTP 自检","本邮件只保存到本机调试目录。")
     after=set(outbox.glob("*.eml"));
     if not sent or not after-before:raise SystemExit("debug SMTP self-test failed")
     process=subprocess.Popen([sys.executable,str(ROOT/"tools/reader_server.py")],cwd=ROOT,env=environment,start_new_session=True)
@@ -83,7 +84,7 @@ def main()->int:
                     if response.status==200:break
             except Exception:time.sleep(.1)
         else:raise RuntimeError("SaaS reader did not become healthy")
-        print(f"RynEnglish SaaS 本地调试：http://localhost:{port}",flush=True);print(f"SMTP 调试捕获：127.0.0.1:{smtp_port} → {outbox}",flush=True);print("平台 AI 未配置时会返回受控提示；SaaS 总开关仅在本进程内临时开启。",flush=True)
+        print(f"纸间微光本地调试：http://localhost:{port}",flush=True);print(f"SMTP 调试捕获：127.0.0.1:{smtp_port} → {outbox}",flush=True);print("平台 AI 未配置时会返回受控提示；SaaS 总开关仅在本进程内临时开启。",flush=True)
         if walkthrough:
             from browser_walkthrough import capture_existing
             output=ROOT/".local/debug/walkthrough"/datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ");report=capture_existing(f"http://127.0.0.1:{port}",secret,output);return 0 if report.get("status")=="ok" else 1
