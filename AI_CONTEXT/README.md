@@ -23,7 +23,7 @@
 - 国内/国际并行在 `feat/dual-entry-commerce` 实施：国际回环5173、国内回环5174、共享API8790。实际发布状态以 [双入口交接](tasks/dual-entry-commerce/HANDOFF.md) 为准，端口文档见 `docs/DEPLOYMENT_SITES.md`。
 - 私域改造提交 `810f19a` 已推送至 `origin/refactor/private-paper-glow`；未合并，详见 [私域改造交接](tasks/private-paper-glow/HANDOFF.md)。其后双站分支 `feat/paper-glow-blog-domains` 的实现 `3c0c77b` 已随任务 #16 发布京东云源站，公网 HTTPS 尚待 DNS 与域名放行。本地栈入口 `http://127.0.0.1:4173`。
 - 国内品牌为“纸间微光”，标语“一页一光，静读慢行。”；国际恢复RynEnglish首页与商业素材，通过独立构建隔离。
-- 京东云 #16 已保数据升级双站，`current` 为 `code-20261111-152232-21f52fbd`，迁移至 0044；源站验收通过。用户明确稍后添加 learn DNS；公网 HTTPS、临时 swap 与预览信息以 `tasks/blog-domains/HANDOFF.md` 为准。
+- 京东云 #17 已保数据升级双入口，`current=code-20261112-113233-fafb1495`、源码 `3c404e1`，迁移0045；国际Cloudflare公网HTTPS及国内源站验收通过，数据保留。国内learn解析、京东云公网放行/HTTPS及真实支付渠道仍待外部条件，详见双入口交接。
 - PC 优先，移动端视觉优化仍待后续独立任务；保留原音播放，不以浏览器 TTS 替代。
 
 ## 任务索引

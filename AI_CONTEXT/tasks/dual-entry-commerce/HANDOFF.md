@@ -23,13 +23,19 @@
 - 真实隔离PG/HTTP覆盖两站同账号、偏好一致、统一用量、国内商业404、国际鉴权、伪造内部头拒绝与两站无邀请码400。
 - 独立审查发现支付宝notify国际地址门禁、journey购买恢复缺失，已修正并复核通过；同步更新旧国内journey测试的404预期。
 - 主代理最终复验：71项站点/网关/路由/支付/资源单元、5项Paddle/权益单元、34项商业真实PG、15项phase7工作台、3项真实双入口HTTP、119项部署及6项博客部署均通过。前端源码/产物、Chrome、modern、UI和JS检查通过；Python编译通过。
-- 本轮尚未发布。线上基线 `code-20261111-152232-21f52fbd`，迁移0044，只读计数1用户/2书目/0支付订单/0订阅。发布后核对保留数据。
+- 京东云任务 **#17 complete**，正式版本 `code-20261112-113233-fafb1495`，源码 `3c404e1`，sourceDirty=false，发布包SHA-256 `980f979fb17d5b8e3d46adad019795d220828970649d3caedc435d26b20f6a48`。已完成候选双前端、迁移完整性、真实原音CPU检查和正式切换。
+- 发布前后均为1用户/2书目/2内容书/0支付订单/0订阅，原用户仍private；迁移0045。数据库备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261112-113233-fafb1495.dump`（0600），配置备份同目录 `settings-code-20261112-113233-fafb1495/`。七容器运行，API/双前端均回环监听，cryptography46.0.7可导入。
+- 正式源站两入口首页/登录/静态资源200；未登录认证与资源401，国际会员401/定价200/真实商品3个，国内商业404。主域文章/关于/RSS200、API/登录404，未知或跨站Host421；直连API无网关凭据403。两站真实验证码启用，前端独立令牌文件0600且仅含本站令牌，sites.json v2端口正确。
+- `https://10ye.cc` 已严格TLS验证：首页/定价/7个入口资源/健康/验证码配置/商品200，未登录认证401。Cloudflare保持active/enabled、4连接，未更换隧道配置或凭据。
+- 真实公网Chrome已渲染国际首页和定价，无API fixtures或付款操作；定价页显示真实免费/进阶/Pro额度与“暂未开放新购，可使用已有兑换码”。截图 `/private/tmp/english-reader-dual-entry-check/intl-production-{home,pricing}.png`。初次networkidle等待超时，改用DOM及真实方案标题等待完成验收，不把该超时记为页面成功。
+- 国内Nginx源站80主域/learn正确，主域构建无learn链接；服务器侧主域HTTP200，本机固定真实IP公网HTTP仍为JDTP403。learn在服务器解析未得到A；443无监听，国内公网HTTPS未完成。不能将源站可用写成公网已放行。
+- 国际恢复真实3个商品，但当前每个商品paymentMethods为空、purchaseUrl为空，支付宝未就绪；已部署流程不代表已能真实收款。未开启渠道、未执行收费或模拟生产付款。
 
 ## 接续与外部条件
 
-- 完成最终验证与源码提交后，执行保数据 `--target 1 --upgrade --app-domain learn.rynenglish.com --blog-domain rynenglish.com --intl-domain 10ye.cc --defer-https --identity-file <已授权私钥路径>`；不能用中间dirty包或完整重装。
-- 实际验收Host/API、国内Nginx、Cloudflare严格TLS、容器/配置权限/版本与迁移；不输出凭据。
-- 国内DNS、云商放行及直连HTTPS待实际核实；Cloudflare仍回源京东云，不能视为境外部署或备案结论。真实支付还依赖批准渠道配置与联调。
+- 后续普通保数据升级自动读取sites.json v2；不要完整重装。源码与两份前端使用同一提交，共同阅读业务只改一次。
+- 待用户配置learn A=`117.72.209.44`及京东云域名放行后，补装国内两域HTTPS/续期并严格公网验收；按 `docs/DEPLOYMENT_SITES.md` 读取保存的5174端口。
+- Cloudflare仍回源京东云，不能视为境外部署或备案结论。真实支付还需获批渠道配置、国际回调地址及实际联调，保留待办。
 - 节点2GiB，临时1GiB swap `/var/lib/shiyue/paper-glow-deploy-20261111.swap` 未写fstab，重启需恢复。
 
 ## 验证命令
