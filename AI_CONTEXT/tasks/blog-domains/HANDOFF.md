@@ -2,6 +2,10 @@
 
 更新时间：2026-11-13（Asia/Shanghai）
 
+## 最新程序发布
+
+- 2026-11-13 **#24 complete**，源码 `5da28cc`（clean），`current=code-20261113-111607-f7884945`。共享AI默认免Token修复随国内/国际/博客/后端同步发布，博客内容/样式保持#23；51页19文章审计、博客公网HTTPS200与80跳443、双站健康通过。国内 `https_deferred:false` 保留；详情见 [平台交接](../platform-operations/HANDOFF.md)。下方#23与HTTPS入口版本号为当时记录。
+
 ## 国内 HTTPS 已启用（2026-11-13）
 
 - 用户授权 Let’s Encrypt 与80自动跳443，使用现有 `--https-entry` 入口配置流程，为 `learn.rynenglish.com` 和 `rynenglish.com` 分别签发证书，有效至2027-02-11。国内HTTPS仍转5174；HTTP返回308并保留路径/查询参数，ACME验证路径除外。`sites.json` 已保存 `https_deferred:false`，后续升级不得再传 `--defer-https`。

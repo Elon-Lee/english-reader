@@ -23,6 +23,8 @@
 
 ## 验证与发布状态
 
+- 最新程序发布为2026-11-13 **#24 complete**：源码 `5da28cc`（clean），`current=code-20261113-111607-f7884945`，双前端/博客/共享后端同步升级。修复共享词汇语境/句法旧凭据阻断，线上平台AI无配置仍可免Token返回正确解释；两站健康、博客HTTPS及80跳443正常，迁移0045，国际与续期timer active。详情见 [平台交接](../platform-operations/HANDOFF.md)。
+
 - 2026-11-13已按用户要求补装国内两域Let’s Encrypt HTTPS/80→443跳转，`https_deferred:false`；不发布业务代码，current仍#23，国内5174/国际5173/API8790拓扑保持。严格公网TLS、双域HTTP308、Chrome真实验证码生成、国际健康验证通过；43项入口/双入口部署回归通过。续期定时器已active/enabled；详情及续期验收见 [博客分站交接](../blog-domains/HANDOFF.md)。
 
 - 最新为国内博客页脚布局发布 **#23 complete**，`current=code-20261113-103129-858fe5ab`、源码 `ce05402`；两前端/博客/后端同步升级，备案居中/版权靠右/移除页脚导航已公网验证，国际健康正常。详情见博客交接。

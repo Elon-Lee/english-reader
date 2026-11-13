@@ -6,7 +6,9 @@
 - 共享核心修复：`tools/saas_ai.py` 默认省略凭据直接调用上游；已有完整邮箱/Token仍可选兼容，自定义upstream保留。不修改认证、CSRF、租户访问、缓存、配额及失败释放。平台设置页面邮箱/Token改为可选，默认标记免Token模式，清除Token提示同步。
 - `tools/test_saas_ai_provider.py` 6项先复现失败后通过（无配置/空配置/部分凭据/已有凭据/错误/空结果）；专用 `shiyue_ai_tokenless_regression_test` 数据库下4项AI缓存/权限/扣量回归通过，未使用正式库运行夹具。真实免Token调用国内word_context与国际sentence_grammar均返回非空结果。
 - 双React/博客构建、国内商业隔离、51页19文章博客审计、双站浏览器fixtures、modern/UI/JS、32项网关/站点/双入口部署/博客部署回归、Python编译/diff-check通过。首次浏览器命令环境变量只作用于前半段导致缺Playwright，补全环境后通过。
-- 待从同一源码提交同步发布两前端/博客/后端，并验证生产生成结果。保留已启用的国内Let’s Encrypt与 `https_deferred:false`，详情见博客交接。无数据库迁移，不清理用户内容或修改平台凭据。
+- 京东云 **#24 complete**，同一源码 `5da28cc`（clean）同步发布两前端/博客/后端，`current=/srv/shiyue/releases/code-20261113-111607-f7884945`；备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261113-111607-f7884945.dump`。候选双站/迁移0045/真实原音检查及正式验证通过。无新增迁移，不清理用户内容或修改平台凭据。
+- 生产运行服务读取真实数据库确认AI配置仍0行，国内word_context与国际sentence_grammar不带Token均返回正确中文解释（合成测试句，不读私人内容、不生成用户缓存或扣额度）。未登录两AI接口仍401。双站健康、博客HTTPS200、80→443的308、Cloudflare/续期timer active、七容器运行正常；`https_deferred:false`保留。未借用真实用户登录态做阅读器点击验收。
+- 发布日志 `/private/tmp/ai-tokenless-deploy.log`，沿用先前精确locale警告过滤包装；生成产物恢复，不提交Git。发布结果中的 `diocoConfigured:false` 表示旧凭据文件未配置，并非免Token服务不可用。
 
 ## 2026-11-12 国内/国际并行（当前优先）
 
