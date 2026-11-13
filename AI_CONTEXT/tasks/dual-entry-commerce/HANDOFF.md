@@ -23,7 +23,7 @@
 
 ## 验证与发布状态
 
-- 最新程序发布为2026-11-13 **#25 complete**：源码 `4ab76c1`（clean），`current=code-20261113-120608-54bdf2ae`，双前端/博客/共享后端同步保数据升级。国内 `@site.SiteFrame` 展示备案页脚，网关按国内app Host返回全站robots Disallow与noindex,nofollow；博客/国际维持原策略。公网HTTP/Chrome、两站健康、国内HTTPS/308、国际云猫配置保留验证通过；已登录应用使用隔离fixture验收。详细边界/测试/备份见 [博客分站交接](../blog-domains/HANDOFF.md)。
+- 最新程序发布为2026-11-13 **#26 complete**：源码 `d2409ed`（clean），`current=code-20261113-141503-c5f09bd8`，双前端/博客/共享后端同步保数据升级。国际正式支付宝电脑网站支付已配置启用，保留云猫及兑换；网关RSA2验签、公开商品渠道、真实收银台进阶¥19通过。未付款，用户要求暂不进行实际付款测试，真实回调/权益闭环待后续。国内支付API404、备案/robots/noindex、HTTPS/308及两站健康复核通过。配置备份与支付验收边界见 [支付交接](../payments/HANDOFF.md)。
 
 - #24源码 `5da28cc` 的共享词汇语境/句法免Token修复继续保留；后台凭据可选，详情见 [平台交接](../platform-operations/HANDOFF.md)。
 

@@ -9,7 +9,9 @@
 - 新增 `ALIPAY_PAYMENT_PRODUCT=page_pay`，电脑收银台RSA2签名链接使用可信订单金额、标题、原始15分钟绝对过期时间；通知固定国际HTTPS支付notify、同步回跳国际会员页（不按回跳参数开通）。原face_to_face兼容；订单快照区分产品，不新增数据库结构。
 - 修正真实网关响应原文JSON节点验签（原实现误用通知参数排序规则），保留异步通知参数验签。已签名TRADE_NOT_EXIST映射待支付；过期且支付宝确认不存在的本地订单关闭，允许新请求重试；成功查单严格匹配原订单号，支持TRADE_FINISHED。前端新增收银台链接/恢复/过期/关闭提示，原二维码模式保留。
 - 本地双前端/博客构建及商业隔离、modern/UI/JS检查、双站浏览器fixture通过；单元12项含JSON原文/篡改/重复节点/签名/可信回调/过期；专用 `127.0.0.1:55432/shiyue_alipay_page_test` 验证下单幂等、用户归属、恢复、确认、退款及过期重试。测试与真实付款分开，未收费。
-- 京东云临时进程加载候选模块与现有匹配密钥，对正式网关只读查询不存在的探针订单；服务端就绪与RSA2响应验签通过，返回预期不存在/待支付。未写入订单、变更权益或持久化生产配置。下一步安全合并服务端配置、统一发布两前端/博客/后端，确认新服务就绪后通过既有审计方法启用支付宝；保留云猫及兑换开关，再验收正式收银台，不执行付款。
+- 京东云正式网关只读查询不存在的探针订单，签名请求与RSA2响应验签通过，返回预期不存在/待支付。现已持久化服务端0600配置并完成统一保数据发布 **#26 complete**：源码 `d2409ed`（clean），`current=code-20261113-141503-c5f09bd8`；两前端、博客及共享后端同步切换，未使用defer-https。数据库备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261113-141503-c5f09bd8.dump`；原环境备份 `/srv/shiyue/backups/saas/alipay-before-20261113-configuration.env`，开关备份 `/srv/shiyue/backups/saas/alipay-payment-methods-before-20261113.json`（0600）。密钥只在受限配置中，不写入交接或Git。
+- 新服务正式page_pay就绪且testMode=false。使用现有唯一active、邮箱已验证的admin作为审计actor，调用既有 `AlipayService.update_config` 启用支付宝，保留cloudcat/redemption=true，新增1条payment_methods_updated审计；未创建管理员或登录会话。公开商品API确认进阶¥19、Pro¥49均返回alipay/cloudcat，两条云猫链接保留。国内支付API404、learn robots/noindex、博客备案与国内HTTPS/308及两站健康复核通过；国际缺签名notify返回401。
+- 真实Chrome已到正式支付宝收银台，显示“进阶会员月卡”¥19.00、收款方“瑞恩英语在线学习”，页面提示付款人与收款人不能相同。调试产生1笔待支付订单、0订阅，未付款、退款或模拟开通。用户随后明确“暂时先不测试”，停止实际付款测试；未来需由用户使用其他付款账号完成一次付款，核实真实异步回调、自动权益和返回页面闭环。收银台可达不代表该闭环已验收。
 
 ## 2026-11-13 云猫购买恢复（线上配置）
 
