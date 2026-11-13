@@ -8,6 +8,7 @@
 - 修改前备份 `/srv/shiyue/backups/saas/cloudcat-links-before-20261113-033714.json`（0600）；前后订单、订阅与兑换码数量不变。使用现有唯一active且已验证邮箱的admin身份记录审计，未创建登录会话、订单或收费。
 - 线上国际公开商品API已返回两个付费套餐 `paymentMethods:["cloudcat"]` 及用户指定链接；云猫目标HTTP200。国内learn商业API仍404，支付宝仍未配置/未启用。购买必须先登录核对权益，兑换码仍由云猫商品交付；未做真实付款或兑换验收。
 - 真实Chrome验证国际套餐页不再显示“暂未开放新购”，两付费套餐公开API均有cloudcat及指定URL，两条购买路由均可打开并要求登录核对方案；未借用真实用户会话验证登录后的按钮点击。截图 `/private/tmp/cloudcat-restored-production.png`，API快照 `/private/tmp/cloudcat-restored-catalog.json`。此前下节的空链接是恢复前排查状态。
+- 后续#25国内备案页脚/抓取策略同步发布后，国际商品API复核上述两链接与cloudcat仍保留；匿名Chrome购买弹窗仍要求登录，未创建订单或收费。
 
 ## 2026-11-13 线上购买方式排查（只读）
 

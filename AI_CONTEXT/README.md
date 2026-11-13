@@ -22,7 +22,7 @@
 
 ## 跨任务状态
 
-- 最新程序发布为2026-11-13 **#24 complete**，`current=code-20261113-111607-f7884945`、源码 `5da28cc`（clean）。共享词汇语境/句法分析默认免Token，后台凭据改为可选；线上空配置真实调用两种分析均成功，国内/国际/博客同步升级且健康正常。国内HTTPS与80跳443保留；详见平台运营交接。
+- 最新程序发布为2026-11-13 **#25 complete**，`current=code-20261113-120608-54bdf2ae`、源码 `4ab76c1`（clean）。国内业务登录/应用增加备案页脚，learn入口robots全站Disallow与响应noindex,nofollow；所有访客一致，博客/国际抓取策略不变。两前端/博客/后端同步保数据升级，公网HTTP/Chrome验证、国际健康与两条云猫配置保留通过，国内HTTPS/308保持。详见博客分站交接。#24的共享AI免Token修复继续保留，详见平台运营交接。
 
 - 2026-11-13国内两域Let’s Encrypt HTTPS及HTTP308跳443已启用，`https_deferred:false`；业务版本仍#23。严格TLS、浏览器真实验证码生成、国际健康验证通过，续期定时器active/enabled；详情见博客分站交接。此前国内DNS/HTTPS待办已解除，后续升级不得再加 `--defer-https`。
 

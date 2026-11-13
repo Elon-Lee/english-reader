@@ -8,9 +8,12 @@
 - `saas_frontend_server.py` 仅国内 app Host 返回 `/robots.txt` 的 `User-agent: * / Disallow: /`，GET/HEAD及查询串有效；该入口页面、静态资源、API和错误响应均带 `X-Robots-Tag: noindex, nofollow`。不按 User-Agent 区分响应，不新增JS校验或抓取身份检测。主域博客/IP博客预览与国际站维持既有抓取策略。
 - 标准抓取/索引指令不等于访问控制，不能保证所有爬虫遵守、已收录URL立即消失或不被检查。业务数据继续由既有鉴权保护。
 - 本地已通过：两前端构建及源码/产物隔离、真实HTTP网关/Host/路由23项、双站浏览器fixture（国内登录/注册/已登录设置页备案号，国际套餐/支付状态与无国内页脚）、modern/UI/JS检查、博客51页19文章构建与审计。新增HTTP用例修改前失败，修改后通过。浏览器截图 `/private/tmp/english-reader-dual-entry-check/cn-{login,app}-record.png`。
-- 下一步：Python编译/diff检查后以同一源码提交保数据同步发布双前端、博客及共享后端；核对公网robots/noindex、国内登录页、国际健康和已恢复的云猫链接。不得覆盖线上云猫配置或使用 `--defer-https`。
+- Python编译、JS语法及diff检查通过；已完成下述#25同步发布与公网验收，无本轮未完成代码事项。不得覆盖线上云猫配置或使用 `--defer-https`。
 
 ## 最新程序发布
+
+- 2026-11-13 **#25 complete**，源码 `4ab76c1`（clean），`current=code-20261113-120608-54bdf2ae`。保数据同步发布两前端/博客/共享后端，完成候选双入口、迁移0045、原音检查与整体切换；备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261113-120608-54bdf2ae.dump`，包SHA-256 `2f566eb6246e5491d641c82bf8f58f7dd529fce2c2f10038f67cb6ada9c8bd5b`。
+- 严格TLS公网验证：learn根路径/登录/app/JS/API/404均有noindex,nofollow；robots GET/HEAD及两种UA正确，登录HTML对两种UA字节一致。博客首页和robots无该头，博客HTML与本地逐字一致且无业务域名；国际健康ok，两套餐cloudcat与原URL保留；国内两域HTTP308跳HTTPS。Chrome确认国内登录备案号居中及查询链接、博客隔离、国际购买弹窗要求登录且无国内页脚，页面异常0；未登录真实账号或创建支付。已登录应用页使用隔离fixture验收。报告 `/private/tmp/cn-icp-robots-production.json`，截图 `/private/tmp/cn-login-icp-production.png`，发布日志 `/private/tmp/cn-icp-robots-deploy.log`。沿用精确locale警告过滤包装，不改发布器源码。
 
 - 2026-11-13 **#24 complete**，源码 `5da28cc`（clean），`current=code-20261113-111607-f7884945`。共享AI默认免Token修复随国内/国际/博客/后端同步发布，博客内容/样式保持#23；51页19文章审计、博客公网HTTPS200与80跳443、双站健康通过。国内 `https_deferred:false` 保留；详情见 [平台交接](../platform-operations/HANDOFF.md)。下方#23与HTTPS入口版本号为当时记录。
 

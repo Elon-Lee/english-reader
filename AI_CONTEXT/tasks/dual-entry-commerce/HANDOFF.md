@@ -1,6 +1,6 @@
 # 国内与国际入口并行
 
-更新时间：2026-11-12（Asia/Shanghai）
+更新时间：2026-11-13（Asia/Shanghai）
 
 ## 目标与授权
 
@@ -23,7 +23,9 @@
 
 ## 验证与发布状态
 
-- 最新程序发布为2026-11-13 **#24 complete**：源码 `5da28cc`（clean），`current=code-20261113-111607-f7884945`，双前端/博客/共享后端同步升级。修复共享词汇语境/句法旧凭据阻断，线上平台AI无配置仍可免Token返回正确解释；两站健康、博客HTTPS及80跳443正常，迁移0045，国际与续期timer active。详情见 [平台交接](../platform-operations/HANDOFF.md)。
+- 最新程序发布为2026-11-13 **#25 complete**：源码 `4ab76c1`（clean），`current=code-20261113-120608-54bdf2ae`，双前端/博客/共享后端同步保数据升级。国内 `@site.SiteFrame` 展示备案页脚，网关按国内app Host返回全站robots Disallow与noindex,nofollow；博客/国际维持原策略。公网HTTP/Chrome、两站健康、国内HTTPS/308、国际云猫配置保留验证通过；已登录应用使用隔离fixture验收。详细边界/测试/备份见 [博客分站交接](../blog-domains/HANDOFF.md)。
+
+- #24源码 `5da28cc` 的共享词汇语境/句法免Token修复继续保留；后台凭据可选，详情见 [平台交接](../platform-operations/HANDOFF.md)。
 
 - 2026-11-13已按用户要求补装国内两域Let’s Encrypt HTTPS/80→443跳转，`https_deferred:false`；不发布业务代码，current仍#23，国内5174/国际5173/API8790拓扑保持。严格公网TLS、双域HTTP308、Chrome真实验证码生成、国际健康验证通过；43项入口/双入口部署回归通过。续期定时器已active/enabled；详情及续期验收见 [博客分站交接](../blog-domains/HANDOFF.md)。
 
