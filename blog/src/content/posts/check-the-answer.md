@@ -1,7 +1,7 @@
 ---
 title: 先准备一把尺子，再请 AI 作答
 published: 2026-11-12
-category: prompt-notes
+category: ai-reading
 description: 用可观察的验收标准和一个反例，检查回答有没有完成任务。
 tags: [提示词, 核查]
 lang: zh

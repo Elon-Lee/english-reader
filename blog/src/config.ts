@@ -3,8 +3,8 @@ import type { ThemeConfig } from '@/types'
 export const themeConfig: ThemeConfig = {
   site: {
     title: '纸间微光',
-    subtitle: '一页一光，静读慢行。',
-    description: '一个关于 AI、阅读与日常思考的个人博客。记录概念、提问与实践，让细小的发现有处可放。',
+    subtitle: '借 AI 微光，让英语学习有章可循。',
+    description: '纸间微光，记录 AI 英语工具与学习方法的个人博客。分享词汇整理、口语练习、英文写作和听力复盘的操作步骤与提示模板。',
     i18nTitle: false,
     author: '纸间微光',
     url: 'https://rynenglish.com',

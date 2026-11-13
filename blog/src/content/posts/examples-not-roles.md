@@ -1,7 +1,7 @@
 ---
 title: 少堆角色，多给一个好例子
 published: 2026-11-12
-category: prompt-notes
+category: ai-reading
 description: 把“写得自然”转成可以观察的例子，并检查示例有没有带来额外偏差。
 tags: [提示词, 写作]
 lang: zh

@@ -1,7 +1,7 @@
 ---
 title: 把模糊的愿望，写成一个清楚的问题
 published: 2026-11-12
-category: prompt-notes
+category: ai-reading
 description: 从“帮我整理一下”出发，用目的、材料、边界和格式写一张任务卡。
 tags: [提示词, 任务拆解]
 lang: zh

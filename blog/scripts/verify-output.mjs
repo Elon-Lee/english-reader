@@ -26,7 +26,7 @@ for (const required of ['index.html', 'archives/index.html', 'about/index.html',
 const files = await filesIn(root)
 const htmlFiles = files.filter(file => file.endsWith('.html'))
 const posts = htmlFiles.filter(file => file.includes(`${path.sep}posts${path.sep}`))
-assert(posts.length >= 15, 'Expected twelve AI articles plus three reading notes')
+assert(posts.length >= 19, 'Expected four English-learning articles plus fifteen existing notes')
 
 for (const file of files.filter(file => /\.(html|xml|xsl|txt|css|js|svg)$/.test(file))) {
   const content = await readFile(file, 'utf8')
@@ -70,13 +70,22 @@ assert((rss.match(/<item>/g) ?? []).length === Math.min(posts.length, 25), 'RSS 
 assert(rss.includes('https://rynenglish.com/posts/'), 'RSS canonical host is incorrect')
 const home = await readFile(path.join(root, 'index.html'), 'utf8')
 assert(home.includes('纸间微光') && home.includes('文章归档'), 'Homepage branding/archive missing')
+assert(home.includes('把英语') && home.includes('AI 英语工具箱'), 'Homepage must focus on AI-assisted English learning')
+assert(!home.includes('慢慢走近') && !home.includes('提示词手记'), 'Retired homepage theme/category still visible')
+assert(!files.some(file => file.includes(`${path.sep}categories${path.sep}prompt-notes${path.sep}`)), 'Retired category output still exists')
 const archive = await readFile(path.join(root, 'archives/index.html'), 'utf8')
 assert((archive.match(/class="archive-entry"/g) ?? []).length === posts.length, 'Archive must include pinned and regular articles')
-for (const slug of ['ai-basics', 'prompt-notes', 'ai-reading', 'practice']) {
+for (const slug of ['english-tools', 'ai-basics', 'ai-reading', 'practice']) {
   const category = await readFile(path.join(root, 'categories', slug, 'index.html'), 'utf8')
   assert(home.includes(`href="/categories/${slug}/"`), `Homepage missing category ${slug}`)
   const links = [...category.matchAll(/<h3><a href="(\/posts\/[^"]+)"/g)].map(match => match[1])
   assert(links.length >= 3, `Category ${slug} needs at least three articles`)
+  if (slug === 'english-tools') assert(links.length >= 4, 'English tools needs four practical articles')
+  if (slug === 'ai-reading') {
+    for (const moved of ['clear-prompt', 'examples-not-roles', 'check-the-answer']) {
+      assert(links.includes(`/posts/${moved}/`), `Moved article missing: ${moved}`)
+    }
+  }
   for (const href of links) {
     const article = await readFile(path.join(root, href, 'index.html'), 'utf8')
     assert(article.includes(`class="article-category"><a href="/categories/${slug}/"`), `Category mismatch for ${href}`)
