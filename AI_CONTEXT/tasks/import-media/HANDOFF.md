@@ -1,5 +1,17 @@
 # 导入与媒体交接
 
+## 2026-11-13 双站私人导入与空间（验证完成，已授权发布）
+
+- 用户确认：国内隐藏普通用户工作台/书架/空状态的私人导入、导入记录入口，不挂载私人上传窗口、不请求私人导入API；**保留国内管理员官方内容导入**，不要求管理员购买私人套餐。
+- 分支 `feat/site-import-entitlements`，基线 `6408c73`。涉及共享资源/导入核心及 `@site` 国内、国际扩展；核心仅一份。国内可信入口对 `/api/workspace/imports` 及子路径GET/POST返回404，官方 `/api/admin/content-imports` 保持管理员鉴权与CSRF。
+- 国际免费/无有效付费订阅不可私人导入；首次打开、提交、续传和重试按需读取 `/api/resources.privateImport`，提示升级并可跳套餐页，权限服务错误不打开上传。后端读取上传体前及服务创建/上传/重试/处理/最终入库复查权限；到期仍可取消/清理历史任务，已有读物继续可读，不删除旧文件。
+- `ResourceService` 为实际权限/容量来源：免费0、进阶最多1GiB、Pro最多5GiB；原套餐更小额度仍取更小值。旧private账号20GB底线不再适用于私人存储；其他AI/设备/收藏权益规则保留。旧订阅/兑换码也受运行时容量上限约束。
+- 迁移 `0046_private_import_entitlements.sql` 复制当前现售商品发布新版本并退役旧商品，原订单/订阅/兑换码快照保留；复制价格/折扣/云猫链接/其余权益，只更新空间/导入说明。迁移重跑幂等，正式本地库与生产尚未应用。
+- 关键文件：`tools/{saas_resources,saas_sites,saas_imports,reader_server}.py`，`frontend/src/sites/{cn,intl}/index.jsx`、国际 `importAccess.jsx`、共享 `main.jsx`、`pages/{WorkspacePage,LibraryPage}.jsx`、`components/{ImportModal,ResumeAudioUpload}.jsx`。设计/计划见 `docs/superpowers/{specs,plans}/2026-11-13-site-import-entitlements.md`。
+- 验证：资源/支付/站点单元57项；专用 `127.0.0.1:55432/shiyue_import_policy_test` 双入口HTTP7项、导入phase8共22项、续传/上传完整性8项及完整HTTP smoke36检查通过，覆盖国内官方导入/管理员撤权、免费403、伪造头、历史套餐容量边界、到期取消/旧书阅读、商品快照/链接及迁移幂等。双前端构建、源码/产物隔离、modern/UI/JS、Python编译/diff检查、博客构建及51页面/19文章审计通过。Chrome隔离fixtures覆盖国内工作台/空书架/已有读物无导入入口和请求，国际升级/权限失败/付费窗口及窗口打开后权限到期的提交复查；支付回归未访问真实收银台或付款。构建产物恢复，不提交生成文件。
+- 验证命令：`npm run build:sites && npm run test:sites && npm run test:sites:built`；按双入口交接的Chrome环境执行 `npm run test:sites:browser`；`PYTHONPATH=tools .local/saas-venv/bin/python -m unittest tools.test_private_resources tools.test_saas_sites tools.test_saas_shared_entitlements tools.test_saas_payments tools.test_saas_commercial_http tools.test_private_http`。PG测试只用明确的 `_test` URL，smoke使用 `./start-reader.sh --saas-smoke 8795`，并指定未解析符号链接的venv解释器路径。smoke将AI指向临时本地失败提供方，验证失败释放额度，不依赖真实外部服务。
+- 用户现已明确授权“改完的发布到京东云”。本轮将先提交功能与文档，从同一源码提交统一保数据发布国内、国际、博客及共享后端；不合并主线或推送。发布前已确认正式current为#26、无活动导入，账号/书城/内容书/订单/订阅分别1/2/2/3/0，记录支付配置摘要用于发布后复核。此前支付宝暂停付款测试的约束不变。正式发布结果须在本节补充。
+
 ## 2026-11-07 原文件泛读索引（已发布京东云）
 
 - 新 EPUB 在现有独立导入分支调用 `read_epub(...,source_index=...)`，保留原返回接口；为原文件登记 `readingDocument.source={version:1,assetId,layout,spine:[{href,section,layout}]}`。解析全局与每个 itemref 的 fixed/reflow 版式，空/图片章节仍保留 spine 位置，文本章节 ID 与原 spine 索引一致。

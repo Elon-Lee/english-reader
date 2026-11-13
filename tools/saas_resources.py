@@ -20,6 +20,7 @@ DEFAULT_LIMITS = {
 }
 FEATURES = tuple(DEFAULT_LIMITS)
 AI_FEATURES = {"ai_context_generations", "ai_grammar_generations"}
+PRIVATE_STORAGE_CAPS = {'advanced': 1024**3, 'pro': 5 * 1024**3}
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 
@@ -81,7 +82,7 @@ class ResourceService:
                 raise SaaSConfigurationError(f"RESOURCE_{feature.upper()} 必须为正整数。")
             self.limits[feature] = value
 
-    def resolve_limits(self, policy: str, paid_quotas: dict[str, Any] | None = None, free_quotas: dict[str, Any] | None = None) -> dict[str, int]:
+    def resolve_limits(self, policy: str, paid_quotas: dict[str, Any] | None = None, free_quotas: dict[str, Any] | None = None, *, paid_family: str = '') -> dict[str, int]:
         limits = dict(self.limits)
         if policy == 'commercial':
             quotas = paid_quotas if paid_quotas is not None else (free_quotas or {})
@@ -92,14 +93,27 @@ class ResourceService:
             for feature in FEATURES:
                 if feature not in AI_FEATURES:
                     limits[feature] = max(limits[feature], int(paid_quotas.get(feature, 0) or 0))
+        # Personal-account floors apply to reading resources, never private
+        # imports. Old plan versions and redemption codes obey the same cap.
+        limits['storage_bytes'] = min(max(0, int((paid_quotas or {}).get('storage_bytes', 0))), PRIVATE_STORAGE_CAPS.get(paid_family, 0))
         return limits
+
+    @staticmethod
+    def private_import_access(context: dict[str, Any]) -> dict[str, Any]:
+        limit = int(context['limits'].get('storage_bytes', 0))
+        allowed = bool(context.get('paid')) and limit > 0
+        return {'allowed': allowed, 'storageLimit': limit, 'reason': 'available' if allowed else 'upgrade_required'}
+
+    def assert_private_import(self, context: dict[str, Any]) -> None:
+        if not self.private_import_access(context)['allowed']:
+            raise SaaSError('private_import_upgrade_required', '免费版不支持导入私人读物，请升级到进阶版或 Pro 版。', 403)
 
     def _context(self, cursor: Any, user_id: str, lock_user: bool = True) -> dict[str, Any]:
         cursor.execute(f"SELECT id,created_at,status,account_resource_policy FROM users WHERE id=%s {'FOR UPDATE' if lock_user else ''}", (user_id,))
         user = self.accounts._one(cursor)
         if not user or user["status"] != "active":
             raise SaaSError("account_unavailable", "账号不可用。", 403)
-        cursor.execute("""SELECT pv.quotas_json FROM subscriptions s
+        cursor.execute("""SELECT pv.quotas_json,p.slug AS plan_slug FROM subscriptions s
             JOIN plan_versions pv ON pv.id=s.plan_version_id JOIN plans p ON p.id=pv.plan_id
             WHERE s.user_id=%s AND s.status IN ('active','grace_period') AND s.starts_at<=NOW()
               AND s.ends_at>NOW() AND p.slug<>'free'
@@ -109,7 +123,7 @@ class ResourceService:
         if user['account_resource_policy'] == 'commercial' and not paid:
             cursor.execute("SELECT quotas_json FROM plan_versions WHERE id='free-v2'")
             free = self.accounts._one(cursor)
-        limits = self.resolve_limits(user['account_resource_policy'], as_json(paid['quotas_json']) if paid else None, as_json(free['quotas_json']) if free else None)
+        limits = self.resolve_limits(user['account_resource_policy'], as_json(paid['quotas_json']) if paid else None, as_json(free['quotas_json']) if free else None, paid_family=paid['plan_slug'] if paid else '')
         local_now = utcnow().astimezone(SHANGHAI)
         start = datetime.combine(local_now.date(), datetime.min.time(), tzinfo=SHANGHAI)
         period_key = f"resource-day:{local_now.date().isoformat()}"
@@ -131,7 +145,7 @@ class ResourceService:
     def _public_context(self, cursor: Any, context: dict[str, Any], include_usage: bool = False) -> dict[str, Any]:
         period = context["period"]
         limits = as_json(period['limits_json'])
-        result = {"limits": limits, "canWatchHdVideo": context.get('canWatchHdVideo', True),
+        result = {"limits": limits, "privateImport": self.private_import_access(context), "canWatchHdVideo": context.get('canWatchHdVideo', True),
                   "period": {"startsAt": timestamp(period["starts_at"]), "endsAt": timestamp(period["ends_at"])},
                   "mediaCapacity": self._media_capacity(cursor, context["user"]["id"], limits)}
         if include_usage:

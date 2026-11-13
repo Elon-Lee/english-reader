@@ -75,6 +75,11 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         self.owner=self.accounts.register("import-owner@local.test","import owner password",invite["code"])["user"]
         self.other=self.accounts.register("import-other@local.test","import other password",invite["code"])["user"]
         self.verify(str(self.owner["id"]));self.verify(str(self.other["id"]))
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                for user in (self.owner,self.other):
+                    cursor.execute("""INSERT INTO subscriptions(id,user_id,plan_version_id,status,starts_at,ends_at)
+                        VALUES(%s,%s,'commerce-advanced-30-v2','active',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days')""",(new_id(),user['id']))
 
     def verify(self,user_id:str)->None:
         raw="verify-"+new_id()
@@ -531,7 +536,13 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
 
     def test_http_text_upload_complete_and_cancel(self):
         with socket.socket() as probe:probe.bind(("127.0.0.1",0));port=probe.getsockname()[1]
-        root=Path(__file__).resolve().parents[1];environment={**os.environ,**self.environment,"READER_HOST":"127.0.0.1","READER_PORT":str(port)};process=subprocess.Popen([sys.executable,str(root/"tools/reader_server.py")],cwd=root,env=environment,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True);connection=None
+        gateway_headers={'X-Shiyue-Site':'intl','X-Shiyue-Site-Token':new_id(),'X-Shiyue-Original-Host':'127.0.0.1:'+str(port)}
+        class GatewayConnection(http.client.HTTPConnection):
+            def request(self,method,url,body=None,headers=None,**kwargs):
+                return super().request(method,url,body,{**gateway_headers,**(headers or {})},**kwargs)
+        connection_patch=patch.object(http.client,'HTTPConnection',GatewayConnection)
+        connection_patch.start();self.addCleanup(connection_patch.stop)
+        root=Path(__file__).resolve().parents[1];environment={**os.environ,**self.environment,"READER_HOST":"127.0.0.1","READER_PORT":str(port),'INTL_GATEWAY_TOKEN':gateway_headers['X-Shiyue-Site-Token'],'INTL_APP_BASE_URL':'http://127.0.0.1:'+str(port),'SHIYUE_DEPLOYMENT_MODE':'local'};process=subprocess.Popen([sys.executable,str(root/"tools/reader_server.py")],cwd=root,env=environment,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True);connection=None
         try:
             deadline=time.time()+10
             while time.time()<deadline:
@@ -561,7 +572,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
             short_id=short_task['task']['id']
             def short_upload(route,declared=None):
                 with socket.create_connection(('127.0.0.1',port),timeout=5) as client:
-                    headers={**owner_headers,'Content-Length':'100' if declared is None else '4','X-Upload-Filename':'short.mp3' if route=='upload-audio' else 'short.txt','X-Import-Start-Processing':'1','Connection':'close'}
+                    headers={**gateway_headers,**owner_headers,'Content-Length':'100' if declared is None else '4','X-Upload-Filename':'short.mp3' if route=='upload-audio' else 'short.txt','X-Import-Start-Processing':'1','Connection':'close'}
                     if declared is not None:headers['X-Upload-Size']=str(declared)
                     raw=f'POST /api/workspace/imports/{short_id}/{route} HTTP/1.1\r\nHost: localhost\r\n'+''.join(f'{key}: {value}\r\n' for key,value in headers.items())+'\r\n'
                     client.sendall(raw.encode()+b'part');client.shutdown(socket.SHUT_WR)

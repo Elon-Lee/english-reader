@@ -39,6 +39,12 @@ def is_commercial_path(path):
     return any(path == prefix or path.startswith(prefix + '/') for prefix in _COMMERCIAL_PREFIXES)
 
 
+def is_import_path(path):
+    path = unquote(urlsplit(path).path)
+    return any(path == prefix or path.startswith(prefix + '/')
+               for prefix in ('/api/workspace/imports',))
+
+
 def _origin(value, environment):
     try:
         if not value or any(character.isspace() or ord(character) < 33 for character in value):

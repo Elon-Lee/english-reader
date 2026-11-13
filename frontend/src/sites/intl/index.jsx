@@ -10,6 +10,8 @@ export { BRAND_NAME, BRAND_SLOGAN } from './brand.mjs'
 export { resolveInternationalRoute as resolveSiteRoute, safeInternationalNextPath as safeNextPath } from './routes.mjs'
 export { default as LegalPage, isLegalPath, legalPageTitle } from './pages/LegalPage'
 export { siteAdminTabs }
+export { requestPrivateImport } from './importAccess'
+export const privateImportsEnabled = true
 export const navigationItems = [{ key: 'membership', icon: <CrownOutlined />, label: '会员中心' }]
 export const commercialRoutes = { membership: MembershipWorkspace }
 

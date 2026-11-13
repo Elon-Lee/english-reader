@@ -8,3 +8,5 @@ export { default as LegalPage, isLegalPath, legalPageTitle } from '../../pages/L
 export const navigationItems = []
 export const commercialRoutes = {}
 export const siteAdminTabs = () => []
+export const privateImportsEnabled = false
+export const requestPrivateImport = async () => false

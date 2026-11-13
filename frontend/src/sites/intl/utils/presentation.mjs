@@ -21,7 +21,7 @@ export function planHighlights(product) {
   const count = (key, suffix) => Number.isFinite(Number(limits[key])) && limits[key] != null ? `${Number(limits[key])} ${suffix}` : '以完整权益为准'
   const benefit = label => displayBenefits(product).find(item => item.includes(label))?.replace(label, '').trim() || '以完整权益为准'
   return [
-    ['私人空间', count('storage_bytes', 'GB')],
+    ['私人空间', product.family === 'free' ? '不支持，需升级' : count('storage_bytes', 'GB')],
     ['视频收藏', count('video_library_capacity', '个')],
     ['音频收藏', count('audio_library_capacity', '个')],
     ['词汇语境', benefit('词汇语境分析')],

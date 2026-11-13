@@ -7,6 +7,15 @@ from saas_auth import SaaSError, SaaSConfigurationError
 
 
 class TrustedSiteTests(unittest.TestCase):
+    def test_private_import_classification_keeps_admin_official_routes_available(self):
+        from saas_sites import is_import_path
+        for path in ['/api/workspace/imports', '/api/workspace/imports/a/upload',
+                     '/api/workspace/imports/a/upload-audio-chunk', '/api/workspace/%69mports/a/retry']:
+            self.assertTrue(is_import_path(path), path)
+        for path in ['/api/workspace/books', '/api/workspace/imports-other', '/api/admin/catalog/sources',
+                     '/api/admin/content-imports', '/api/admin/content-imports/a/complete']:
+            self.assertFalse(is_import_path(path), path)
+
     def setUp(self):
         self.assertIsNotNone(importlib.util.find_spec('saas_sites'), 'Trusted site policy is missing')
         import saas_sites

@@ -249,8 +249,8 @@ class Handler(SimpleHTTPRequestHandler):
         return False
 
     def commercial_request_allowed(self, path):
-        from saas_sites import current_site, is_commercial_path
-        if current_site() != 'intl' and is_commercial_path(path):
+        from saas_sites import current_site, is_commercial_path, is_import_path
+        if current_site() != 'intl' and (is_commercial_path(path) or is_import_path(path)):
             self.reply({'error': 'not found'}, 404)
             return False
         return True
@@ -1178,6 +1178,11 @@ class Handler(SimpleHTTPRequestHandler):
         service=service or WORKSPACE_IMPORTS
         path,user_id=route.path,str(self._saas_session["id"])
         try:
+            if path not in {base+'/delete-invalid'} and not path.endswith('/cancel'):
+                try:service.assert_access(user_id)
+                except SaaSError:
+                    self.close_connection=True
+                    raise
             if path.endswith('/upload-audio-chunk'):
                 task_id=unquote(path[len(base+'/'):-len('/upload-audio-chunk')].rstrip('/'))
                 try:

@@ -13,7 +13,7 @@ import {
 import { csrfHeaders, deleteJson, fetchWithCsrf, getJson, postJson } from './api/client'
 import ImportModal from './components/ImportModal'
 import { useAuthCaptcha } from './components/AuthCaptcha'
-import { BrandLogo, BRAND_NAME, BRAND_SLOGAN, PublicSite, SiteFrame, resolveSiteRoute, safeNextPath, LegalPage, isLegalPath, legalPageTitle, navigationItems, commercialRoutes, siteAdminTabs } from '@site'
+import { BrandLogo, BRAND_NAME, BRAND_SLOGAN, PublicSite, SiteFrame, resolveSiteRoute, safeNextPath, LegalPage, isLegalPath, legalPageTitle, navigationItems, commercialRoutes, siteAdminTabs, privateImportsEnabled, requestPrivateImport } from '@site'
 import { DEFAULT_PREFERENCES } from './config/preferences'
 import CatalogPage from './pages/CatalogPage'
 import AdminPage from './pages/AdminPage'
@@ -81,6 +81,19 @@ function App() {
   const [health, setHealth] = useState({ saasEnabled: true })
   const [mobileOpen, setMobileOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [importChecking, setImportChecking] = useState(false)
+  const importCheckPending = useRef(false)
+  const openImport = async () => {
+    if (!privateImportsEnabled || importCheckPending.current) return
+    importCheckPending.current = true
+    setImportChecking(true)
+    try {
+      if (await requestPrivateImport(messageApi)) setImportOpen(true)
+    } finally {
+      importCheckPending.current = false
+      setImportChecking(false)
+    }
+  }
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState('全部')
   const [messageApi, contextHolder] = message.useMessage()
@@ -120,7 +133,7 @@ function App() {
       targetScreen === 'rewards' ? getJson('/api/rewards/status', null) : Promise.resolve(rewardStatus),
       targetScreen === 'rewards' ? getJson('/api/rewards/catalog', { rewards: [] }) : Promise.resolve({ rewards: rewardsCatalog }),
       targetScreen === 'rewards' ? getJson('/api/rewards/ledger', { items: [] }) : Promise.resolve({ items: rewardsLedger }),
-      targetScreen === 'library' ? getJson('/api/workspace/imports', { tasks: [] }) : Promise.resolve({ tasks: importTasks }),
+      privateImportsEnabled && targetScreen === 'library' ? getJson('/api/workspace/imports', { tasks: [] }) : Promise.resolve({ tasks: [] }),
       ['settings', 'reader'].includes(targetScreen) && !initialPreferences ? getJson('/api/preferences', preferences) : Promise.resolve(initialPreferences || preferences),
       targetScreen === 'settings' ? getJson('/api/account/deletion-status', { status: 'none' }) : Promise.resolve(deletionStatus),
     ])
@@ -180,6 +193,7 @@ function App() {
   }
   const retryImport = async task => {
     try {
+      if (!(await requestPrivateImport(messageApi))) return
       await postJson(`/api/workspace/imports/${encodeURIComponent(task.id)}/retry`, {})
       await reloadWorkspace({ silent: true })
       messageApi.success('已重新开始导入')
@@ -248,9 +262,9 @@ function App() {
       </Sider>
       <Drawer placement="left" open={mobileOpen} onClose={() => setMobileOpen(false)} closable={false} width={280} styles={{ body: { padding: 0, background: '#17392b' } }}><Brand /><SidebarMenu nav={nav} settings={settings} screen={screen} selectScreen={selectScreen} /></Drawer>
       <Layout><Header className="modern-header"><Button className="mobile-menu" type="text" icon={<MenuOutlined />} onClick={() => setMobileOpen(true)} /><div className="header-context"><Text className="eyebrow">WORKSPACE / {nav.find(n => n.key === screen)?.label || '设置'}</Text><Text className="header-status">原声听读 · 逐句积累</Text></div></Header>
-        <Content className="modern-content"><PageErrorBoundary key={screen}>{pageError ? <Alert showIcon type="error" message="页面暂时无法加载" description={pageError} action={<Button onClick={() => reloadWorkspace({ targetScreen: screen }).catch(() => {})}>重试</Button>} /> : <Page loading={pageLoading} screen={screen} books={filteredBooks} allBooks={books} catalogBooks={catalogBooks} libraryBooks={libraryBooks} importTasks={importTasks} learningDays={learningDays} learning={learning} rewardStatus={rewardStatus} vocabulary={vocabulary} rewardsCatalog={rewardsCatalog} rewardsLedger={rewardsLedger} adminData={adminData} currentUser={currentUser} devices={devices} preferences={preferences} deletionStatus={deletionStatus} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} selectScreen={selectScreen} openReader={openReader} openImport={() => setImportOpen(true)} messageApi={messageApi} health={health} onRefresh={() => reloadWorkspace({ silent: true, targetScreen: screen })} onCatalogAction={catalogAction} onCancelImport={cancelImport} onRetryImport={retryImport} onUpdateUserStatus={updateUserStatus} onVerifyUser={verifyAdminUser} onDeleteUnverifiedUser={deleteUnverifiedAdminUser} onCreateInvitation={createInvitation} onDeleteUnusedInvitations={deleteUnusedInvitations} onRevokeDevice={revokeDevice} onRevokeOwnDevice={revokeOwnDevice} onExportAdminSummary={exportAdminSummary} onCheckIn={checkIn} onRedeemReward={redeemReward} onSavePreferences={savePreferences} onPreferencesChange={mergePreferences} onLogout={logout} onRequestDeletion={requestDeletion} onCancelDeletion={cancelDeletion} />}</PageErrorBoundary></Content>
+        <Content className="modern-content"><PageErrorBoundary key={screen}>{pageError ? <Alert showIcon type="error" message="页面暂时无法加载" description={pageError} action={<Button onClick={() => reloadWorkspace({ targetScreen: screen }).catch(() => {})}>重试</Button>} /> : <Page loading={pageLoading} screen={screen} books={filteredBooks} allBooks={books} catalogBooks={catalogBooks} libraryBooks={libraryBooks} importTasks={importTasks} learningDays={learningDays} learning={learning} rewardStatus={rewardStatus} vocabulary={vocabulary} rewardsCatalog={rewardsCatalog} rewardsLedger={rewardsLedger} adminData={adminData} currentUser={currentUser} devices={devices} preferences={preferences} deletionStatus={deletionStatus} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} selectScreen={selectScreen} openReader={openReader} openImport={openImport} importChecking={importChecking} messageApi={messageApi} health={health} onRefresh={() => reloadWorkspace({ silent: true, targetScreen: screen })} onCatalogAction={catalogAction} onCancelImport={cancelImport} onRetryImport={retryImport} onUpdateUserStatus={updateUserStatus} onVerifyUser={verifyAdminUser} onDeleteUnverifiedUser={deleteUnverifiedAdminUser} onCreateInvitation={createInvitation} onDeleteUnusedInvitations={deleteUnusedInvitations} onRevokeDevice={revokeDevice} onRevokeOwnDevice={revokeOwnDevice} onExportAdminSummary={exportAdminSummary} onCheckIn={checkIn} onRedeemReward={redeemReward} onSavePreferences={savePreferences} onPreferencesChange={mergePreferences} onLogout={logout} onRequestDeletion={requestDeletion} onCancelDeletion={cancelDeletion} />}</PageErrorBoundary></Content>
       </Layout>
-    </Layout><ImportModal open={importOpen} onClose={() => setImportOpen(false)} onResume={() => setImportOpen(true)} onCreated={() => reloadWorkspace({ silent: true })} messageApi={messageApi} /></AntApp>
+    </Layout>{privateImportsEnabled && <ImportModal open={importOpen} onClose={() => setImportOpen(false)} onResume={openImport} onCreated={() => reloadWorkspace({ silent: true })} messageApi={messageApi} />}</AntApp>
   </ConfigProvider>
 }
 

@@ -5,12 +5,15 @@ from __future__ import annotations
 import http.cookiejar
 import json
 import os
+import secrets
 import signal
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -31,7 +34,8 @@ def main()->int:
         raise RuntimeError("HTTP smoke 必须使用名称以 _test 结尾的隔离数据库。")
     temp_media=tempfile.TemporaryDirectory(prefix="shiyue-saas-http-smoke-")
     environment={**os.environ,"DATABASE_URL":test_url,"SHIYUE_SAAS_ENABLED":"1","READER_HOST":"127.0.0.1","READER_PORT":str(PORT),"MEDIA_ROOT":temp_media.name,"BOOTSTRAP_ADMIN_EMAIL":"","BOOTSTRAP_ADMIN_PASSWORD":"","SMTP_HOST":"","REDIS_URL":"","SESSION_SECRET":"isolated-http-smoke-session-secret-over-32-characters"}
-    from saas_auth import SaaSService
+    environment.update({"CN_GATEWAY_TOKEN":secrets.token_urlsafe(32),"INTL_GATEWAY_TOKEN":secrets.token_urlsafe(32),"CN_APP_BASE_URL":BASE,"INTL_APP_BASE_URL":BASE,"SHIYUE_DEPLOYMENT_MODE":"local"})
+    from saas_auth import SaaSService, new_id
     service=SaaSService(environment=environment)
     service.migrate()
     owner_email="http-"+uuid.uuid4().hex+"@local.test"
@@ -43,8 +47,9 @@ def main()->int:
     process=subprocess.Popen([sys.executable,str(ROOT/"tools/reader_server.py")],cwd=ROOT,env=environment,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)
     jar=http.cookiejar.CookieJar();opener=build_opener(HTTPCookieProcessor(jar));checks=[];device_id="saas-http-smoke-device"
     def csrf()->str:return next((cookie.value for cookie in jar if cookie.name=="shiyue_csrf"),"")
+    site="cn"
     def request(path:str,method:str="GET",payload=None,headers=None,expected=(200,),skip_csrf=False):
-        body=None;actual_headers={"X-Device-Id":device_id,**(headers or {})}
+        body=None;actual_headers={"X-Device-Id":device_id,"X-Shiyue-Site":site,"X-Shiyue-Site-Token":environment[site.upper()+"_GATEWAY_TOKEN"],"X-Shiyue-Original-Host":urlsplit(BASE).netloc,**(headers or {})}
         if payload is not None:
             if isinstance(payload,bytes):body=payload
             else:body=json.dumps(payload).encode();actual_headers.setdefault("Content-Type","application/json")
@@ -75,7 +80,15 @@ def main()->int:
         status,_,_=request("/api/workspace/books",expected=(401,));check("unauthenticated isolation",status==401)
         _,_,login=request("/api/auth/login","POST",{"email":owner_email,"password":"ai owner password"});check("login",login.get("user",{}).get("email")==owner_email,login);check("csrf cookie",bool(csrf()))
         status,_,denied=request("/api/preferences","POST",{"density":"compact"},expected=(403,),skip_csrf=True);check("CSRF required",status==403 and denied.get("code")=="csrf_failed",denied)
-        _,_,usage=request("/api/resources");check("uniform resources",usage.get("limits",{}).get("storage_bytes",0)>0 and "plan" not in usage and "subscription" not in usage,usage)
+        _,_,usage=request("/api/resources");check("free private storage disabled",usage.get("limits",{}).get("storage_bytes")==0 and usage.get("privateImport",{}).get("allowed") is False,usage)
+        status,_,_=request("/api/workspace/imports",expected=(404,));check("domestic private imports disabled",status==404)
+        site="intl"
+        _,_,denied_import=request("/api/workspace/imports","POST",{"kind":"text"},expected=(403,));check("free imports require upgrade",denied_import.get("code")=="private_import_upgrade_required",denied_import)
+        with service.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""INSERT INTO subscriptions(id,user_id,plan_version_id,status,starts_at,ends_at)
+                    VALUES(%s,%s,'commerce-advanced-30-v2','active',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days')""",(new_id(),owner["id"]))
+        _,_,usage=request("/api/resources");check("advanced imports enabled with 1GB",usage.get("limits",{}).get("storage_bytes")==1024**3 and usage.get("privateImport",{}).get("allowed") is True,usage)
         _,_,preferences=request("/api/preferences");check("preferences read",isinstance(preferences,dict),preferences)
         _,_,saved_preferences=request("/api/preferences","POST",{"density":"compact","readerLayout":"stack","eyeComfort":True,"focusMode":False,"sentenceAutoPause":True,"shortcutPrevious":"a","shortcutRepeat":"s","shortcutNext":"d","shortcutPlay":"space","highlightLeadMs":80,"playbackRate":1.25});check("preferences write",saved_preferences.get("preferences",{}).get("playbackRate")==1.25 and "highlightLeadMs" not in saved_preferences.get("preferences",{}),saved_preferences)
         _,_,preferences_after=request("/api/preferences");check("preferences persisted",preferences_after.get("density")=="compact" and preferences_after.get("playbackRate")==1.25,preferences_after)
@@ -91,7 +104,26 @@ def main()->int:
         _,_,saved=request("/api/workspace/vocabulary","POST",{"bookId":book_id,"sentenceId":sentence["id"],"wordIndex":0,"payload":vocab_payload},expected=(201,));check("vocabulary",saved.get("payload",{}).get("meaning")=="软件即服务")
         _,_,annotation=request("/api/workspace/annotations","POST",{"bookId":book_id,"sentenceId":sentence["id"],"wordIndex":0,"payload":{"note":"smoke note"}});check("annotation",annotation.get("payload",{}).get("note")=="smoke note")
         _,_,activity=request("/api/workspace/activity","POST",{"bookId":book_id,"readingSeconds":600,"sentences":5,"lookups":1,"reviews":1,"sessions":1,"lastSentenceId":sentence["id"],"idempotencyKey":"smoke-activity-"+uuid.uuid4().hex});check("activity",activity.get("reviews")==1 and activity.get("lookups")==1,activity)
-        status,_,ai_failure=request("/api/word-context","POST",{"bookId":book_id,"sentenceId":sentence["id"],"wordIndex":0},expected=(503,));check("AI unavailable is controlled",ai_failure.get("code")=="ai_provider_unavailable",ai_failure)
+        # A failing local provider makes quota-release verification deterministic
+        # even when the default production provider accepts token-free requests.
+        class UnavailableProvider(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(503);self.end_headers()
+            def log_message(self,*args):pass
+        provider=ThreadingHTTPServer(('127.0.0.1',0),UnavailableProvider)
+        provider_thread=threading.Thread(target=provider.serve_forever,daemon=True);provider_thread.start()
+        with service.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT value_json FROM platform_settings WHERE key='ai.dioco'");previous=cursor.fetchone()
+                cursor.execute("INSERT INTO platform_settings(key,value_json) VALUES('ai.dioco',%s::jsonb) ON CONFLICT(key) DO UPDATE SET value_json=EXCLUDED.value_json",(json.dumps({'upstream':f'http://127.0.0.1:{provider.server_port}'}),))
+        try:
+            _,_,ai_failure=request("/api/word-context","POST",{"bookId":book_id,"sentenceId":sentence["id"],"wordIndex":0},expected=(502,));check("AI unavailable is controlled",ai_failure.get("code")=="ai_provider_failed",ai_failure)
+        finally:
+            provider.shutdown();provider.server_close();provider_thread.join()
+            with service.transaction() as connection:
+                with connection.cursor() as cursor:
+                    if previous:cursor.execute("UPDATE platform_settings SET value_json=%s::jsonb WHERE key='ai.dioco'",(json.dumps(previous[0]),))
+                    else:cursor.execute("DELETE FROM platform_settings WHERE key='ai.dioco'")
         _,_,usage_after=request("/api/resources");context_usage=next(item for item in usage_after["usage"] if item["feature"]=="ai_context_generations");check("AI reservation released",context_usage["reserved"]==0 and context_usage["used"]==context_used_before,context_usage)
         _,_,exported=request("/api/account/export");check("account export",book_id in {item["id"] for item in exported.get("privateBooks",[])})
         _,_,deleted=request(f"/api/workspace/books/{quote(book_id)}","DELETE",{"confirmTitle":book["title"]});check("private book delete",deleted.get("status")=="deleted",deleted)

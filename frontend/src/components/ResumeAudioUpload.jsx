@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react'
 import { Button, Progress, Space, Typography } from 'antd'
 import { csrfHeaders, getJson, requestJson } from '../api/client'
 import { uploadCompanionAudio } from '../utils/companionAudioUpload.mjs'
+import { requestPrivateImport } from '@site'
 
 export default function ResumeAudioUpload({ task, base = '/api/workspace/imports', onComplete, messageApi }) {
   const input = useRef(null), busy = useRef(false)
@@ -12,6 +13,7 @@ export default function ResumeAudioUpload({ task, base = '/api/workspace/imports
     if (!file || busy.current) return
     busy.current = true; setUploading(true); setError('')
     try {
+      if (base === '/api/workspace/imports' && !await requestPrivateImport(messageApi)) return
       await uploadCompanionAudio({ file, base, taskId: task.id, api: { csrfHeaders, getJson, requestJson }, onProgress: bytes => setProgress(Math.round(bytes / file.size * 100)) })
       messageApi.success('完整音频已上传，后台已开始处理')
       await onComplete?.()

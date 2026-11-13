@@ -52,6 +52,13 @@ class WorkspaceImportService:
         self.yt_dlp=(yt_dlp or Path(os.environ.get("SHIYUE_YTDLP",str(ROOT/".local/bin/yt-dlp")))).expanduser()
         self.node=(node or Path(os.environ.get("SHIYUE_NODE",shutil.which("node") or "/usr/local/bin/node"))).expanduser()
 
+    def assert_access(self,user_id:str)->None:
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                self._user(cursor,user_id)
+                if not self.official:
+                    self.resources.assert_private_import(self.resources._context(cursor,user_id))
+
     def _user(self,cursor:Any,user_id:str)->dict[str,Any]:
         cursor.execute("SELECT id,status FROM users WHERE id=%s FOR UPDATE",(user_id,));user=self.accounts._one(cursor)
         if not user or user["status"]!="active":raise SaaSError("account_unavailable","账号不可用。",403)
@@ -89,6 +96,7 @@ class WorkspaceImportService:
                         if bool(as_json(existing["metadata_json"]).get("officialImport"))!=self.official:raise SaaSError("import_source_conflict","操作标识已用于其他导入。",409)
                         return {"task":self._public(existing),"idempotent":True}
                     context=self.resources._context(cursor,user_id)
+                    if not self.official:self.resources.assert_private_import(context)
                     task_id=new_id();status="queued" if kind=="youtube" else "uploading";step="等待上传源文件" if status=="uploading" else "等待 PostgreSQL 原生处理器"
                     cursor.execute("""INSERT INTO workspace_import_tasks(id,user_id,workspace_id,kind,status,title,original_filename,source_url,quota_reservation_id,step,metadata_json,idempotency_key)
                     VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)""",(task_id,user_id,user_id,kind,status,str(title or "").strip()[:300],filename,str(source_url or "")[:2000],reservation["id"] if reservation else None,step,json.dumps(metadata or {}),key))
@@ -105,6 +113,7 @@ class WorkspaceImportService:
         except ValueError:return False
 
     def upload(self,user_id:str,task_id:str,filename:str,data:bytes,content_type:str="application/octet-stream")->dict[str,Any]:
+        self.assert_access(user_id)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",(f"upload:{user_id}:{task_id}",))
@@ -157,6 +166,7 @@ class WorkspaceImportService:
         return CompanionAudioUpload(self)
 
     def upload_audio(self,user_id:str,task_id:str,filename:str,data:bytes)->dict[str,Any]:
+        self.assert_access(user_id)
         if not data or len(data)>UPLOAD_LIMITS['mp3']:
             raise SaaSError('invalid_audio_upload','MP3 文件为空或超过大小限制。',413)
         with self.accounts.transaction() as lock:
@@ -559,6 +569,7 @@ class WorkspaceImportService:
 
     def submit_complete(self,user_id:str,task_id:str,background:bool=False)->dict[str,Any]:
         """Start processing before an upload response can be lost; clients poll."""
+        self.assert_access(user_id)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 task=self._task(cursor,user_id,task_id)
@@ -577,6 +588,7 @@ class WorkspaceImportService:
 
     def complete(self,user_id:str,task_id:str)->dict[str,Any]:
         """Serialize processing and reclaim tasks abandoned for over 80 minutes."""
+        self.assert_access(user_id)
         connection=self.accounts._connect()
         key=f"import-complete:{user_id}:{task_id}"
         try:
@@ -728,7 +740,9 @@ class WorkspaceImportService:
                     if not self.accounts._one(cursor):raise SaaSError("account_unavailable","账号不可用。",403)
                     context=self.resources._context(cursor,user_id,lock_user=False)
                     media_kind="video" if source_type in {"video","youtube"} else "audio" if source_type=="audio" else ""
-                    if not self.official:self.resources.assert_media_capacity(cursor,user_id,context,media_kind)
+                    if not self.official:
+                        self.resources.assert_private_import(context)
+                        self.resources.assert_media_capacity(cursor,user_id,context,media_kind)
                     cursor.execute("""INSERT INTO content_books(id,owner_id,title,english_title,series,level,topics,source_type,source_path,status,visibility,cover_url,page_base_url,audio_url,pdf_url,video_url,duration,alignment,data_json,quality_json,created_at,updated_at)
                     VALUES(%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,'ready','private',%s,'',%s,'',%s,%s,%s,%s::jsonb,'{}'::jsonb,NOW(),NOW())""",(book_id,user_id,title,title,str(data.get("series") or (data.get("youtube") or {}).get("channel") or "私人导入"),str(data.get("level") or ""),json.dumps(data.get("topics") or [],ensure_ascii=False),source_type,f"workspace/{user_id}/{task_id}",str(data.get("cover","")or""),str(data.get("audio","")or""),str(data.get("video","")or""),float(data.get("duration",0)or 0),str(data.get("alignment","")or""),json.dumps(data,ensure_ascii=False)))
                     cursor.execute("UPDATE media_assets SET content_book_id=%s,kind=%s WHERE id=%s",(book_id,source_type,work["source_asset_id"]))
@@ -768,6 +782,7 @@ class WorkspaceImportService:
 
     def retry(self,user_id:str,task_id:str)->dict[str,Any]:
         """Reset a failed task so its existing source can be processed again."""
+        self.assert_access(user_id)
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 task=self._task(cursor,user_id,task_id)

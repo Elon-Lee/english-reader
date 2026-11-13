@@ -6,13 +6,14 @@ import BookCover from '../components/BookCover'
 import ResumeAudioUpload from '../components/ResumeAudioUpload'
 import { deriveReadingState, formatLastUpdated, READING_STATES } from '../utils/libraryState.mjs'
 import { bookDescription, resourceNames } from '../utils/presentation.mjs'
+import { privateImportsEnabled, requestPrivateImport } from '@site'
 
 const { Paragraph, Text, Title } = Typography
 const PAGE_SIZE = 18
 
-export default function LibraryPage({ libraryBooks, importTasks, openReader, openImport, onCancelImport, onRetryImport, onRefresh, messageApi, currentUser, selectScreen }) {
+export default function LibraryPage({ libraryBooks, importTasks, openReader, openImport, importChecking, onCancelImport, onRetryImport, onRefresh, messageApi, currentUser, selectScreen }) {
   const allBooks = libraryBooks || []
-  const activeTasks = (importTasks || []).filter(task => !['complete', 'cancelled'].includes(task.status))
+  const activeTasks = privateImportsEnabled ? (importTasks || []).filter(task => !['complete', 'cancelled'].includes(task.status)) : []
 
   const [query, setQuery] = useState(() => new URLSearchParams(location.search).get('q') || '')
   const [draftQuery, setDraftQuery] = useState(query)
@@ -32,6 +33,7 @@ export default function LibraryPage({ libraryBooks, importTasks, openReader, ope
   const resumeImport = async task => {
     setResumingTask(task.id)
     try {
+      if (!(await requestPrivateImport(messageApi))) return
       await postJson(`/api/workspace/imports/${encodeURIComponent(task.id)}/complete`, {})
       messageApi.success('已继续处理，进度会自动更新')
       await onRefresh?.()
@@ -175,7 +177,7 @@ export default function LibraryPage({ libraryBooks, importTasks, openReader, ope
       </div>
       <Space>
         <Button icon={<SearchOutlined />} onClick={() => selectScreen('catalog')}>去书城</Button>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openImport}>导入读物</Button>
+        {privateImportsEnabled && <Button type="primary" icon={<PlusOutlined />} loading={importChecking} onClick={openImport}>导入读物</Button>}
       </Space>
     </div>
 
@@ -218,7 +220,7 @@ export default function LibraryPage({ libraryBooks, importTasks, openReader, ope
           <Button type={view === 'grid' ? 'primary' : 'default'} icon={<AppstoreOutlined />} onClick={() => setView('grid')} />
           <Button type={view === 'list' ? 'primary' : 'default'} icon={<BarsOutlined />} onClick={() => setView('list')} />
         </Button.Group>
-        <Button size="small" onClick={() => setTaskHistoryOpen(true)}>导入记录</Button>
+        {privateImportsEnabled && <Button size="small" onClick={() => setTaskHistoryOpen(true)}>导入记录</Button>}
       </Space>
     </div>
 
@@ -234,7 +236,7 @@ export default function LibraryPage({ libraryBooks, importTasks, openReader, ope
             allBooks.length === 0 ? (
               <div>
                 <Paragraph>书架还是空的</Paragraph>
-                <Paragraph type="secondary">从书城挑一篇今天读得完的内容，<br />或导入自己的 PDF、YouTube 视频开始学习。</Paragraph>
+                <Paragraph type="secondary">{privateImportsEnabled ? <>从书城挑一篇今天读得完的内容，<br />或导入自己的 PDF、YouTube 视频开始学习。</> : '从书城挑一篇今天读得完的内容，加入书架开始学习。'}</Paragraph>
               </div>
             ) : query.trim() ? (
               <Paragraph>没有匹配"{query}"的读物</Paragraph>
@@ -247,7 +249,7 @@ export default function LibraryPage({ libraryBooks, importTasks, openReader, ope
         >
           {allBooks.length === 0 && <Space>
             <Button type="primary" onClick={() => selectScreen('catalog')}>去书城看看</Button>
-            <Button onClick={openImport}>导入读物</Button>
+            {privateImportsEnabled && <Button loading={importChecking} onClick={openImport}>导入读物</Button>}
           </Space>}
           {allBooks.length > 0 && query.trim() && <Button onClick={() => { setQuery(''); setDraftQuery('') }}>清除搜索</Button>}
           {allBooks.length > 0 && !query.trim() && state !== 'all' && <Button onClick={() => setState('all')}>查看全部书架</Button>}
@@ -275,7 +277,7 @@ export default function LibraryPage({ libraryBooks, importTasks, openReader, ope
       </>
     )}
 
-    <Modal width={820} title="导入记录" open={taskHistoryOpen} onCancel={() => setTaskHistoryOpen(false)} footer={null}>
+    <Modal width={820} title="导入记录" open={privateImportsEnabled && taskHistoryOpen} onCancel={() => setTaskHistoryOpen(false)} footer={null}>
       <div className="import-history-toolbar">
         <Text type="secondary">共 {taskHistory.total} 条任务</Text>
         <Button danger loading={deletingInvalid} disabled={taskLoading || Boolean(taskError) || !taskHistory.invalidCount} onClick={deleteInvalid}>

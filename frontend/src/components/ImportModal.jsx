@@ -6,6 +6,7 @@ import { bookLevels } from '../utils/levels.mjs'
 import { MAX_TOPICS, bookTopics } from '../utils/topics.mjs'
 import { selectImportFiles } from '../utils/importFiles.mjs'
 import { uploadCompanionAudio } from '../utils/companionAudioUpload.mjs'
+import { requestPrivateImport } from '@site'
 const { Text } = Typography
 
 export default function ImportModal({ open, onClose, onResume, onCreated, messageApi, official = false }) {
@@ -39,6 +40,7 @@ export default function ImportModal({ open, onClose, onResume, onCreated, messag
     setSubmitting(true)
     let pendingTask = null
     try {
+      if (!official && !await requestPrivateImport(messageApi)) return
       const input = values.input?.trim()
       const kind = source === 'youtube' ? 'youtube' : /\.(pdf|epub)$/i.test(file?.name) ? 'document' : /\.mp3$/i.test(file?.name) ? 'mp3' : /\.(mp4|mov|m4v|mkv|webm)$/i.test(file?.name) ? 'video' : 'text'
       if (source === 'file' && !file) throw new Error('请选择要上传的文件')

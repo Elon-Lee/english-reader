@@ -8,6 +8,26 @@ from saas_resources import ResourceService, can_watch_hd_video
 
 
 class PrivateResourceTests(unittest.TestCase):
+    def test_private_import_storage_is_paid_only_and_cannot_use_legacy_floor(self):
+        resources = ResourceService(SaaSService(environment={}))
+        for policy in ('private', 'commercial'):
+            self.assertEqual(resources.resolve_limits(policy, free_quotas={'storage_bytes': 1024**3})['storage_bytes'], 0)
+            for family, expected in (('advanced', 1), ('pro', 5)):
+                limits = resources.resolve_limits(policy, {'storage_bytes': 20 * 1024**3}, paid_family=family)
+                self.assertEqual(limits['storage_bytes'], expected * 1024**3)
+        limits = resources.resolve_limits('commercial', {'storage_bytes': 128}, paid_family='advanced')
+        self.assertEqual(limits['storage_bytes'], 128)
+
+    def test_private_import_requires_active_paid_entitlement(self):
+        resources = ResourceService(SaaSService(environment={}))
+        for context in ({'paid': False, 'limits': {'storage_bytes': 20 * 1024**3}},
+                        {'paid': True, 'limits': {'storage_bytes': 0}}):
+            with self.assertRaises(SaaSError) as denied:
+                resources.assert_private_import(context)
+            self.assertEqual(denied.exception.code, 'private_import_upgrade_required')
+            self.assertEqual(denied.exception.status, 403)
+        resources.assert_private_import({'paid': True, 'limits': {'storage_bytes': 1024**3}})
+
     def test_registration_requires_invitation_before_database_access(self):
         service = SaaSService(database_url="")
         service.transaction = Mock(side_effect=AssertionError("must not open database"))
@@ -55,7 +75,7 @@ class PrivateResourceTests(unittest.TestCase):
             sql = " ".join(str(call.args[0]) for call in cursor.execute.call_args_list)
             self.assertIn("FROM subscriptions", sql)
             self.assertNotIn("UPDATE users SET plan_version", sql)
-            self.assertEqual(context["period"]["limits_json"]["storage_bytes"], 20 * 1024**3)
+            self.assertEqual(context['limits']['storage_bytes'], 0)
             self.assertEqual(context["period"]["limits_json"]["ai_context_generations"], 50)
 
 

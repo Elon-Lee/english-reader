@@ -17,6 +17,11 @@ from urllib.parse import urlsplit
 from saas_auth import SaaSService
 from saas_resources import ResourceService
 from saas_membership import MembershipService
+from saas_auth import SaaSError, new_id
+from saas_imports import WorkspaceImportService
+from saas_media import MediaService
+from saas_workspace import WorkspaceService
+from saas_commerce import CommerceService
 
 
 TEST_URL = os.environ.get('SHIYUE_SAAS_TEST_DATABASE_URL', '')
@@ -42,15 +47,21 @@ class DualEntryHTTPIntegrationTests(unittest.TestCase):
         cls.accounts.migrate()
         cls.resources = ResourceService(cls.accounts)
         cls.memberships = MembershipService(cls.accounts)
+        cls.temp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.temp.cleanup)
+        cls.media = MediaService(cls.accounts, cls.resources, Path(cls.temp.name) / 'media')
+        cls.imports = WorkspaceImportService(cls.accounts, cls.resources, cls.media)
+        cls.official_imports = WorkspaceImportService(cls.accounts, cls.resources, cls.media, official=True)
+        cls.workspace = WorkspaceService(cls.accounts)
         import reader_server
         cls.backend_module = reader_server
         for key, value in {'SAAS': cls.accounts, 'RESOURCES': cls.resources, 'MEMBERSHIPS': cls.memberships,
+                           'WORKSPACE_IMPORTS': cls.imports, 'OFFICIAL_IMPORTS': cls.official_imports,
+                           'WORKSPACE': cls.workspace, 'MEDIA': cls.media, 'COMMERCE': CommerceService(cls.accounts),
                            'CAPTCHA': Mock(config=lambda: {'captchaEnabled': False}),
                            'DEPLOYMENT_MODE': 'remote'}.items():
             cls.stack.enter_context(patch.object(reader_server, key, value))
         cls.backend = cls.start_server(reader_server.Handler)
-        cls.temp = tempfile.TemporaryDirectory()
-        cls.addClassCleanup(cls.temp.cleanup)
         cls.gateways = {}
         for site in ('cn', 'intl'):
             spec = importlib.util.spec_from_file_location('test_gateway_' + site, Path(__file__).with_name('saas_frontend_server.py'))
@@ -82,6 +93,15 @@ class DualEntryHTTPIntegrationTests(unittest.TestCase):
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 cursor.execute('TRUNCATE users CASCADE')
+                migrations = Path(__file__).with_name('saas_migrations')
+                for name in ('0020_restore_public_commerce_seed.sql', '0026_cloudcat_monthly_products.sql', '0028_publish_default_plan_cards.sql'):
+                    cursor.execute((migrations / name).read_text())
+                cursor.execute("""INSERT INTO commerce_product_versions(id,product_id,version_number,plan_version_id,
+                    display_name,short_name,tagline,description,duration_days,amount_cents,benefits_json,status)
+                    VALUES('free-plan-v1','product-free',1,'free-v2','免费版','免费','原免费方案','原1GB空间',30,0,
+                    '["私人学习空间最多 1 GB","音频、视频及在线视频导入，不按导入次数收费"]','published')""")
+                cursor.execute("UPDATE commerce_product_versions SET purchase_url='https://checkout.example.test/'||id WHERE amount_cents>0 AND status='published'")
+                cursor.execute((migrations / '0046_private_import_entitlements.sql').read_text())
         self.password = 'dual-entry-test-password-only'
         self.user = self.accounts.bootstrap_admin('entry-admin@example.test', self.password)
         self.cookies = {'cn': {}, 'intl': {}}
@@ -115,6 +135,96 @@ class DualEntryHTTPIntegrationTests(unittest.TestCase):
         })
         self.assertEqual(status, 200, body)
         return body['user']['id']
+
+    def grant(self, family):
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('DELETE FROM subscriptions WHERE user_id=%s', (self.user['id'],))
+                cursor.execute("""INSERT INTO subscriptions(id,user_id,plan_version_id,status,starts_at,ends_at)
+                    VALUES(%s,%s,%s,'active',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days')""",
+                    (new_id(), self.user['id'], 'commerce-' + family + '-30-v2'))
+
+    def test_domestic_private_import_denied_and_official_admin_import_retained(self):
+        self.login('cn')
+        for path in ['/api/workspace/imports', '/api/workspace/imports/task/upload',
+                     '/api/workspace/imports/task/upload-audio-chunk', '/api/workspace/imports/task/complete']:
+            self.assertEqual(self.request('cn', path, 'POST', {}, headers={
+                'X-Shiyue-Site': 'intl', 'X-Shiyue-Site-Token': self.environment['INTL_GATEWAY_TOKEN'],
+            })[0], 404, path)
+        self.assertEqual(self.request('cn', '/api/workspace/imports')[0], 404)
+        status, body = self.request('cn', '/api/admin/content-imports', 'POST', {
+            'kind': 'text', 'filename': 'official.txt', 'idempotencyKey': new_id(),
+        })
+        self.assertEqual(status, 201, body)
+        task = body['task']['id']
+        self.official_imports.upload(self.user['id'], task, 'official.txt', b'An official reading passage.')
+        self.assertEqual(self.official_imports.complete(self.user['id'], task)['task']['status'], 'complete')
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('DELETE FROM user_roles WHERE user_id=%s', (self.user['id'],))
+        self.assertEqual(self.request('cn', '/api/admin/content-imports', 'POST', {})[0], 403)
+
+    def test_international_free_import_rejected_before_reading_upload(self):
+        self.login('intl')
+        resources = self.request('intl', '/api/resources')[1]
+        self.assertEqual(resources['limits']['storage_bytes'], 0)
+        self.assertFalse(resources['privateImport']['allowed'])
+        for path in ['/api/workspace/imports', '/api/workspace/imports/task/upload',
+                     '/api/workspace/imports/task/upload-audio', '/api/workspace/imports/task/upload-audio-chunk',
+                     '/api/workspace/imports/task/complete-audio-upload', '/api/workspace/imports/task/complete',
+                     '/api/workspace/imports/task/retry']:
+            status, body = self.request('intl', path, 'POST', {})
+            self.assertEqual(status, 403, (path, body))
+            self.assertEqual(body['code'], 'private_import_upgrade_required')
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT COUNT(*) FROM workspace_import_tasks')
+                self.assertEqual(cursor.fetchone()[0], 0)
+
+    def test_paid_caps_expiry_cleanup_and_existing_reading(self):
+        self.login('intl')
+        for family, gb in [('advanced', 1), ('pro', 5)]:
+            self.grant(family)
+            resources = self.request('intl', '/api/resources')[1]
+            self.assertTrue(resources['privateImport']['allowed'])
+            self.assertEqual(resources['limits']['storage_bytes'], gb * 1024**3)
+            self.assertEqual(self.media.ensure_private_capacity(self.user['id'], gb * 1024**3)['limit'], gb * 1024**3)
+            with self.assertRaises(SaaSError):
+                self.media.ensure_private_capacity(self.user['id'], gb * 1024**3 + 1)
+        task = self.imports.create(self.user['id'], 'text', 'Existing book', 'book.txt', new_id())['task']['id']
+        self.imports.upload(self.user['id'], task, 'book.txt', b'Existing content remains readable.')
+        completed = self.imports.complete(self.user['id'], task)
+        pending = self.imports.create(self.user['id'], 'text', 'Pending', 'pending.txt', new_id())['task']['id']
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE subscriptions SET starts_at=NOW()-INTERVAL '2 days',ends_at=NOW()-INTERVAL '1 day' WHERE user_id=%s", (self.user['id'],))
+        self.assertFalse(self.resources.usage(self.user['id'])['privateImport']['allowed'])
+        self.assertEqual(self.request('intl', '/api/workspace/imports/'+pending+'/retry', 'POST', {})[0], 403)
+        self.assertEqual(self.request('intl', '/api/workspace/imports/'+pending+'/cancel', 'POST', {})[0], 200)
+        self.assertEqual(self.request('intl', '/api/workspace/books/'+completed['task']['outputBookId']+'/reader')[0], 200)
+
+    def test_new_product_versions_match_caps_and_keep_original_snapshots(self):
+        products = CommerceService(self.accounts).public_catalog()['products']
+        self.assertEqual(len(products), 3)
+        for product in products:
+            self.assertEqual(product['featureLimits']['storage_bytes'], {'free': 0, 'advanced': 1, 'pro': 5}[product['family']])
+            self.assertTrue(product['id'].endswith('-imports-v1'))
+            if product['family'] == 'free':
+                self.assertNotIn('音频、视频及在线视频导入，不按导入次数收费', ' '.join(product['benefits']))
+                self.assertIn('不支持', ' '.join(product['benefits']))
+            else:
+                self.assertEqual(product['purchaseUrl'], 'https://checkout.example.test/'+product['id'].removesuffix('-imports-v1'))
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT quotas_json->>'storage_bytes' FROM plan_versions WHERE id='commerce-pro-30-v2'")
+                self.assertEqual(int(cursor.fetchone()[0]), 20 * 1024**3)
+                cursor.execute("SELECT status FROM commerce_product_versions WHERE id='pro-30-v2'")
+                self.assertEqual(cursor.fetchone()[0], 'retired')
+        self.assertEqual(self.accounts.migrate(), [])
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(Path(__file__).with_name('saas_migrations').joinpath('0046_private_import_entitlements.sql').read_text())
+        self.assertEqual(CommerceService(self.accounts).public_catalog()['products'], products)
 
     def test_two_real_gateways_share_account_preferences_and_resource_ledger(self):
         self.assertEqual(self.login('cn'), self.login('intl'))
