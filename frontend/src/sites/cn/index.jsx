@@ -1,4 +1,5 @@
 export { default as PublicSite } from '../../pages/PublicSite'
+export { default as SiteFrame } from './SiteFrame'
 export { default as BrandLogo } from '../../components/BrandLogo'
 export { BRAND_NAME, BRAND_SLOGAN } from '../../config/brand.mjs'
 export { resolvePrivateRoute as resolveSiteRoute, safeNextPath } from '../../utils/privateRoutes.mjs'

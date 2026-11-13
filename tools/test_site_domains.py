@@ -42,11 +42,13 @@ class SiteDomainsTests(unittest.TestCase):
         (self.blog / 'posts' / 'light').mkdir(parents=True)
         (self.blog / 'posts' / 'light' / 'index.html').write_text('reading notes')
         (self.blog / 'rss.xml').write_text('<rss>notes</rss>')
+        (self.blog / 'robots.txt').write_text('User-agent: *\nAllow: /\n')
         (self.blog / 'outside').symlink_to(self.app, target_is_directory=True)
         self.backend = self.start_server(Backend)
         Backend.calls = []
         values = {
             'ROOT': self.app, 'BLOG_ROOT': self.blog,
+            'FRONTEND_SITE': 'cn',
             'APP_DOMAIN': 'learn.rynenglish.com', 'BLOG_DOMAIN': 'rynenglish.com',
             'BACKEND': urlsplit(f'http://127.0.0.1:{self.backend.server_port}'),
         }
@@ -157,6 +159,34 @@ class SiteDomainsTests(unittest.TestCase):
         normal = self.request(headers={'User-Agent': 'Mozilla/5.0'})
         crawler = self.request(headers={'User-Agent': 'SomeCrawler/1.0'})
         self.assertEqual((normal[0], normal[2]), (crawler[0], crawler[2]))
+
+    def test_domestic_robots_disallows_all_with_get_and_head(self):
+        for agent in ['Mozilla/5.0', 'SomeCrawler/1.0']:
+            for method in ['GET', 'HEAD']:
+                status, headers, body = self.request('/robots.txt?check=1', host='learn.rynenglish.com',
+                                                     method=method, headers={'User-Agent': agent})
+                self.assertEqual(status, 200)
+                self.assertEqual(headers['Content-Type'], 'text/plain; charset=utf-8')
+                self.assertEqual(headers['Cache-Control'], 'no-cache')
+                self.assertEqual(body, b'' if method == 'HEAD' else b'User-agent: *\nDisallow: /\n')
+        self.assertEqual(Backend.calls, [])
+
+    def test_domestic_noindex_covers_pages_assets_api_and_errors(self):
+        for path in ['/', '/login', '/app', '/private.js', '/api/health', '/pricing', '/missing']:
+            for method in ['GET', 'HEAD']:
+                with self.subTest(path=path, method=method):
+                    _, headers, _ = self.request(path, host='learn.rynenglish.com', method=method)
+                    self.assertEqual(headers.get('X-Robots-Tag'), 'noindex, nofollow')
+
+    def test_blog_and_international_keep_existing_crawler_policy(self):
+        status, headers, body = self.request('/robots.txt')
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b'User-agent: *\nAllow: /\n')
+        self.assertNotIn('X-Robots-Tag', headers)
+        self.assertNotIn('X-Robots-Tag', self.request('/')[1])
+        with patch.object(frontend, 'FRONTEND_SITE', 'intl'), patch.object(frontend, 'APP_DOMAIN', '10ye.cc'):
+            self.assertNotIn('X-Robots-Tag', self.request('/', host='10ye.cc')[1])
+            self.assertEqual(self.request('/robots.txt', host='10ye.cc')[0], 404)
 
 
 if __name__ == '__main__':

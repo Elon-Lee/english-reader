@@ -13,7 +13,7 @@ import {
 import { csrfHeaders, deleteJson, fetchWithCsrf, getJson, postJson } from './api/client'
 import ImportModal from './components/ImportModal'
 import { useAuthCaptcha } from './components/AuthCaptcha'
-import { BrandLogo, BRAND_NAME, BRAND_SLOGAN, PublicSite, resolveSiteRoute, safeNextPath, LegalPage, isLegalPath, legalPageTitle, navigationItems, commercialRoutes, siteAdminTabs } from '@site'
+import { BrandLogo, BRAND_NAME, BRAND_SLOGAN, PublicSite, SiteFrame, resolveSiteRoute, safeNextPath, LegalPage, isLegalPath, legalPageTitle, navigationItems, commercialRoutes, siteAdminTabs } from '@site'
 import { DEFAULT_PREFERENCES } from './config/preferences'
 import CatalogPage from './pages/CatalogPage'
 import AdminPage from './pages/AdminPage'
@@ -344,4 +344,4 @@ function Page({ screen, loading, ...props }) {
   return pages[screen] || pages.workspace
 }
 
-createRoot(document.getElementById('root')).render(<App />)
+createRoot(document.getElementById('root')).render(<SiteFrame><App /></SiteFrame>)

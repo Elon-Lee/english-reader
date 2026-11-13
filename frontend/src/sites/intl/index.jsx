@@ -13,6 +13,8 @@ export { siteAdminTabs }
 export const navigationItems = [{ key: 'membership', icon: <CrownOutlined />, label: '会员中心' }]
 export const commercialRoutes = { membership: MembershipWorkspace }
 
+export function SiteFrame({ children }) { return children }
+
 export function PublicSite({ page, ...props }) {
   return page === 'purchase' ? <PurchasePage {...props} /> : <InternationalPublicSite page={page} {...props} />
 }

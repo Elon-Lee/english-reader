@@ -54,6 +54,13 @@ class TLSFrontendServer(ThreadingHTTPServer):
 class FrontendHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    def end_headers(self):
+        # Apply to every domestic app response, including API and error pages.
+        # The public blog and international entry retain their own policies.
+        if FRONTEND_SITE == 'cn' and getattr(self, 'headers', None) is not None and self._site() == 'app':
+            self.send_header('X-Robots-Tag', 'noindex, nofollow')
+        super().end_headers()
+
     def _site(self):
         if not BLOG_ROOT and not APP_DOMAIN:
             return 'app'
@@ -122,6 +129,16 @@ class FrontendHandler(BaseHTTPRequestHandler):
                 self._blog_file()
             else:
                 self.send_error(404)
+        elif (FRONTEND_SITE == 'cn' and urlsplit(self.path).path == '/robots.txt'
+              and self.command in {'GET', 'HEAD'}):
+            data = b'User-agent: *\nDisallow: /\n'
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('Cache-Control', 'no-cache')
+            self.end_headers()
+            if self.command != 'HEAD':
+                self.wfile.write(data)
         elif FRONTEND_SITE == 'cn' and is_commercial_path(self.path):
             self.send_error(404)
         elif self.path.startswith(PROXY_PREFIXES):

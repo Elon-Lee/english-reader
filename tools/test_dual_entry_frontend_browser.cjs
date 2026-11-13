@@ -56,6 +56,8 @@ const free = { ...product, id: 'fixture-free', slug: 'free', family: 'free', nam
           data = { orderId: 'fixture-order', amountCents: 100, status: 'pending', qrCode: 'https://payment.example.test/fixture-only' }
         } else if (pathname === '/api/payments/alipay/orders/fixture-order') data = { orderId: 'fixture-order', status: paid ? 'paid' : 'pending', amountCents: 100, endsAt: '2027-01-01T00:00:00Z' }
         else if (pathname === '/api/auth/config') data = { captchaEnabled: false }
+        else if (pathname === '/api/auth/devices') data = { devices: [] }
+        else if (pathname === '/api/account/deletion-status') data = { status: 'none' }
         else return route.fulfill({ status: 404, json: { error: `Unconfigured fixture ${pathname}` } })
         return route.fulfill({ json: data })
       })
@@ -71,6 +73,23 @@ const free = { ...product, id: 'fixture-free', slug: 'free', family: 'free', nam
       await page.screenshot({ path: path.join(output, `${site}-home.png`), fullPage: true })
       if (site === 'cn') {
         assert.equal(await page.getByRole('heading', { level: 1 }).first().innerText(), '纸间微光')
+        await page.goto(`${base}/login`)
+        await page.getByLabel('密码', { exact: true }).waitFor()
+        const record = page.getByRole('link', { name: '蜀ICP备2026071122号-1', exact: true })
+        assert.equal(await record.getAttribute('href'), 'https://beian.miit.gov.cn/')
+        await record.scrollIntoViewIfNeeded()
+        assert(await record.isVisible())
+        const footerBox = await page.locator('.cn-site-footer').boundingBox()
+        assert(Math.abs(footerBox.x + footerBox.width / 2 - 720) < 1, 'domestic footer is centered')
+        await page.screenshot({ path: path.join(output, 'cn-login-record.png'), fullPage: true })
+        authenticated = true
+        await page.goto(`${base}/app?screen=settings`)
+        await page.getByRole('heading', { name: '系统设置', exact: true }).waitFor()
+        await record.scrollIntoViewIfNeeded()
+        assert(await record.isVisible())
+        assert.equal(await page.getByText('页面暂时无法加载', { exact: true }).count(), 0)
+        await page.screenshot({ path: path.join(output, 'cn-app-record.png'), fullPage: true })
+        authenticated = false
         await page.goto(`${base}/pricing`)
         await page.getByText('页面不存在', { exact: true }).waitFor()
         assert(!calls.some(call => /\/api\/(commerce|membership|payments)/.test(call)))
@@ -105,6 +124,7 @@ const free = { ...product, id: 'fixture-free', slug: 'free', family: 'free', nam
       await page.goto(`${base}/register`)
       await page.getByLabel('邀请码', { exact: true }).waitFor()
       assert(await page.getByLabel('邀请码', { exact: true }).getAttribute('aria-required') === 'true')
+      assert.equal(await page.getByRole('link', { name: '蜀ICP备2026071122号-1', exact: true }).count(), site === 'cn' ? 1 : 0)
       assert.deepEqual(errors, [], `${site} browser errors`)
       console.log(`${site}: browser route, API state and presentation checks passed (${calls.length} API calls)`)
       await context.close()

@@ -2,6 +2,14 @@
 
 更新时间：2026-11-13（Asia/Shanghai）
 
+## 国内业务备案页脚与抓取策略（本轮）
+
+- 国内扩展，沿用已发布改造分支 `feat/blog-ai-english-tools`；不复制共享业务。`@site` 新增 `SiteFrame`：国内在登录/注册/应用等页面底部居中展示 `蜀ICP备2026071122号-1` 并链接工信部，国际透传 children。正常文档流，阅读器保留全高布局并为固定播放器预留页脚滚动空间。
+- `saas_frontend_server.py` 仅国内 app Host 返回 `/robots.txt` 的 `User-agent: * / Disallow: /`，GET/HEAD及查询串有效；该入口页面、静态资源、API和错误响应均带 `X-Robots-Tag: noindex, nofollow`。不按 User-Agent 区分响应，不新增JS校验或抓取身份检测。主域博客/IP博客预览与国际站维持既有抓取策略。
+- 标准抓取/索引指令不等于访问控制，不能保证所有爬虫遵守、已收录URL立即消失或不被检查。业务数据继续由既有鉴权保护。
+- 本地已通过：两前端构建及源码/产物隔离、真实HTTP网关/Host/路由23项、双站浏览器fixture（国内登录/注册/已登录设置页备案号，国际套餐/支付状态与无国内页脚）、modern/UI/JS检查、博客51页19文章构建与审计。新增HTTP用例修改前失败，修改后通过。浏览器截图 `/private/tmp/english-reader-dual-entry-check/cn-{login,app}-record.png`。
+- 下一步：Python编译/diff检查后以同一源码提交保数据同步发布双前端、博客及共享后端；核对公网robots/noindex、国内登录页、国际健康和已恢复的云猫链接。不得覆盖线上云猫配置或使用 `--defer-https`。
+
 ## 最新程序发布
 
 - 2026-11-13 **#24 complete**，源码 `5da28cc`（clean），`current=code-20261113-111607-f7884945`。共享AI默认免Token修复随国内/国际/博客/后端同步发布，博客内容/样式保持#23；51页19文章审计、博客公网HTTPS200与80跳443、双站健康通过。国内 `https_deferred:false` 保留；详情见 [平台交接](../platform-operations/HANDOFF.md)。下方#23与HTTPS入口版本号为当时记录。

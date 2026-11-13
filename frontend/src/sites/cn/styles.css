@@ -1,0 +1,10 @@
+.cn-site-frame { display: flex; min-height: 100vh; flex-direction: column; background: #f6f5f1; }
+.cn-site-content { flex: 1; min-width: 0; }
+.cn-site-content > .ant-app > .modern-auth,
+.cn-site-content > .ant-app > .modern-shell:not(.reader-shell) { min-height: calc(100vh - 44px); box-sizing: border-box; }
+.cn-site-footer { box-sizing: border-box; display: flex; min-height: 44px; align-items: center; justify-content: center; padding: 12px 20px; color: #69766d; font-size: 12px; line-height: 20px; text-align: center; }
+.cn-site-footer a { color: inherit; text-decoration: none; }
+.cn-site-footer a:hover { color: #17392b; text-decoration: underline; }
+.cn-site-footer a:focus-visible { outline: 2px solid #37624a; outline-offset: 4px; }
+/* Keep the record reachable below the full-height reader and its fixed player. */
+.cn-site-frame:has(.reader-shell) .cn-site-footer { padding-bottom: 124px; }
