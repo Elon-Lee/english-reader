@@ -4,6 +4,8 @@
 
 ## 本轮：AI英语工具主题
 
+- 页脚布局微调：左侧站点介绍、中间备案号、右侧版权，删除底部归档/标签/RSS链接；小屏堆叠且版权右对齐。仅国内博客 `Footer.astro`/`paper.css`，沿当前分支发布；验证与正式版本接续记录。
+
 - 用户已提供备案号 `蜀ICP备2026071122号-1`，已填写国内博客 `blog/src/config.ts` 的 `icpRecord`，沿用公共页脚链接工信部备案查询；首页及博客各页面一致展示。仅国内博客扩展，沿当前 `feat/blog-ai-english-tools` 分支保留已发布主题。
 - **备案号发布#22 complete**：双前端/博客/后端同步保数据升级至 `code-20261113-102413-ab033c51`，源码 `6d892f4`（clean）；备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261113-102413-ab033c51.dump`。博客构建0错误、51页/19篇审计通过，候选两入口/迁移/原音检查通过。公网IP5174首页逐字匹配本地，Chrome确认备案号可见且链接为 `https://beian.miit.gov.cn/`，国际HTTPS健康正常。首页SHA-256 `8a4e9881143702853d36366243a70454de8faa5c2186cc7c808529fc5acf575e`，截图 `/private/tmp/icp-production-footer.png`。沿用#21临时locale过滤包装，未修改发布器；构建产物已恢复不提交。
 

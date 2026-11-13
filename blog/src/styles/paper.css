@@ -76,7 +76,10 @@ html.dark .paper-button { color:#242a23; }
 .sidebar-subscribe { border:1px dashed var(--paper-line); padding:22px; border-radius:5px; }
 .sidebar-subscribe>span { font-size:28px; color:var(--paper-orange); }
 .sidebar-subscribe a { color:var(--paper-green); font-size:12px; }
-.site-footer { padding:29px 0 36px; border-top:1px solid var(--paper-line); color:var(--paper-muted); display:flex; justify-content:space-between; align-items:center; gap:20px; font-size:11px; flex-wrap:wrap; }
+.site-footer { padding:29px 0 36px; border-top:1px solid var(--paper-line); color:var(--paper-muted); display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); align-items:center; gap:20px; font-size:11px; }
+.footer-record { text-align:center; }
+.footer-copyright { text-align:right; }
+@media(max-width:760px) { .site-footer { grid-template-columns:1fr; } .footer-brand,.footer-record { text-align:center; } .footer-copyright { text-align:right; } }
 .site-footer strong { font-size:16px; color:var(--paper-green); display:block; letter-spacing:.12em; }
 .site-footer span { display:block; margin-top:5px; }
 .page-heading { padding:55px 0 30px; }

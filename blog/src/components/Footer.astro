@@ -1,4 +1,8 @@
 ---
 import { icpRecord, themeConfig } from '@/config'
 ---
-<footer class="site-footer"><div><strong>纸间微光</strong><span>记录 AI 英语工具，让练习有迹可循。</span></div><p><a href="/archives/">文章归档</a> · <a href="/tags/">标签</a> · <a href="/rss.xml">RSS 订阅</a></p><p>© {new Date().getFullYear()} {themeConfig.site.author} · Astro / Retypeset</p>{icpRecord && <p><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">{icpRecord}</a></p>}</footer>
+<footer class="site-footer">
+  <div class="footer-brand"><strong>纸间微光</strong><span>记录 AI 英语工具，让练习有迹可循。</span></div>
+  <div class="footer-record">{icpRecord && <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">{icpRecord}</a>}</div>
+  <p class="footer-copyright">© {new Date().getFullYear()} {themeConfig.site.author} · Astro / Retypeset</p>
+</footer>
