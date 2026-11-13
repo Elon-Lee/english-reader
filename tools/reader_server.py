@@ -1036,6 +1036,8 @@ class Handler(SimpleHTTPRequestHandler):
                 benefit_id=unquote(path.rsplit("/",1)[1]);self.reply(COMMERCE.update_configured_benefit(actor_id,benefit_id,item));return
             if path.startswith("/api/admin/commerce/products/") and path.endswith("/versions"):
                 product_id=unquote(path[len("/api/admin/commerce/products/"):-len("/versions")].rstrip("/"));self.reply(COMMERCE.create_version(actor_id,product_id,item),201);return
+            if path.startswith("/api/admin/commerce/products/") and path.endswith("/price"):
+                product_id=unquote(path[len("/api/admin/commerce/products/"):-len("/price")].rstrip("/"));self.reply(COMMERCE.update_price(actor_id,product_id,item));return
             if path.startswith("/api/admin/commerce/products/") and path.endswith("/status"):
                 product_id=unquote(path[len("/api/admin/commerce/products/"):-len("/status")].rstrip("/"));self.reply(COMMERCE.set_product_active(actor_id,product_id,bool(item.get("active"))));return
             if path.startswith("/api/admin/commerce/versions/") and path.endswith("/publish"):

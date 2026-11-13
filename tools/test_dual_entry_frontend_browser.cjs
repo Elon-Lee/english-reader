@@ -33,6 +33,8 @@ const free = { ...product, id: 'fixture-free', slug: 'free', family: 'free', nam
       const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
       const page = await context.newPage(), errors = [], calls = []
       let authenticated = false, catalogFailure = false, paid = false, paymentPayload = null, pagePayment = false, importAllowed = false, importFailure = false, hasPrivateBook = false
+      let admin = false, priceFailure = false, pricePayload = null, versionPayload = null
+      let adminVersion = { ...product, purchaseUrl: 'https://catfk.com/item/d2nhyc', version: 1, status: 'published', createdAt: '2026-11-13T00:00:00Z' }
       page.on('pageerror', error => errors.push(error.message))
       await context.route(`${base}/api/**`, async route => {
         const request = route.request(), pathname = new URL(request.url()).pathname
@@ -40,7 +42,7 @@ const free = { ...product, id: 'fixture-free', slug: 'free', family: 'free', nam
         let data = {}
         if (pathname === '/api/auth/me') {
           if (!authenticated) return route.fulfill({ status: 401, json: { error: 'Fixture requires login' } })
-          data = { user: { id: 'fixture-user', displayName: '隔离测试账号', email: 'browser@example.test', isAdmin: false }, csrfToken: 'fixture-csrf' }
+          data = { user: { id: 'fixture-user', displayName: '隔离测试账号', email: 'browser@example.test', isAdmin: admin }, csrfToken: 'fixture-csrf' }
         } else if (pathname === '/api/commerce/products') {
           if (catalogFailure) return route.fulfill({ status: 503, json: { error: '隔离测试：套餐暂不可用' } })
           data = { products: [free, product], support: { value: '测试支持' } }
@@ -51,6 +53,16 @@ const free = { ...product, id: 'fixture-free', slug: 'free', family: 'free', nam
         else if (pathname === '/api/workspace/journey') data = { guide: { hasRead: true, hasWord: true, dismissed: true } }
         else if (pathname === '/api/preferences') data = { theme: 'pine' }
         else if (pathname === '/api/health') data = { saasEnabled: true }
+        else if (pathname === '/api/admin/dashboard' || pathname === '/api/admin/users') data = {}
+        else if (pathname === '/api/admin/commerce/products') data = { products: [{ id: 'fixture-product', slug: product.slug, family: 'pro', active: true, versions: [adminVersion] }] }
+        else if (pathname === '/api/admin/commerce/entitlements') data = { builtIn: [], configured: [] }
+        else if (pathname === '/api/admin/commerce/products/fixture-product/versions') { versionPayload = request.postDataJSON(); data = { id: 'fixture-draft' } }
+        else if (pathname === '/api/admin/commerce/products/fixture-product/price') {
+          pricePayload = request.postDataJSON()
+          if (priceFailure) return route.fulfill({ status: 503, json: { error: '隔离测试：调价失败请重试' } })
+          adminVersion = { ...adminVersion, ...pricePayload, id: 'fixture-pro-v2', version: 2 }
+          data = { id: adminVersion.id, status: 'published' }
+        }
         else if (pathname === '/api/payments/alipay/orders' && request.method() === 'POST') {
           paymentPayload = request.postDataJSON()
           data = { orderId: 'fixture-order', amountCents: 100, status: 'pending', ...(pagePayment ? { paymentMode: 'page_pay', checkoutUrl: 'https://openapi.alipay.com/gateway.do?fixture=isolated' } : { qrCode: 'https://payment.example.test/fixture-only' }) }
@@ -192,6 +204,52 @@ const free = { ...product, id: 'fixture-free', slug: 'free', family: 'free', nam
         await page.getByRole('button', { name: '创建导入任务', exact: true }).click()
         await page.getByRole('dialog', { name: '升级套餐后导入读物', exact: true }).waitFor()
         assert.equal(calls.filter(call => call === '/api/workspace/imports').length, writesBefore, 'expired entitlement is rechecked before task creation')
+      }
+      if (site === 'intl') {
+        admin = true; authenticated = true
+        await page.goto(`${base}/app?screen=admin`)
+        await page.getByRole('heading', { name: '运营后台', exact: true }).waitFor()
+        await page.getByRole('tab', { name: '套餐管理', exact: true }).click()
+        await page.getByRole('button', { name: 'fixture-pro 功能菜单', exact: true }).click()
+        await page.getByRole('menuitem', { name: '调整价格', exact: true }).click()
+        const priceDialog = page.getByRole('dialog', { name: '调整 浏览器测试方案 价格', exact: true })
+        await priceDialog.getByLabel('原价（元）', { exact: true }).fill('49')
+        await priceDialog.getByLabel('实际售价（元）', { exact: true }).fill('19')
+        await priceDialog.getByText('自动折扣：3.9折', { exact: true }).waitFor()
+        await priceDialog.getByLabel('实际售价（元）', { exact: true }).fill('50')
+        await page.getByRole('button', { name: '保存并发布', exact: true }).click()
+        await priceDialog.getByText('售价须大于0且不能高于原价', { exact: true }).waitFor()
+        assert.equal(pricePayload, null)
+        await priceDialog.getByLabel('实际售价（元）', { exact: true }).fill('19.99')
+        await priceDialog.getByText('自动折扣：4.1折', { exact: true }).waitFor()
+        priceFailure = true
+        await page.getByRole('button', { name: '保存并发布', exact: true }).click()
+        const confirm = page.getByRole('dialog', { name: '确认发布新价格？', exact: true })
+        assert.equal(pricePayload, null, 'confirmation precedes the price write')
+        await confirm.getByRole('button', { name: '确认发布', exact: true }).click()
+        await page.getByText('隔离测试：调价失败请重试', { exact: true }).waitFor()
+        assert.deepEqual(pricePayload, { originalAmountCents: 4900, amountCents: 1999, expectedVersionId: product.id })
+        await page.screenshot({ path: path.join(output, 'intl-admin-price-failed-fixture.png'), fullPage: true })
+        await confirm.getByRole('button', { name: '返回修改', exact: true }).click()
+        assert.equal(await priceDialog.getByLabel('实际售价（元）', { exact: true }).inputValue(), '19.99')
+        priceFailure = false
+        await page.getByRole('button', { name: '保存并发布', exact: true }).click()
+        await confirm.getByRole('button', { name: '确认发布', exact: true }).click()
+        await priceDialog.waitFor({ state: 'hidden' })
+        await page.getByText('¥19.99', { exact: true }).first().waitFor()
+        await page.getByText('4.1折', { exact: false }).first().waitFor()
+        await page.screenshot({ path: path.join(output, 'intl-admin-price-fixture.png'), fullPage: true })
+        await page.getByRole('button', { name: 'fixture-pro 功能菜单', exact: true }).click()
+        await page.getByRole('menuitem', { name: '创建新版本', exact: true }).click()
+        const drawer = page.locator('.ant-drawer-content').filter({ hasText: '为 fixture-pro 创建新版本' })
+        assert.equal(await drawer.getByLabel('实际售价（元）', { exact: true }).inputValue(), '19.99')
+        await drawer.getByLabel('实际售价（元）', { exact: true }).fill('19')
+        await drawer.getByRole('button', { name: '保存草稿', exact: true }).click()
+        await drawer.waitFor({ state: 'hidden' })
+        assert.equal(versionPayload.amountCents, 1900)
+        assert.equal(versionPayload.originalAmountCents, 4900)
+        assert(!('discountPercent' in versionPayload))
+        admin = false
       }
       authenticated = false
       await page.goto(`${base}/register`)

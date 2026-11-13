@@ -16,6 +16,30 @@ class CommerceService:
         self.accounts = accounts
         self.payments = payments
 
+    @staticmethod
+    def _prices(payload: dict[str, Any]) -> tuple[int, int, int]:
+        def cents(value: Any) -> int:
+            if isinstance(value, bool) or not re.fullmatch(r"[0-9]+", str(value)):
+                raise SaaSError("invalid_product_price", "价格必须为非负整数分，最多支持两位小数元。")
+            amount = int(value)
+            if amount > 2147483647:
+                raise SaaSError("invalid_product_price", "价格超出允许范围。")
+            return amount
+
+        original = cents(payload.get("originalAmountCents", payload.get("amountCents")))
+        if "amountCents" in payload:
+            sale = cents(payload["amountCents"])
+        else:
+            # Compatibility for older draft-version clients only.
+            discount = cents(payload.get("discountPercent", 100))
+            if not 1 <= discount <= 100:
+                raise SaaSError("invalid_product_price", "折扣超出允许范围。")
+            sale = (original * discount + 50) // 100
+        if sale > original:
+            raise SaaSError("invalid_product_price", "实际售价不能高于原价。")
+        discount = (sale * 200 + original) // (2 * original) if original else 100
+        return original, sale, discount
+
     def plan_versions(self) -> dict[str, Any]:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
@@ -142,7 +166,7 @@ class CommerceService:
             "amountCents": int(row["amount_cents"]),
             "currency": row["currency"],
             "originalAmountCents": int(row.get("original_amount_cents", row["amount_cents"]) or 0),
-            "discountPercent": int(row.get("discount_percent", 100) or 100),
+            "discountPercent": int(row.get("discount_percent", 100)),
             "benefits": benefits,
             "videoQuality": "low" if row["family_slug"] == "free" else "high",
             "featureLimits": cls._display_limits(row.get("limits_json")),
@@ -283,13 +307,11 @@ class CommerceService:
             raise SaaSError("invalid_product_version", "请配置视频上限、音频上限和私人空间。")
         try:
             duration_days = int(payload.get("durationDays"))
-            original_amount_cents = int(payload.get("originalAmountCents", payload.get("amountCents")))
-            discount_percent = int(payload.get("discountPercent", 100))
         except (TypeError, ValueError) as exc:
             raise SaaSError("invalid_product_version", "商品期限或价格无效。") from exc
-        if duration_days < 1 or duration_days > 3660 or original_amount_cents < 0 or not 1 <= discount_percent <= 100:
+        if duration_days < 1 or duration_days > 3660:
             raise SaaSError("invalid_product_version", "商品期限或价格超出允许范围。")
-        amount_cents = (original_amount_cents * discount_percent + 50) // 100
+        original_amount_cents, amount_cents, discount_percent = self._prices(payload)
         featured = bool(payload.get("featured", False))
         purchase_url = str(payload.get("purchaseUrl", "") or "").strip()
         if len(purchase_url) > 1000:
@@ -342,6 +364,45 @@ class CommerceService:
                 )
                 self._audit(cursor, actor_id, "commerce_product_version_created", {"productId": product_id, "versionId": version_id, "version": version_number})
         return {"id": version_id, "productId": product_id, "version": version_number, "status": "draft"}
+
+    def update_price(self, actor_id: str, product_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Atomically publish a price-only copy; existing sale snapshots stay intact."""
+        if "originalAmountCents" not in payload or "amountCents" not in payload:
+            raise SaaSError("invalid_product_price", "请同时填写原价和实际售价。")
+        original, sale, discount = self._prices(payload)
+        expected = str(payload.get("expectedVersionId", "") or "").strip()
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM commerce_products WHERE id=%s FOR UPDATE", (product_id,))
+                product = self.accounts._one(cursor)
+                if not product:
+                    raise SaaSError("product_not_found", "商品不存在。", 404)
+                cursor.execute("SELECT * FROM commerce_product_versions WHERE product_id=%s AND status='published' FOR UPDATE", (product_id,))
+                version = self.accounts._one(cursor)
+                if not version or not expected or version["id"] != expected:
+                    raise SaaSError("product_version_changed", "当前套餐版本已变化，请刷新后重新调整价格。", 409)
+                if (product["family_slug"] == "free" and (original or sale)) or (product["family_slug"] != "free" and sale == 0):
+                    raise SaaSError("invalid_product_price", "免费版价格须为0，付费套餐售价须大于0。")
+                if (version["original_amount_cents"], version["amount_cents"]) == (original, sale):
+                    return {"id": version["id"], "status": "published", "idempotent": True}
+                cursor.execute("SELECT COALESCE(MAX(version_number),0)+1 AS n FROM commerce_product_versions WHERE product_id=%s", (product_id,))
+                number = int(self.accounts._one(cursor)["n"])
+                version_id = f"{product['slug']}-v{number}"
+                plan_id = "commerce-" + version_id
+                pricing = {"amount_cents": sale, "original_amount_cents": original, "discount_percent": discount, "commerce_product_version": version_id}
+                cursor.execute("""INSERT INTO plan_versions(id,plan_id,display_name,rank,period_days,quotas_json,pricing_json,active)
+                    SELECT %s,plan_id,display_name,rank,period_days,quotas_json,pricing_json || %s::jsonb,TRUE
+                    FROM plan_versions WHERE id=%s""", (plan_id, json.dumps(pricing), version["plan_version_id"]))
+                cursor.execute("UPDATE commerce_product_versions SET status='retired',retired_at=NOW() WHERE id=%s", (version["id"],))
+                cursor.execute("""INSERT INTO commerce_product_versions(
+                    id,product_id,version_number,plan_version_id,display_name,short_name,tagline,description,duration_days,
+                    amount_cents,original_amount_cents,discount_percent,currency,benefits_json,configured_benefits_json,
+                    featured,status,created_by,purchase_url,published_at)
+                    SELECT %s,product_id,%s,%s,display_name,short_name,tagline,description,duration_days,
+                    %s,%s,%s,currency,benefits_json,configured_benefits_json,featured,'published',%s,purchase_url,NOW()
+                    FROM commerce_product_versions WHERE id=%s""", (version_id, number, plan_id, sale, original, discount, actor_id, version["id"]))
+                self._audit(cursor, actor_id, "commerce_product_price_updated", {"productId": product_id, "previousVersionId": version["id"], "versionId": version_id, "originalAmountCents": original, "amountCents": sale})
+        return {"id": version_id, "status": "published", "idempotent": False}
 
     def publish_version(self, actor_id: str, version_id: str) -> dict[str, Any]:
         version_id = str(version_id or "").strip()

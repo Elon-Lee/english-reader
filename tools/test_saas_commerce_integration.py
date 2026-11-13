@@ -147,6 +147,57 @@ class CommercePostgresTests(unittest.TestCase):
         with self.assertRaises(SaaSError) as blocked:self.commerce.delete_unlisted_product(actor,published["id"])
         self.assertEqual(blocked.exception.code,"product_not_unlisted")
 
+    def test_price_change_preserves_entitlements_links_and_old_plan(self):
+        actor = str(self.admin['id'])
+        product = self.commerce.create_product(actor, 'commerce-test-90', 'advanced', 999)
+        version = self.commerce.create_version(actor, product['id'], {'name': '调价测试', 'shortName': '调价', 'tagline': '保留权益', 'description': '价格独立变化', 'durationDays': 30, 'amountCents': 1900, 'purchaseUrl': 'https://catfk.com/item/d2nhyc', 'featureLimits': {'video_library_capacity': 20, 'audio_library_capacity': 50, 'storage_bytes': 1}})
+        self.commerce.publish_version(actor, version['id'])
+        before = self.commerce.product('commerce-test-90')['product']
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT * FROM plan_versions WHERE id=%s', (before['planVersion'],))
+                old_plan = self.accounts._one(cursor)
+        result = self.commerce.update_price(actor, product['id'], {'expectedVersionId': before['id'], 'originalAmountCents': 4900, 'amountCents': 1999})
+        after = self.commerce.product('commerce-test-90')['product']
+        self.assertEqual(after['id'], result['id'])
+        self.assertEqual((after['originalAmountCents'], after['amountCents'], after['discountPercent']), (4900, 1999, 41))
+        for field in ['featureLimits', 'benefits', 'configuredBenefits', 'purchaseUrl', 'durationDays', 'name', 'featured']:
+            self.assertEqual(after[field], before[field], field)
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT * FROM plan_versions WHERE id=%s', (before['planVersion'],))
+                self.assertEqual(self.accounts._one(cursor), old_plan)
+                cursor.execute('SELECT pricing_json,quotas_json FROM plan_versions WHERE id=%s', (after['planVersion'],))
+                new_plan = self.accounts._one(cursor)
+                self.assertEqual(new_plan['pricing_json']['amount_cents'], 1999)
+                self.assertEqual(new_plan['quotas_json'], old_plan['quotas_json'])
+        with self.assertRaises(SaaSError) as stale:
+            self.commerce.update_price(actor, product['id'], {'expectedVersionId': before['id'], 'originalAmountCents': 4900, 'amountCents': 1900})
+        self.assertEqual(stale.exception.status, 409)
+        retry = self.commerce.update_price(actor, product['id'], {'expectedVersionId': after['id'], 'originalAmountCents': 4900, 'amountCents': 1999})
+        self.assertTrue(retry['idempotent'])
+        for original, sale in [(100, 101), (100, 0), (-1, 10)]:
+            with self.assertRaises(SaaSError):
+                self.commerce.update_price(actor, product['id'], {'expectedVersionId': after['id'], 'originalAmountCents': original, 'amountCents': sale})
+        self.assertEqual(self.commerce.product('commerce-test-90')['product']['id'], after['id'])
+        tiny = self.commerce.update_price(actor, product['id'], {'expectedVersionId': after['id'], 'originalAmountCents': 10000, 'amountCents': 1})
+        self.assertEqual(self.commerce.product('commerce-test-90')['product']['discountPercent'], 0)
+        self.assertNotEqual(tiny['id'], after['id'])
+
+    def test_free_price_cannot_be_changed_to_a_paid_plan(self):
+        before = self.commerce.product('free')['product']
+        actor = str(self.admin['id'])
+        self.assertTrue(self.commerce.update_price(actor, before['productId'], {'expectedVersionId': before['id'], 'originalAmountCents': 0, 'amountCents': 0})['idempotent'])
+        with self.assertRaises(SaaSError):
+            self.commerce.update_price(actor, before['productId'], {'expectedVersionId': before['id'], 'originalAmountCents': 100, 'amountCents': 100})
+
+    def test_new_version_saves_exact_two_prices(self):
+        product = self.commerce.create_product(str(self.admin['id']), 'commerce-test-90', 'advanced', 999)
+        version = self.commerce.create_version(str(self.admin['id']), product['id'], {'name': '精确价格', 'shortName': '精确', 'tagline': '真实售价', 'description': '不能根据折扣反算价格', 'durationDays': 30, 'originalAmountCents': 4900, 'amountCents': 1900, 'featureLimits': {'video_library_capacity': 2, 'audio_library_capacity': 5, 'storage_bytes': 1}})
+        self.commerce.publish_version(str(self.admin['id']), version['id'])
+        current = self.commerce.product('commerce-test-90')['product']
+        self.assertEqual((current['amountCents'], current['originalAmountCents'], current['discountPercent']), (1900, 4900, 39))
+
     def test_entitlement_catalog_only_exposes_enforced_features(self):
         catalog = self.commerce.entitlement_catalog()
         self.assertEqual({item["key"] for item in catalog["builtIn"]}, {"video_library_capacity", "audio_library_capacity", "storage_bytes"})

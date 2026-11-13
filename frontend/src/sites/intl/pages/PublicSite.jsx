@@ -12,6 +12,7 @@ import TrustSection from '../components/TrustSection'
 import BrandLogo from '../BrandLogo'
 import { BRAND_SLOGAN } from '../brand.mjs'
 import { createPaymentAttempt } from '../utils/paymentAttempt.mjs'
+import { discountLabel } from '../utils/pricing.mjs'
 
 const { Paragraph, Text, Title } = Typography
 
@@ -21,11 +22,10 @@ function formatPrice(cents) {
 }
 
 export function PriceDisplay({ product }) {
-  const discount = Number(product.discountPercent || 100)
   const sale = formatPrice(product.amountCents)
-  if (!product.amountCents || discount >= 100) return <b>{sale}</b>
+  if (!product.amountCents || product.amountCents >= product.originalAmountCents) return <b>{sale}</b>
   const original = formatPrice(product.originalAmountCents)
-  const label = `${Number.isInteger(discount / 10) ? discount / 10 : (discount / 10).toFixed(1)}折`
+  const label = discountLabel(product.originalAmountCents, product.amountCents)
   return <span className="public-sale-price"><b>{sale}</b><del aria-label={`原价${original}`}>{original}</del><Tag>{label}</Tag></span>
 }
 

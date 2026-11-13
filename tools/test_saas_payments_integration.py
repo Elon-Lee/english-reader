@@ -19,6 +19,7 @@ from saas_payments import AlipayService
 from saas_redemptions import RedemptionService
 from saas_journey import JourneyService
 from saas_sites import site_context
+from saas_commerce import CommerceService
 
 
 TEST_URL = os.environ.get("SHIYUE_SAAS_TEST_DATABASE_URL", "")
@@ -95,6 +96,31 @@ class AlipayPostgresTests(unittest.TestCase):
         self.assertEqual(self.payments.public_config(), {"methods": [], "redemptionEnabled": True, "automaticRenewal": False})
         self._enable_alipay()
         self.assertEqual(self.payments.public_config()["methods"], ["alipay", "cloudcat"])
+
+    def test_price_change_keeps_old_order_and_charges_exact_new_sale(self):
+        self._enable_alipay()
+        requests = []
+        def gateway(method, payload):
+            requests.append(payload)
+            return {"qr_code": "https://qr.example.test/price-only"}
+        self.payments._request = gateway
+        commerce = CommerceService(self.accounts)
+        product = commerce.create_product(str(self.admin['id']), 'price-' + new_id()[:12], 'advanced', 999)
+        version = commerce.create_version(str(self.admin['id']), product['id'], {'name': '调价快照测试', 'shortName': '测试', 'tagline': '隔离测试', 'description': '按实际售价生成支付金额', 'durationDays': 30, 'amountCents': 4900, 'featureLimits': {'video_library_capacity': 20, 'audio_library_capacity': 50, 'storage_bytes': 1}})
+        commerce.publish_version(str(self.admin['id']), version['id'])
+        old = self.payments.create_order(str(self.user['id']), version['id'], 'old-price-test-' + new_id())
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT * FROM payment_orders WHERE id=%s', (old['orderId'],))
+                snapshot = self.accounts._one(cursor)
+        changed = commerce.update_price(str(self.admin['id']), product['id'], {'expectedVersionId': version['id'], 'originalAmountCents': 4900, 'amountCents': 1999})
+        created = self.payments.create_order(str(self.user['id']), changed['id'], 'new-price-test-' + new_id())
+        self.assertEqual(self.payments.admin_order_detail(created['orderId'])['amountCents'], 1999)
+        self.assertEqual(requests[-1]['total_amount'], '19.99')
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT * FROM payment_orders WHERE id=%s', (old['orderId'],))
+                self.assertEqual(self.accounts._one(cursor), snapshot)
 
     def test_order_creation_paid_confirmation_admin_listing_and_refund(self):
         self._enable_alipay()

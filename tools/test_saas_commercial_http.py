@@ -12,6 +12,32 @@ from test_private_http import PrivateHTTPTests
 
 
 class CommercialHTTPTests(PrivateHTTPTests):
+    def test_price_dispatch_and_domestic_isolation(self):
+        service = self.namespace['COMMERCE']
+        service.reset_mock()
+        path = '/api/admin/commerce/products/product-test/price'
+        self.assert_not_found(self.request('POST', path))
+        service.update_price.assert_not_called()
+        with site_context('intl'):
+            handler = self.request('POST', path)
+        handler.admin_required.assert_called_once()
+        service.update_price.assert_called_once_with('test-admin', 'product-test', {})
+
+    def test_price_write_checks_csrf_and_admin(self):
+        for gate in ['require_csrf', 'admin_required']:
+            handler = self.handler_type.__new__(self.handler_type)
+            handler.path = '/api/admin/commerce/products/test/price'
+            handler.rate_limit = Mock(return_value=True)
+            handler.require_saas_user = Mock(return_value=True)
+            handler.require_csrf = Mock(return_value=True)
+            handler.admin_required = Mock(return_value=True)
+            setattr(handler, gate, Mock(return_value=False))
+            handler.reply = Mock()
+            self.namespace['COMMERCE'].reset_mock()
+            with site_context('intl'):
+                handler.do_POST()
+            self.namespace['COMMERCE'].update_price.assert_not_called()
+
     def test_gateway_identity_is_applied_before_dispatch_and_reset_on_keepalive(self):
         parent = self.handler_type
 

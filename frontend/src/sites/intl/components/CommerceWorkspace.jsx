@@ -36,6 +36,7 @@ function CommerceWorkspace({ section, messageApi }) {
     onCreateProduct={payload => write('/api/admin/commerce/products', payload, '套餐已创建')}
     onCreateVersion={(id, payload) => write(`/api/admin/commerce/products/${encodeURIComponent(id)}/versions`, payload, '商品版本已保存为草稿')}
     onPublishVersion={id => write(`/api/admin/commerce/versions/${encodeURIComponent(id)}/publish`, {}, '商品版本已发布')}
+    onUpdatePrice={(id, payload) => write(`/api/admin/commerce/products/${encodeURIComponent(id)}/price`, payload, '新价格已发布，历史订单及权益保持不变')}
     onSetProductActive={(id, active) => write(`/api/admin/commerce/products/${encodeURIComponent(id)}/status`, { active }, active ? '商品已恢复销售' : '商品已停止新售')}
     onDeleteProduct={id => write(`/api/admin/commerce/products/${encodeURIComponent(id)}/delete`, {}, '未上架套餐已删除')}
   />
