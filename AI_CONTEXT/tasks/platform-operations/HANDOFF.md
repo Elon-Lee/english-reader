@@ -1,5 +1,11 @@
 # 平台运营与部署交接
 
+## 2026-11-13 双站私人导入/空间发布#27
+
+- 已按用户授权从干净提交 `46649cb` 同步保数据发布国内/国际/博客/共享后端；京东云 **#27 complete**，`current=code-20261113-154904-ef012c6b`，迁移0046。国内私人导入404、管理员官方导入保留，国际免费禁导入/进阶1GiB/Pro5GiB。备份与完整验收见 [导入交接](../import-media/HANDOFF.md)。
+- 本轮通过120项部署及6项博客部署回归。使用 `.local/saas-venv/bin/python tools/deploy_remote.py --target 1 --upgrade --identity-file <已授权私钥路径>`，进程设置 `LC_ALL=C LANG=C`，沿用严格SSH默认known_hosts；不延后HTTPS。两站候选、迁移、原音CPU与正式公网18项/Chrome检查通过。
+- 七容器运行、Cloudflare active，国内5174公测监听/国际5173与API8790回环保持；账号与交易数据数量、原支付开关及渠道保持，未创建订单/订阅或付款。日志 `/private/tmp/import-policy-jdcloud-deploy.log`。本轮未合并main或推送。
+
 ## 2026-11-13 AI免Token修复（当前）
 
 - 用户反馈线上“本句分析暂不可用／平台AI服务尚未配置”，并明确现在应使用免Token服务。线上 `platform_settings.ai.dioco` 无记录；`WorkspaceAIService._dioco_generate` 在访问上游前强制邮箱/Token，导致503。服务器对同一Dioco接口不带凭据的真实合成文本请求已返回200及generation，根因确认。
