@@ -7,7 +7,8 @@ import os
 import unittest
 from datetime import timedelta
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
+import json
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -136,6 +137,66 @@ class AlipayPostgresTests(unittest.TestCase):
         self.assertEqual(result["total"], 2)
         self.assertEqual({record["batchId"] for record in result["records"]}, {batch["batchId"]})
         self.assertTrue(all(record["codePrefix"].startswith("SY-") for record in result["records"]))
+
+    def test_page_pay_creation_recovery_owner_and_confirmation(self):
+        environment = {**self.environment, 'ALIPAY_PAYMENT_PRODUCT': 'page_pay',
+                       'INTL_APP_BASE_URL': 'https://intl.example.test',
+                       'ALIPAY_NOTIFY_URL': 'https://intl.example.test/api/payments/alipay/notify'}
+        self.payments = AlipayService(self.accounts, self.memberships, environment)
+        self._enable_alipay()
+        # Page pay signs a checkout URL; creating a local order must not call precreate.
+        self.payments._request = lambda *_: self.fail('page pay creation must not call precreate')
+        created = self.payments.create_order(str(self.user['id']), self.product_version_id, 'page-payment-key-001')
+        params = parse_qs(urlsplit(created['checkoutUrl']).query)
+        self.assertEqual(params['method'], ['alipay.trade.page.pay'])
+        self.assertNotIn('qrCode', created)
+        self.assertEqual(created['paymentMode'], 'page_pay')
+        duplicate = self.payments.create_order(str(self.user['id']), self.product_version_id, 'page-payment-key-001')
+        self.assertEqual(created['orderId'], duplicate['orderId'])
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT count(*) FROM payment_orders WHERE user_id=%s AND idempotency_key=%s',
+                               (self.user['id'], 'alipay:page-payment-key-001'))
+                self.assertEqual(cursor.fetchone()[0], 1)
+        with self.assertRaises(SaaSError) as error:
+            self.payments.order_status(str(self.admin['id']), created['orderId'])
+        self.assertEqual(error.exception.code, 'payment_order_not_found')
+        self.payments._request = lambda *_: {'trade_status': 'WAIT_BUYER_PAY'}
+        restored = self.payments.order_status(str(self.user['id']), created['orderId'])
+        self.assertEqual(restored['status'], 'pending')
+        self.assertEqual(restored['paymentMode'], 'page_pay')
+        self.assertIn('checkoutUrl', restored)
+        amount = json.loads(params['biz_content'][0])['total_amount']
+        trade = {'out_trade_no': created['orderId'], 'trade_status': 'TRADE_FINISHED', 'total_amount': amount,
+                 'app_id': environment['ALIPAY_APP_ID'], 'trade_no': 'page-test-' + new_id()}
+        self.payments._request = lambda *_: {**trade, 'out_trade_no': 'ali_other_order'}
+        with self.assertRaises(SaaSError) as mismatch:
+            self.payments.order_status(str(self.user['id']), created['orderId'])
+        self.assertEqual(mismatch.exception.code, 'alipay_order_mismatch')
+        self.payments._request = lambda *_: trade
+        confirmed = self.payments.order_status(str(self.user['id']), created['orderId'])
+        self.assertEqual(confirmed['status'], 'paid')
+        self.assertNotIn('checkoutUrl', confirmed)
+        self.assertIsNotNone(confirmed['endsAt'])
+        self.assertEqual(self.payments.order_status(str(self.user['id']), created['orderId'])['status'], 'paid')
+
+    def test_expired_page_order_without_provider_trade_can_be_retried(self):
+        environment = {**self.environment, 'ALIPAY_PAYMENT_PRODUCT': 'page_pay',
+                       'INTL_APP_BASE_URL': 'https://intl.example.test',
+                       'ALIPAY_NOTIFY_URL': 'https://intl.example.test/api/payments/alipay/notify'}
+        self.payments = AlipayService(self.accounts, self.memberships, environment)
+        self._enable_alipay()
+        created = self.payments.create_order(str(self.user['id']), self.product_version_id, 'page-expiry-key-001')
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE payment_orders SET created_at=NOW()-INTERVAL '16 minutes' WHERE id=%s", (created['orderId'],))
+        self.payments._request = lambda *_: {'trade_status': 'WAIT_BUYER_PAY', 'providerTradeMissing': True}
+        expired = self.payments.order_status(str(self.user['id']), created['orderId'])
+        self.assertEqual(expired['status'], 'cancelled')
+        self.assertNotIn('checkoutUrl', expired)
+        retried = self.payments.create_order(str(self.user['id']), self.product_version_id, 'page-expiry-key-002')
+        self.assertNotEqual(created['orderId'], retried['orderId'])
+        self.assertIn('checkoutUrl', retried)
 
     def test_local_test_mode_simulates_payment_without_gateway_access(self):
         local_environment = {**self.environment, "SHIYUE_DEPLOYMENT_MODE": "local", "ALIPAY_TEST_MODE": "1",

@@ -32,7 +32,7 @@ const free = { ...product, id: 'fixture-free', slug: 'free', family: 'free', nam
       const base = servers[index].base
       const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
       const page = await context.newPage(), errors = [], calls = []
-      let authenticated = false, catalogFailure = false, paid = false, paymentPayload = null
+      let authenticated = false, catalogFailure = false, paid = false, paymentPayload = null, pagePayment = false
       page.on('pageerror', error => errors.push(error.message))
       await context.route(`${base}/api/**`, async route => {
         const request = route.request(), pathname = new URL(request.url()).pathname
@@ -53,8 +53,8 @@ const free = { ...product, id: 'fixture-free', slug: 'free', family: 'free', nam
         else if (pathname === '/api/health') data = { saasEnabled: true }
         else if (pathname === '/api/payments/alipay/orders' && request.method() === 'POST') {
           paymentPayload = request.postDataJSON()
-          data = { orderId: 'fixture-order', amountCents: 100, status: 'pending', qrCode: 'https://payment.example.test/fixture-only' }
-        } else if (pathname === '/api/payments/alipay/orders/fixture-order') data = { orderId: 'fixture-order', status: paid ? 'paid' : 'pending', amountCents: 100, endsAt: '2027-01-01T00:00:00Z' }
+          data = { orderId: 'fixture-order', amountCents: 100, status: 'pending', ...(pagePayment ? { paymentMode: 'page_pay', checkoutUrl: 'https://openapi.alipay.com/gateway.do?fixture=isolated' } : { qrCode: 'https://payment.example.test/fixture-only' }) }
+        } else if (pathname === '/api/payments/alipay/orders/fixture-order') data = { orderId: 'fixture-order', status: paid ? 'paid' : 'pending', amountCents: 100, endsAt: '2027-01-01T00:00:00Z', ...(pagePayment && !paid ? { paymentMode: 'page_pay', checkoutUrl: 'https://openapi.alipay.com/gateway.do?fixture=isolated' } : {}) }
         else if (pathname === '/api/auth/config') data = { captchaEnabled: false }
         else if (pathname === '/api/auth/devices') data = { devices: [] }
         else if (pathname === '/api/account/deletion-status') data = { status: 'none' }
@@ -119,6 +119,23 @@ const free = { ...product, id: 'fixture-free', slug: 'free', family: 'free', nam
         paid = true
         await page.getByText('付款成功，会员权益已开通', { exact: true }).waitFor()
         await page.screenshot({ path: path.join(output, 'intl-membership-payment-fixture.png'), fullPage: true })
+        pagePayment = true; paid = false
+        await context.route('https://openapi.alipay.com/**', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><html><meta charset="utf-8"><h1>隔离支付宝收银台</h1></html>' }))
+        await page.goto(`${base}/app?screen=membership`)
+        await page.getByRole('button', { name: '升级会员', exact: true }).click()
+        await page.getByRole('button', { name: '升级到测试 Pro', exact: true }).click()
+        await page.getByRole('button', { name: /支付宝支付/ }).click()
+        const checkout = page.getByRole('link', { name: '前往支付宝收银台', exact: true })
+        await checkout.waitFor()
+        assert.equal(await checkout.getAttribute('href'), 'https://openapi.alipay.com/gateway.do?fixture=isolated')
+        const popupReady = page.waitForEvent('popup')
+        await checkout.click()
+        const popup = await popupReady
+        await popup.getByRole('heading', { name: '隔离支付宝收银台' }).waitFor()
+        await popup.close()
+        await page.reload()
+        await checkout.waitFor()
+        await page.screenshot({ path: path.join(output, 'intl-page-payment-restored-fixture.png'), fullPage: true })
       }
       authenticated = false
       await page.goto(`${base}/register`)

@@ -10,7 +10,7 @@ import secrets
 from decimal import Decimal, InvalidOperation
 import urllib.parse
 import urllib.request
-from datetime import timedelta
+from datetime import timedelta, timezone
 from typing import Any
 
 from saas_auth import SaaSError, SaaSConfigurationError, SaaSService, new_id, utcnow
@@ -51,9 +51,9 @@ class AlipayService:
         values = self._credentials()
         if not all(values.values()):
             raise SaaSConfigurationError("支付宝获批产品标识、应用参数、RSA2 密钥和异步通知地址尚未完整配置。")
-        if values["product"] != "face_to_face" or values["approved"] != "1":
-            raise SaaSConfigurationError("当前实现只支持已获批的支付宝当面付扫码产品。")
-        if self.environment.get('INTL_APP_BASE_URL') or self.environment.get('INTL_GATEWAY_TOKEN'):
+        if values["product"] not in {"face_to_face", "page_pay"} or values["approved"] != "1":
+            raise SaaSConfigurationError("请配置已获批的支付宝电脑网站支付或当面付产品。")
+        if values['product'] == 'page_pay' or self.environment.get('INTL_APP_BASE_URL') or self.environment.get('INTL_GATEWAY_TOKEN'):
             from saas_sites import app_base_url, site_context
             with site_context('intl'):
                 international = app_base_url(self.environment)
@@ -71,7 +71,7 @@ class AlipayService:
     def readiness(self) -> dict[str, Any]:
         values = self._credentials()
         test_mode = self._test_mode()
-        ready = test_mode or (all(values.values()) and values["product"] == "face_to_face" and values["approved"] == "1")
+        ready = test_mode or (all(values.values()) and values["product"] in {"face_to_face", "page_pay"} and values["approved"] == "1")
         if ready and not test_mode:
             try:self._keys()
             except (SaaSError, SaaSConfigurationError):ready = False
@@ -157,7 +157,7 @@ class AlipayService:
             raise SaaSConfigurationError("本地支付宝模拟模式禁止访问支付宝网关。")
         private_key, public_key, credentials = self._keys()
         params = {"app_id": credentials["app_id"], "method": method, "format": "JSON", "charset": "utf-8",
-                  "sign_type": "RSA2", "timestamp": utcnow().strftime("%Y-%m-%d %H:%M:%S"), "version": "1.0",
+                  "sign_type": "RSA2", "timestamp": utcnow().astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S"), "version": "1.0",
                   "biz_content": json.dumps(biz_content, ensure_ascii=False, separators=(",", ":"))}
         if method == "alipay.trade.precreate":
             params["notify_url"] = credentials["notify_url"]
@@ -166,18 +166,82 @@ class AlipayService:
         request = urllib.request.Request(ALIPAY_GATEWAY, data=body, headers={"Content-Type": "application/x-www-form-urlencoded;charset=utf-8"})
         try:
             with urllib.request.urlopen(request, timeout=15) as response:
-                payload = json.loads(response.read(1_000_000).decode("utf-8"))
+                raw = response.read(1_000_000).decode("utf-8")
+                payload = json.loads(raw)
         except Exception as exc:
             raise SaaSError("alipay_unavailable", "支付宝暂时无法响应，请稍后查询订单状态。", 503) from exc
-        result = payload.get(method.replace(".", "_") + "_response")
+        response_key = method.replace(".", "_") + "_response"
+        result = payload.get(response_key) if isinstance(payload, dict) else None
         if not isinstance(result, dict):
             raise SaaSError("alipay_invalid_response", "支付宝返回数据无效。", 502)
         if not payload.get("sign"):
             raise SaaSError("alipay_invalid_signature", "支付宝接口响应缺少签名。", 502)
-        self._verify({**result, "sign": payload["sign"]}, public_key)
+        hashes, _, padding = self._crypto()
+        try:
+            # API responses sign the original JSON object, unlike form notifications.
+            public_key.verify(base64.b64decode(payload['sign'], validate=True),
+                              self._response_node(raw, response_key).encode('utf-8'),
+                              padding.PKCS1v15(), hashes.SHA256())
+        except Exception as exc:
+            raise SaaSError('alipay_invalid_signature', '支付宝接口响应签名校验失败。', 502) from exc
         if result.get("code") != "10000":
+            if method == 'alipay.trade.query' and result.get('sub_code') == 'ACQ.TRADE_NOT_EXIST':
+                return {'out_trade_no': biz_content.get('out_trade_no'), 'trade_status': 'WAIT_BUYER_PAY', 'providerTradeMissing': True}
             raise SaaSError("alipay_request_failed", str(result.get("sub_msg") or result.get("msg") or "支付宝处理失败。")[:300], 502)
         return result
+
+    @staticmethod
+    def _response_node(raw: str, wanted: str) -> str:
+        """Locate a top-level JSON value without reserializing signed bytes."""
+        decoder = json.JSONDecoder()
+        position = raw.index('{') + 1
+        found = None
+        while True:
+            while raw[position].isspace(): position += 1
+            if raw[position] == '}': break
+            key, position = decoder.raw_decode(raw, position)
+            while raw[position].isspace(): position += 1
+            if raw[position] != ':': raise ValueError('Invalid JSON member')
+            position += 1
+            while raw[position].isspace(): position += 1
+            start = position
+            _, position = decoder.raw_decode(raw, position)
+            if key == wanted:
+                if found is not None: raise ValueError('Duplicate response node')
+                found = raw[start:position]
+            while raw[position].isspace(): position += 1
+            if raw[position] == '}': break
+            if raw[position] != ',': raise ValueError('Invalid JSON separator')
+            position += 1
+        if found is None: raise ValueError('Missing response node')
+        return found
+
+    def _checkout_details(self, order: dict[str, Any]) -> dict[str, Any]:
+        expires = order['created_at'] + timedelta(minutes=15)
+        snapshot = as_json(order.get('product_snapshot_json'))
+        if snapshot.get('paymentProduct') != 'page_pay':
+            return {'qrCode': order['payment_code_url'], 'expiresAt': timestamp(expires)} if order.get('payment_code_url') else {}
+        details = {'paymentMode': 'page_pay', 'expiresAt': timestamp(expires)}
+        if utcnow() >= expires:
+            details['paymentExpired'] = True
+            return details
+        private_key, _, credentials = self._keys()
+        if credentials['product'] != 'page_pay':
+            raise SaaSConfigurationError('该订单需要电脑网站支付配置，请联系管理员。')
+        from saas_sites import app_base_url, site_context
+        with site_context('intl'):
+            origin = app_base_url(self.environment)
+        params = {'app_id': credentials['app_id'], 'method': 'alipay.trade.page.pay', 'format': 'JSON',
+                  'charset': 'utf-8', 'sign_type': 'RSA2', 'version': '1.0',
+                  'timestamp': utcnow().astimezone(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S'),
+                  'notify_url': credentials['notify_url'], 'return_url': origin + '/app?screen=membership',
+                  'biz_content': json.dumps({'out_trade_no': order['id'], 'total_amount': f"{int(order['amount_cents']) / 100:.2f}",
+                      'subject': str(snapshot.get('name') or 'RynEnglish 学习方案')[:128],
+                      'product_code': 'FAST_INSTANT_TRADE_PAY',
+                      'time_expire': expires.astimezone(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')},
+                      ensure_ascii=False, separators=(',', ':'))}
+        params['sign'] = self._sign(params, private_key)
+        return {**details, 'checkoutUrl': ALIPAY_GATEWAY + '?' + urllib.parse.urlencode(params)}
 
     def _create_provider_order(self, order: dict[str, Any], product: dict[str, Any]) -> dict[str, Any]:
         result = self._request("alipay.trade.precreate", {
@@ -254,12 +318,14 @@ class AlipayService:
                         idempotency_key,product_version_id,duration_days,product_snapshot_json,entitlement_snapshot_json)
                         VALUES(%s,%s,%s,'alipay','pending',%s,'CNY',%s,%s,%s,%s::jsonb,%s::jsonb)""",
                         (order_id, user_id, product["target_plan_id"], int(product["amount_cents"]), "alipay:" + key,
-                         version_id, int(product["duration_days"]), json.dumps({"name": product["display_name"], "shortName": product["short_name"], "amountCents": int(product["amount_cents"]), "durationDays": int(product["duration_days"]), "currency": product["currency"], "testMode": test_mode}),
+                         version_id, int(product["duration_days"]), json.dumps({"name": product["display_name"], "shortName": product["short_name"], "amountCents": int(product["amount_cents"]), "durationDays": int(product["duration_days"]), "currency": product["currency"], "testMode": test_mode, "paymentProduct": self._credentials()['product']}),
                          json.dumps(as_json(product["limits_json"]) if product.get("limits_json") else {})))
                     cursor.execute("SELECT * FROM payment_orders WHERE id=%s", (order_id,))
                     order = self.accounts._one(cursor)
         if self._test_mode() and as_json(order.get("product_snapshot_json")).get("testMode"):
             return {**self._public_order(order), "testMode": True}
+        if as_json(order.get('product_snapshot_json')).get('paymentProduct') == 'page_pay':
+            return {**self._public_order(order), **self._checkout_details(order)}
         if not order.get("payment_code_url"):
             return self._create_provider_order(order, product)
         return {**self._public_order(order), "qrCode": order["payment_code_url"], "expiresAt": timestamp(order["created_at"] + timedelta(minutes=15))}
@@ -280,22 +346,24 @@ class AlipayService:
             raise SaaSError("payment_order_not_found", "支付订单不存在。", 404)
         if order["status"] == "pending" and not as_json(order.get("product_snapshot_json")).get("testMode"):
             result = self._request("alipay.trade.query", {"out_trade_no": order["id"]})
-            if result.get("trade_status") == "TRADE_SUCCESS":
+            if result.get("trade_status") in {'TRADE_SUCCESS', 'TRADE_FINISHED'}:
+                if str(result.get('out_trade_no', '')) != order['id']:
+                    raise SaaSError('alipay_order_mismatch', '支付宝返回的订单号不匹配。', 409)
                 self._complete_paid(result)
                 with self.accounts.transaction() as connection:
                     with connection.cursor() as cursor:
                         cursor.execute("SELECT * FROM payment_orders WHERE id=%s AND user_id=%s", (order_id, user_id))
                         order = self.accounts._one(cursor) or order
-            elif result.get("trade_status") == "TRADE_CLOSED":
+            elif (result.get('trade_status') == 'TRADE_CLOSED' or
+                  (result.get('providerTradeMissing') and utcnow() >= order['created_at'] + timedelta(minutes=15))):
                 with self.accounts.transaction() as connection:
                     with connection.cursor() as cursor:
                         cursor.execute("UPDATE payment_orders SET status='cancelled',updated_at=NOW() WHERE id=%s AND status='pending'", (order_id,))
                         cursor.execute("SELECT * FROM payment_orders WHERE id=%s AND user_id=%s", (order_id, user_id))
                         order = self.accounts._one(cursor) or order
         status = self._public_order(order)
-        if order["status"] == "pending" and order.get("payment_code_url"):
-            status["qrCode"] = order["payment_code_url"]
-            status["expiresAt"] = timestamp(order["created_at"] + timedelta(minutes=15))
+        if order['status'] == 'pending' and not status['testMode']:
+            status.update(self._checkout_details(order))
         return status
 
     def admin_order_detail(self, order_id: str) -> dict[str, Any]:
@@ -322,6 +390,8 @@ class AlipayService:
         if str(form.get("trade_status", "")) not in {"TRADE_SUCCESS", "TRADE_FINISHED"}:
             return "success"
         result = self._request("alipay.trade.query", {"out_trade_no": str(form.get("out_trade_no", ""))})
+        if str(result.get('out_trade_no', '')) != str(form.get('out_trade_no', '')):
+            raise SaaSError('alipay_order_mismatch', '支付宝通知与查询的订单号不匹配。', 409)
         self._complete_paid(result)
         return "success"
 

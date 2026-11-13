@@ -107,7 +107,7 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
   const trackingSequence = useRef(0)
   const inFlight = useRef(false)
   const redeemAttempt = useRef({ code: '', key: '' })
-  useEffect(() => { if (alipayOrder?.status === 'paid') paymentAttempt.current.finish(true) }, [alipayOrder?.status])
+  useEffect(() => { if (['paid', 'cancelled', 'failed'].includes(alipayOrder?.status)) paymentAttempt.current.finish(true) }, [alipayOrder?.status])
 
   useEffect(() => {
     let active = true
@@ -150,6 +150,7 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
       if (!active) return
       if (order.status === 'pending') {
         setAlipayOrder(order)
+        setPaymentMethod('alipay')
       } else {
         sessionStorage.removeItem(storageKey)
       }
@@ -173,6 +174,7 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
       try {
         const result = await getJson(`/api/payments/alipay/orders/${encodeURIComponent(alipayOrder.orderId)}`)
         if (!active) return
+        setPaymentError('')
         setAlipayOrder(current => ({ ...current, ...result }))
         if (result.status === 'paid') {
           setRedeemResult({ planName: product?.name || '会员', changeOrder: { changeType: 'first_purchase' }, endsAt: result.endsAt })
@@ -267,8 +269,8 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
       {recoveryError && <Alert showIcon type="warning" message={recoveryError} action={<Button loading={clearingReminder} onClick={clearPurchaseReminder}>重试清除提醒</Button>} />}
       {authenticated && !redeemResult && <Space direction="vertical" style={{ width: '100%' }}>
         {methods.length > 0 && <div className="purchase-payment-methods">
-          {methods.includes('alipay') && <Button className={`purchase-payment-method alipay ${paymentMethod === 'alipay' ? 'is-active' : ''}`} block disabled={!preview || Boolean(previewError) || creatingPayment} loading={creatingPayment} onClick={() => { setPaymentMethod('alipay'); setPaymentError(''); if (!alipayOrder) void createAlipayOrder() }}>
-            <img src="/assets/payment-alipay.svg" alt="" /><span><b>{alipayOrder ? '支付宝订单' : '支付宝支付'}</b><small>{alipayOrder ? '查看付款状态' : '创建订单，扫码付款'}</small></span>
+          {methods.includes('alipay') && <Button className={`purchase-payment-method alipay ${paymentMethod === 'alipay' ? 'is-active' : ''}`} block disabled={!preview || Boolean(previewError) || creatingPayment} loading={creatingPayment} onClick={() => { setPaymentMethod('alipay'); setPaymentError(''); if (!alipayOrder || ['cancelled', 'failed'].includes(alipayOrder.status)) void createAlipayOrder() }}>
+            <img src="/assets/payment-alipay.svg" alt="" /><span><b>{['cancelled', 'failed'].includes(alipayOrder?.status) ? '重新创建支付宝订单' : alipayOrder ? '支付宝订单' : '支付宝支付'}</b><small>{alipayOrder ? '查看付款状态' : '创建订单，前往支付宝付款'}</small></span>
           </Button>}
           {methods.includes('cloudcat') && <Button className={`purchase-payment-method cloudcat ${paymentMethod === 'cloudcat' ? 'is-active' : ''}`} block href={product.purchaseUrl || undefined} target="_blank" rel="noreferrer" disabled={!product.purchaseUrl || Boolean(previewError) || !preview} onClick={() => { setPaymentMethod('cloudcat'); setPaymentError(''); depart() }}>
             <img src="/assets/payment-cloudcat.svg" alt="" /><span><b>云猫购买</b><small>前往云猫付款，回来兑换</small></span>
@@ -276,9 +278,12 @@ export function CloudCatPurchaseModal({ product, open, authenticated, returnTo =
         </div>}
         {paymentMethod === 'alipay' && alipayOrder && <Card className="alipay-order-panel" size="small" title={<Space><span>支付宝订单</span><Tag color={alipayOrder.status === 'paid' ? 'success' : 'processing'}>{alipayOrder.status === 'paid' ? '已完成' : '待付款'}</Tag></Space>}>
           <div className="alipay-order-meta"><span>订单号</span><b>{alipayOrder.orderId}</b><span>应付金额</span><b>{formatPrice(alipayOrder.amountCents ?? product.amountCents)}</b></div>
+          {alipayOrder.checkoutUrl && alipayOrder.paymentMode === 'page_pay' && alipayOrder.status === 'pending' && <Space direction="vertical"><Button type="primary" size="large" href={alipayOrder.checkoutUrl} target="_blank" rel="noopener noreferrer">前往支付宝收银台</Button><Text type="secondary">在支付宝页面完成付款后，返回此页等待确认。</Text></Space>}
+          {alipayOrder.paymentExpired && <Alert type="warning" showIcon message="支付入口已过期，请等待订单状态确认；如长期未更新，请联系支持。" />}
           {alipayOrder.qrCode && !alipayOrder.testMode && alipayOrder.status === 'pending' && <Space className="alipay-qr" direction="vertical" align="center"><Text strong>使用支付宝扫描付款</Text><QRCode value={alipayOrder.qrCode} size={192} /><Text type="secondary">付款结果自动查询，请勿重复付款。</Text></Space>}
           {alipayOrder.status === 'pending' && <Text className="alipay-pending-note" type="secondary">保持此页面打开，系统会自动查询订单状态。</Text>}
         </Card>}
+        {paymentMethod === 'alipay' && ['cancelled', 'failed'].includes(alipayOrder?.status) && <Alert type="info" showIcon message="该订单已关闭，可重新创建支付宝订单。" />}
         {paymentMethod === 'alipay' && alipayOrder?.status === 'paid' && <Alert showIcon type="success" message="支付宝付款成功，会员权益已开通。" />}
         {paymentMethod === 'alipay' && paymentError && <Alert showIcon type="error" message={paymentError} action={alipayOrder?.orderId ? <Button onClick={() => getJson(`/api/payments/alipay/orders/${encodeURIComponent(alipayOrder.orderId)}`).then(setAlipayOrder).catch(failure => setPaymentError(failure.message || '订单查询失败'))}>重试查询</Button> : undefined} />}
         {paymentMethod === 'cloudcat' && product.redemptionEnabled !== false && <Button block type="link" disabled={!preview || Boolean(previewError)} onClick={() => redeemInput.current?.focus()}>已有兑换码，直接开通 ↓</Button>}
