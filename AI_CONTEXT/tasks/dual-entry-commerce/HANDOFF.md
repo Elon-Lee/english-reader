@@ -23,6 +23,8 @@
 
 ## 验证与发布状态
 
+- 2026-11-13已按用户要求补装国内两域Let’s Encrypt HTTPS/80→443跳转，`https_deferred:false`；不发布业务代码，current仍#23，国内5174/国际5173/API8790拓扑保持。严格公网TLS、双域HTTP308、Chrome真实验证码生成、国际健康验证通过；43项入口/双入口部署回归通过。续期定时器已active/enabled；详情及续期验收见 [博客分站交接](../blog-domains/HANDOFF.md)。
+
 - 最新为国内博客页脚布局发布 **#23 complete**，`current=code-20261113-103129-858fe5ab`、源码 `ce05402`；两前端/博客/后端同步升级，备案居中/版权靠右/移除页脚导航已公网验证，国际健康正常。详情见博客交接。
 
 - 最新为备案号展示发布 **#22 complete**：`current=code-20261113-102413-ab033c51`、源码 `6d892f4`（clean），同步升级两前端/博客/后端；国内博客页脚真实备案号及工信部链接已公网Chrome验证，国际健康正常。仅国内博客配置变化，详情见 [博客交接](../blog-domains/HANDOFF.md)。
@@ -49,7 +51,7 @@
 - **端口开放发布#18 complete**：`current=code-20261112-143047-2b622ca0`，源码 `0e0ea91`（clean），包SHA-256 `cd6517ff8b78aa160b9e75723cc940d889c630a720e0e9c4db401636c32656ab`。持久化sites.json已开启 `cn_public_preview:true`；修改前配置备份 `shared/config/sites-before-public-preview-20261112.json`。
 - 本轮34项入口/部署相关测试、120项完整部署回归、Python编译、diff-check、发布双构建/博客隔离及候选检查通过。公网 `http://117.72.209.44:5174/` 和3个入口资源均200，Chrome实际打开无页面异常；IP API404、learn登录200、国际200与公网健康正常。实际监听0.0.0.0:5174，5173/8790仍127.0.0.1，数据仍1用户/2书目/2内容书。浏览器截图 `/private/tmp/cn-public-preview-20261112.png`。
 - 后续普通保数据升级自动读取sites.json v2；不要完整重装。源码与两份前端使用同一提交，共同阅读业务只改一次。
-- 待用户配置learn A=`117.72.209.44`及京东云域名放行后，补装国内两域HTTPS/续期并严格公网验收；按 `docs/DEPLOYMENT_SITES.md` 读取保存的5174端口。
+- 国内两域A解析至117.72.209.44、HTTPS与80跳443已于2026-11-13验收；后续升级继续读取已保存的5174端口与 `https_deferred:false`，不要重新延后HTTPS。
 - Cloudflare仍回源京东云，不能视为境外部署或备案结论。真实支付还需获批渠道配置、国际回调地址及实际联调，保留待办。
 - 节点2GiB，临时1GiB swap `/var/lib/shiyue/paper-glow-deploy-20261111.swap` 未写fstab，重启需恢复。
 

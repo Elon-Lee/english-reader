@@ -8,6 +8,8 @@
 
 ## 当前状态
 
+- 2026-11-13国内learn验证码403定位为HTTP页面Origin与可信HTTPS地址不一致（`invalid_origin`）；未放宽同源校验。按用户要求补装国内两域Let’s Encrypt并启用HTTP308跳HTTPS后，真实Chrome登录入口生成验证码200、旋转图可见，Secure/HttpOnly/SameSite=Strict Cookie正常；未提交账号登录。配置与续期状态见 [博客分站交接](../blog-domains/HANDOFF.md)。
+
 - 2026-11-08 本地验证码改为本机 Java + 本机 Redis + 本机 PostgreSQL，共享密钥由 `.local/local-dev/config.json` 自动生成并持久保存（0600）。旧 SSH 调试启动器与转发已删除，不再恢复远程连接。
 - 全部服务统一由 `./start-reader.sh --saas-local` 启动；首装、跨会话启动和排错以 [本地开发指南](../../../docs/LOCAL_DEVELOPMENT.md) 为准。真实 Chrome 已验证登录/注册/找回密码三入口出图，并以真实旋转票据登录本地管理员，认证/管理员/CSRF限制保留。
 - 当前测试：`tools/test_local_captcha_browser.cjs`（三入口出图），`tools/test_local_dev_browser.cjs`（完整本地验证码登录和管理员权限）；Java8项、Python验证码7项、本地独立库/Redis隔离集成与HTTP smoke通过。详细依赖和验证见 [local-development](../local-development/HANDOFF.md)。

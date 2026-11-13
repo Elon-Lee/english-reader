@@ -1,6 +1,10 @@
 # 国内与国际入口部署
 
-更新时间：2026-11-12。本文记录本轮实现约定；真实发布版本、外部域名验收结果以 `AI_CONTEXT/tasks/dual-entry-commerce/HANDOFF.md` 为准。
+更新时间：2026-11-13。本文记录本轮实现约定；真实发布版本、外部域名验收结果以 `AI_CONTEXT/tasks/dual-entry-commerce/HANDOFF.md` 为准。
+
+2026-11-13已完成国内 `rynenglish.com`、`learn.rynenglish.com` 的Let’s Encrypt证书与HTTP80→HTTPS443（308，保留路径/查询参数，ACME路径除外）。HTTPS入口转国内5174，国际仍由Cloudflare转5173。`sites.json` 已保存 `https_deferred:false`；后续普通升级不得传 `--defer-https`。这是入口配置操作，未发布业务代码。
+
+证书有效至2027-02-11；续期脚本 `/var/lib/shiyue/https/57dfc879ad04/renew.sh`，定时器 `shiyue-https-renew-57dfc879ad04.timer` 每日03:00/15:00检查续期。证书/配置独立保存在 `/var/lib/shiyue/https/57dfc879ad04/`，不放入Git或应用发布目录。HTTP80的ACME验证路径须继续可用。
 
 同一源码提交构建两份 React：`reader/site/` 为国内应用，`reader/site-intl/` 为国际应用；`reader/blog/` 为国内独立 Astro 博客。部署包同时包含三份构建产物与共享 Python 后端。国内构建单独检查商业接口残留，国际构建允许商业模块。
 
@@ -55,7 +59,7 @@ PATH=/Users/elonlee/.nvm/versions/node/v24.14.0/bin:$PATH \
 npm run deploy:jdcloud -- --identity-file <已授权私钥路径>
 ```
 
-服务器已保存 `https_deferred:true` 时继续保留国内HTTPS待办；该命令不会把初始化重装作为默认路径。若本机默认Python缺少项目依赖，直接用 `.local/saas-venv/bin/python tools/deploy_remote.py --target 1 --upgrade --identity-file <已授权私钥路径>`，与npm命令使用同一发布流程。
+服务器当前已保存 `https_deferred:false`，普通升级保持国内HTTPS；该命令不会把初始化重装作为默认路径。若本机默认Python缺少项目依赖，直接用 `.local/saas-venv/bin/python tools/deploy_remote.py --target 1 --upgrade --identity-file <已授权私钥路径>`，与npm命令使用同一发布流程。
 
 首次显式启用双入口：
 

@@ -2,6 +2,13 @@
 
 更新时间：2026-11-13（Asia/Shanghai）
 
+## 国内 HTTPS 已启用（2026-11-13）
+
+- 用户授权 Let’s Encrypt 与80自动跳443，使用现有 `--https-entry` 入口配置流程，为 `learn.rynenglish.com` 和 `rynenglish.com` 分别签发证书，有效至2027-02-11。国内HTTPS仍转5174；HTTP返回308并保留路径/查询参数，ACME验证路径除外。`sites.json` 已保存 `https_deferred:false`，后续升级不得再传 `--defer-https`。
+- 未发布业务代码；`current` 保持#23的 `code-20261113-103129-858fe5ab`。国际5173/Cloudflare与API8790保持原拓扑。入口配置备份：`/var/lib/shiyue/https/57dfc879ad04/backups/entry-20261113-105721-02187a67`。
+- 公网固定真实IP的严格TLS检查：博客200、learn健康正常，两域HTTP308；真实Chrome从HTTP登录页跳HTTPS后验证码生成200、旋转图片可见、匿名Cookie为Secure/HttpOnly/SameSite=Strict，未提交账号登录。博客备案显示正常，国际HTTPS健康正常。43项入口/集成/双入口部署测试通过。
+- 续期定时器 `shiyue-https-renew-57dfc879ad04.timer` 已active/enabled，每日03:00/15:00运行，脚本 `/var/lib/shiyue/https/57dfc879ad04/renew.sh`。`--dry-run --run-deploy-hooks` 两域模拟续期及Nginx语法检查/重载均通过。入口日志 `/private/tmp/english-reader-https-entry.log`，续期日志 `/private/tmp/english-reader-https-renew.log`，浏览器截图 `/private/tmp/english-reader-https-captcha.png`。
+
 ## 本轮：AI英语工具主题
 
 - **最新页脚发布#23 complete**：`current=code-20261113-103129-858fe5ab`，源码 `ce05402`（clean），同步保数据升级两前端/博客/后端。左侧站点介绍、中间备案号、右侧版权，删除底部归档/标签/RSS链接；小屏堆叠且版权右对齐。仅国内博客 `Footer.astro`/`paper.css` 改动。构建/51页19篇审计/diff-check通过，本地与公网Chrome测量备案中心及版权右边缘对齐，公网HTML匹配本地，国际HTTPS健康正常；截图 `/private/tmp/footer-layout-production.png`。构建产物已恢复，沿用#21临时locale过滤包装。
@@ -41,9 +48,9 @@
 
 ## 运行配置与外部待办
 
-- `sites.json` v2保持 `blog_domain=rynenglish.com`、`public_domain=learn.rynenglish.com`、`intl_domain=10ye.cc`、`frontend_port=5174`、`intl_frontend_port=5173`、`cn_public_preview=true`、`https_deferred=true`。
+- `sites.json` v2保持 `blog_domain=rynenglish.com`、`public_domain=learn.rynenglish.com`、`intl_domain=10ye.cc`、`frontend_port=5174`、`intl_frontend_port=5173`、`cn_public_preview=true`、`https_deferred=false`。
 - 国内5174为0.0.0.0固定IP静态博客预览，国内Nginx转5174；国际与API仍回环5173/8790，Cloudflare沿用5173。后续普通升级自动恢复该配置，不要完整重装。
-- 国内learn解析、京东云域名放行与国内两域公网HTTPS为既有外部待办，本轮未处理，不能把IP预览当作域名HTTPS完成。条件齐备后仅补装HTTPS入口，见部署文档。
+- 国内两域解析与公网HTTPS已在2026-11-13实际验收，详见上方HTTPS状态；IP5174仍仅用于博客预览。
 - `blog/src/config.ts` 的 `icpRecord` 已按用户提供填写 `蜀ICP备2026071122号-1`；备案号变更以用户提供的实际号码为准。
 - 服务器2GiB，临时1GiB swap `/var/lib/shiyue/paper-glow-deploy-20261111.swap` 未写fstab，重启需恢复。
 
@@ -52,4 +59,4 @@
 - `blog/src/categories.ts`：栏目slug、名称与描述；`content.config.ts`：强制栏目枚举；`content/posts/*.md`：文章。写作/主题来源/命令见 `blog/README.md`。
 - `pages/[...lang]/index.astro`、`categories/[category].astro`、`archives.astro`；`components/PostCard.astro`、Header/Navbar/Footer；`styles/paper.css`、`public/images/paper-light.svg`。
 - `reader/blog/` 为忽略的构建输出，不手改。Node24运行 `npm --prefix blog run build` 和 `npm --prefix blog run verify`，再 `git diff --check`。本轮无Python改动，无需Python编译。
-- `tools/saas_frontend_server.py` 精确Host分站；`tools/deployment/manager.py` 负责保数据升级与回退，`https_entry.py` 负责独立证书/续期。后续升级沿用 `tools/deploy_remote.py --target 1 --upgrade --defer-https --identity-file <已授权路径>`；不要把密钥或令牌写入文档。
+- `tools/saas_frontend_server.py` 精确Host分站；`tools/deployment/manager.py` 负责保数据升级与回退，`https_entry.py` 负责独立证书/续期。后续升级沿用 `tools/deploy_remote.py --target 1 --upgrade --identity-file <已授权路径>`；不要添加 `--defer-https`，不要把密钥或令牌写入文档。
