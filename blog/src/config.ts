@@ -39,8 +39,8 @@ export const themeConfig: ThemeConfig = {
   footer: { links: [{ name: 'RSS', url: '/rss.xml' }], startYear: 2026 },
 }
 
-// 取得真实备案号后填写；空值时不渲染备案链接。
-export const icpRecord = ''
+// 用户提供的备案号；统一在国内博客页脚展示并链接工信部查询。
+export const icpRecord = '蜀ICP备2026071122号-1'
 export const base = themeConfig.site.base === '/' ? '' : themeConfig.site.base.replace(/\/$/, '')
 export const defaultLocale = themeConfig.global.locale
 export const moreLocales = themeConfig.global.moreLocales

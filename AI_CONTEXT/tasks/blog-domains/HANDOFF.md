@@ -4,6 +4,8 @@
 
 ## 本轮：AI英语工具主题
 
+- 用户已提供备案号 `蜀ICP备2026071122号-1`，本轮填写国内博客 `blog/src/config.ts` 的 `icpRecord`，沿用公共页脚链接工信部备案查询；首页及博客各页面一致展示。仅国内博客扩展，沿当前 `feat/blog-ai-english-tools` 分支保留已发布主题，仍双程序同步发布。验证与线上结果接续更新。
+
 - 用户授权修改并发布国内博客；从 `main@05e92cc` 创建 `feat/blog-ai-english-tools`。仅国内博客扩展，国际与共享阅读/API/数据库无改动，发布仍同时交付两前端/博客/后端。
 - 新增导航首位 `english-tools` 英语工具，4篇2026-11-13原创文章：词汇卡、情景口语、英文写作反馈、原音听力复盘。原 `prompt-notes` 栏目删除，3篇原文章移至 `ai-reading`，保留URL和发布日期。栏目当前4/3/9/3，共19篇。
 - 首页、精选、英语工具箱、学习路线、插画、站点描述/标语、关于与页脚统一AI英语学习定位；公开内容是方法与模板文章。保留纸色版式与全本地资源，无新增业务接口。
@@ -39,7 +41,7 @@
 - `sites.json` v2保持 `blog_domain=rynenglish.com`、`public_domain=learn.rynenglish.com`、`intl_domain=10ye.cc`、`frontend_port=5174`、`intl_frontend_port=5173`、`cn_public_preview=true`、`https_deferred=true`。
 - 国内5174为0.0.0.0固定IP静态博客预览，国内Nginx转5174；国际与API仍回环5173/8790，Cloudflare沿用5173。后续普通升级自动恢复该配置，不要完整重装。
 - 国内learn解析、京东云域名放行与国内两域公网HTTPS为既有外部待办，本轮未处理，不能把IP预览当作域名HTTPS完成。条件齐备后仅补装HTTPS入口，见部署文档。
-- `blog/src/config.ts` 的 `icpRecord` 仍为空；取得真实备案号后填写并重新构建发布，不编造号码。
+- `blog/src/config.ts` 的 `icpRecord` 已按用户提供填写 `蜀ICP备2026071122号-1`；备案号变更以用户提供的实际号码为准。
 - 服务器2GiB，临时1GiB swap `/var/lib/shiyue/paper-glow-deploy-20261111.swap` 未写fstab，重启需恢复。
 
 ## 关键文件与接续命令
