@@ -127,10 +127,12 @@ class WorkspaceAIService:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT value_json FROM platform_settings WHERE key='ai.dioco'");row=self.accounts._one(cursor);config=as_json(row["value_json"]) if row else {}
         token=str(config.get("token","")or"").strip();email=str(config.get("email","")or"").strip();upstream=str(config.get("upstream","")or self.upstream).rstrip("/")
-        if not token or not email:raise SaaSError("ai_provider_unavailable","平台 AI 服务尚未配置。",503)
         if result_type=="word_context":instruction="请用简洁准确的中文解释这个英文单词在当前句和上下文中的具体含义、搭配与语气。<WORD>：<CONTEXT>";word=prompt["word"];sentence=prompt["contextSentence"];expanded=prompt["expandedContext"]
         else:instruction=f"请用简洁准确的中文讲解这句英文的句型、主干、从句、时态语态和学习重点。已有结构：{json.dumps(prompt.get('structure',{}),ensure_ascii=False)}。原句：<CONTEXT>";word="sentence grammar";sentence=prompt["sentence"];expanded=sentence
-        body={"promptWithPlaceHolders_translated":instruction,"contextSentence":sentence,"expandedContext":expanded,"word":word,"userLanguage_G":"zh-CN","studyLanguage_G":"en","diocoToken":token,"userEmail":email}
+        body={"promptWithPlaceHolders_translated":instruction,"contextSentence":sentence,"expandedContext":expanded,"word":word,"userLanguage_G":"zh-CN","studyLanguage_G":"en"}
+        # The provider supports requests without credentials. Keep complete
+        # optional platform credentials compatible, without sending empty fields.
+        if token and email:body.update(diocoToken=token,userEmail=email)
         request=Request(upstream+"/base_lexa_generate",data=json.dumps(body,ensure_ascii=False).encode(),headers={"Accept":"application/json, text/plain, */*","Content-Type":"application/json","Origin":"https://www.youtube.com","Referer":"https://www.youtube.com/","User-Agent":"Mozilla/5.0"},method="POST")
         try:
             with urlopen(request,timeout=45) as response:raw=json.loads(response.read())

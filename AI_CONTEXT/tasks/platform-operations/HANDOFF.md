@@ -1,5 +1,13 @@
 # 平台运营与部署交接
 
+## 2026-11-13 AI免Token修复（当前）
+
+- 用户反馈线上“本句分析暂不可用／平台AI服务尚未配置”，并明确现在应使用免Token服务。线上 `platform_settings.ai.dioco` 无记录；`WorkspaceAIService._dioco_generate` 在访问上游前强制邮箱/Token，导致503。服务器对同一Dioco接口不带凭据的真实合成文本请求已返回200及generation，根因确认。
+- 共享核心修复：`tools/saas_ai.py` 默认省略凭据直接调用上游；已有完整邮箱/Token仍可选兼容，自定义upstream保留。不修改认证、CSRF、租户访问、缓存、配额及失败释放。平台设置页面邮箱/Token改为可选，默认标记免Token模式，清除Token提示同步。
+- `tools/test_saas_ai_provider.py` 6项先复现失败后通过（无配置/空配置/部分凭据/已有凭据/错误/空结果）；专用 `shiyue_ai_tokenless_regression_test` 数据库下4项AI缓存/权限/扣量回归通过，未使用正式库运行夹具。真实免Token调用国内word_context与国际sentence_grammar均返回非空结果。
+- 双React/博客构建、国内商业隔离、51页19文章博客审计、双站浏览器fixtures、modern/UI/JS、32项网关/站点/双入口部署/博客部署回归、Python编译/diff-check通过。首次浏览器命令环境变量只作用于前半段导致缺Playwright，补全环境后通过。
+- 待从同一源码提交同步发布两前端/博客/后端，并验证生产生成结果。保留已启用的国内Let’s Encrypt与 `https_deferred:false`，详情见博客交接。无数据库迁移，不清理用户内容或修改平台凭据。
+
 ## 2026-11-12 国内/国际并行（当前优先）
 
 - 最新#18已发布 `code-20261112-143047-2b622ca0`（源码 `0e0ea91`）。用户授权国内5174监听0.0.0.0供测试，`cn_public_preview:true`持久化；公网IP仅显示博客，API404，Chrome及资源200验收通过。国际5173/API8790仍回环。关闭方式见部署文档；其余双入口与外部待办不变。
