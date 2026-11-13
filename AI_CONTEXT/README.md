@@ -22,6 +22,8 @@
 
 ## 跨任务状态
 
+- 最新页脚微调已随京东云#23同步发布，`current=code-20261113-103129-858fe5ab`、源码 `ce05402`：国内备案号居中、版权靠右、移除页脚导航；公网布局与国际健康验证通过。以下#22为备案号首次上线记录。
+
 - 国内/国际并行在 `feat/dual-entry-commerce` 实施并经用户验收，本轮归入主线 `main`：国际回环5173、国内5174、共享回环API8790。用户已授权国内5174监听0.0.0.0供IP博客预览，配置 `cn_public_preview:true`；实际发布状态以 [双入口交接](tasks/dual-entry-commerce/HANDOFF.md) 为准，端口文档见 `docs/DEPLOYMENT_SITES.md`。
 - 私域改造 `810f19a`、博客分站 `3c0c77b` 与后续双入口/AI博客改版均包含在本轮主线合并范围；原 `refactor/private-paper-glow`、`feat/paper-glow-blog-domains` 为历史实施分支，后续不作为独立业务主线。本地栈入口 `http://127.0.0.1:4173`。
 - 国内品牌为“纸间微光”，标语“一页一光，静读慢行。”；国际恢复RynEnglish首页与商业素材，通过独立构建隔离。
