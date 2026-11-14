@@ -3,4 +3,6 @@ kokoro==0.9.4
 numpy==1.26.4
 transformers==4.46.3
 spacy==3.7.5
+# spaCy imports Click directly; recent Typer releases no longer install it.
+click>=8.1,<9
 soundfile>=0.12,<1
