@@ -114,6 +114,126 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
                         self.assertEqual(cursor.fetchone()[0],'draft' if official else 'private')
                 self.assertNotEqual((cgroup/'cgroup.procs').read_text(),str(os.getpid()))
 
+    def test_online_single_active_import_is_atomic_and_idempotent_across_scopes(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        owner=str(self.owner['id']);barrier=threading.Barrier(2)
+        def create(index):
+            barrier.wait()
+            try:return self.imports.create(owner,'text','One import','one.txt',f'atomic-{index}')['task']
+            except SaaSError as error:return error.code
+        with patch.dict(self.environment,{'SHIYUE_DEPLOYMENT_MODE':'remote','SHIYUE_IMPORT_DISPATCHER':'0'}):
+            with ThreadPoolExecutor(2) as pool:results=list(pool.map(create,[0,1]))
+            self.assertEqual(results.count('import_already_active'),1)
+            task=next(result for result in results if isinstance(result,dict))
+            index=results.index(task)
+            self.assertTrue(self.imports.create(owner,'text','One import','one.txt',f'atomic-{index}')['idempotent'])
+            # Another user may upload while this one is occupied.
+            self.imports.create(str(self.other['id']),'text','Other','other.txt','other')
+            with self.accounts.transaction() as connection:
+                connection.execute("INSERT INTO user_roles(user_id,role_id) SELECT %s,id FROM roles WHERE name='admin'",(owner,))
+            official=WorkspaceImportService(self.accounts,self.resources,self.media,official=True)
+            with self.assertRaises(SaaSError) as error:official.create(owner,'text','Official','official.txt','official')
+            self.assertEqual(error.exception.code,'import_already_active')
+            self.imports.cancel(owner,task['id'])
+            self.assertEqual(official.create(owner,'text','Official','official.txt','official')['task']['status'],'uploading')
+
+    def test_online_queue_runs_real_isolated_worker_with_memory_budget(self):
+        from import_queue import dispatch_once
+        from import_resource_limits import MemoryCgroup
+        from unittest.mock import Mock
+        cgroup=Path(self.temp.name)/'queue-cgroup';cgroup.mkdir(exist_ok=True)
+        (cgroup/'cgroup.procs').write_text('')
+        settings={'SHIYUE_DEPLOYMENT_MODE':'remote','SHIYUE_IMPORT_DISPATCHER':'0',
+                  'SHIYUE_IMPORT_MEMORY_MB':'256','SHIYUE_IMPORT_SWAP_MB':'0',
+                  'SHIYUE_IMPORT_CGROUP':str(cgroup),'SHIYUE_IMPORT_LOCK':str(Path(self.temp.name)/'queue-memory.lock')}
+        with patch.dict(self.environment,settings):
+            for official,user in ((False,str(self.owner['id'])),(True,str(self.admin['id']))):
+                service=WorkspaceImportService(self.accounts,self.resources,self.media,official=official)
+                task=service.create(user,'text','Budget queue','budget.txt','budget-'+str(official))['task']['id']
+                service.upload(user,task,'budget.txt',b'The reader opens a book.','text/plain')
+                self.assertTrue(service.complete(user,task)['asynchronous'])
+                group=Mock(spec=MemoryCgroup,root=cgroup);group.counters.return_value=(0,0)
+                with patch('import_resource_limits.MemoryCgroup',return_value=group):
+                    self.assertTrue(dispatch_once(self.imports))
+                self.assertEqual(service.list(user)['tasks'][0]['status'],'complete')
+
+    def test_online_retry_cannot_bypass_user_limit_or_reuse_old_queue_order(self):
+        from import_queue import dispatch_once
+        owner=str(self.owner['id'])
+        with patch.dict(self.environment,{'SHIYUE_IMPORT_SERIAL':'1','SHIYUE_IMPORT_DISPATCHER':'0'}):
+            first=self.imports.create(owner,'text','First','first.txt','first')['task']['id']
+            self.imports.upload(owner,first,'first.txt',b'First sentence.','text/plain')
+            self.imports.submit_complete(owner,first)
+            with self.accounts.transaction() as connection:
+                old_order=connection.execute('SELECT queue_order FROM workspace_import_tasks WHERE id=%s',(first,)).fetchone()[0]
+            self.imports.fail(owner,first,'fixture')
+            second=self.imports.create(owner,'text','Second','second.txt','second')['task']['id']
+            with self.assertRaises(SaaSError) as error:self.imports.retry(owner,first)
+            self.assertEqual(error.exception.code,'import_already_active')
+            with self.assertRaises(SaaSError):self.imports.upload(owner,first,'first.txt',b'Replaced.')
+            self.imports.cancel(owner,second)
+            self.imports.retry(owner,first)
+            self.imports.submit_complete(owner,first)
+            with self.accounts.transaction() as connection:
+                new_order=connection.execute('SELECT queue_order FROM workspace_import_tasks WHERE id=%s',(first,)).fetchone()[0]
+            self.assertGreater(new_order,old_order)
+            self.assertTrue(dispatch_once(self.imports))
+            self.assertEqual(self.imports.list(owner)['tasks'][-1]['status'],'complete')
+
+    def test_online_queue_is_fifo_serial_across_services_and_survives_dispatcher_restart(self):
+        from import_queue import dispatch_once
+        import threading
+        owner,other,admin=map(lambda user:str(user['id']),(self.owner,self.other,self.admin))
+        official=WorkspaceImportService(self.accounts,self.resources,self.media,official=True)
+        with patch.dict(self.environment,{'SHIYUE_IMPORT_SERIAL':'1','SHIYUE_IMPORT_DISPATCHER':'0'}):
+            first=self.imports.create(owner,'text','First','first.txt','fifo-first')['task']['id']
+            second=self.imports.create(other,'text','Second','second.txt','fifo-second')['task']['id']
+            waiting=official.create(admin,'text','Waiting upload','waiting.txt','fifo-wait')['task']['id']
+            for user,task in ((owner,first),(other,second)):
+                self.imports.upload(user,task,'source.txt',b'The reader opens a book.','text/plain')
+            # FIFO starts at processing submission, not task creation/upload.
+            self.imports.submit_complete(other,second)
+            self.imports.submit_complete(owner,first)
+            started=threading.Event();release=threading.Event();order=[];errors=[]
+            direct=WorkspaceImportService._complete_locked
+            def process(service,user,task):
+                order.append(task);started.set()
+                if not release.wait(5):raise AssertionError('fixture release timeout')
+                return direct(service,user,task)
+            fresh=WorkspaceImportService(self.accounts,self.resources,self.media)
+            def run():
+                try:dispatch_once(fresh)
+                except Exception as error:errors.append(error)
+            with patch.object(WorkspaceImportService,'_complete_locked',process):
+                thread=threading.Thread(target=run);thread.start()
+                try:
+                    self.assertTrue(started.wait(5))
+                    # A separate service cannot start a second processing tree.
+                    self.assertFalse(dispatch_once(official))
+                    self.assertEqual(order,[second])
+                finally:release.set();thread.join(10)
+            self.assertFalse(thread.is_alive());self.assertEqual(errors,[])
+            self.assertTrue(dispatch_once(official))
+            self.assertEqual(self.imports.list(owner)['tasks'][0]['status'],'complete')
+            self.assertEqual(official.list(admin)['tasks'][0]['id'],waiting)
+            self.assertFalse(dispatch_once(fresh))
+
+    def test_online_cancelled_queue_head_does_not_block_official_import(self):
+        from import_queue import dispatch_once
+        owner,admin=str(self.owner['id']),str(self.admin['id'])
+        official=WorkspaceImportService(self.accounts,self.resources,self.media,official=True)
+        with patch.dict(self.environment,{'SHIYUE_IMPORT_SERIAL':'1','SHIYUE_IMPORT_DISPATCHER':'0'}):
+            first=self.imports.create(owner,'text','Cancel','cancel.txt','fifo-cancel')['task']['id']
+            self.imports.upload(owner,first,'cancel.txt',b'Cancelled sentence.','text/plain')
+            self.imports.submit_complete(owner,first)
+            second=official.create(admin,'text','Official','official.txt','fifo-official')['task']['id']
+            official.upload(admin,second,'official.txt',b'Official sentence.','text/plain')
+            official.submit_complete(admin,second)
+            self.imports.cancel(owner,first)
+            self.assertTrue(dispatch_once(self.imports))
+            self.assertEqual(official.list(admin)['tasks'][0]['status'],'complete')
+
     def test_limited_worker_oom_persists_clear_failure_and_cleans_only_staging(self):
         from unittest.mock import Mock
         from import_resource_limits import MemoryCgroup

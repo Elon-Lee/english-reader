@@ -1745,6 +1745,9 @@ if __name__ == "__main__":
     host=os.environ.get("READER_HOST","0.0.0.0")
     port=int(os.environ.get("READER_PORT","8765"))
     server=ReaderHTTPServer((host,port),Handler)
+    if SAAS.enabled:
+        from import_queue import start_dispatcher
+        start_dispatcher(WORKSPACE_IMPORTS)
     secure=bool(certificate and private_key)
     if secure:
         context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(certificate,private_key);server.socket=context.wrap_socket(server.socket,server_side=True)

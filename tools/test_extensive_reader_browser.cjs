@@ -85,7 +85,7 @@ function audioFixture() {
     const savedId = progress.at(-1)?.lastSentenceId
     assert.ok(savedId)
     // Reflow keeps a word on the previously visible page anchored after a font change.
-    await page.getByRole('button', { name: 'Aa 阅读设置' }).click()
+    await page.getByRole('button', { name: '阅读设置', exact: true }).click()
     await page.locator('.reader-appearance-modal .ant-slider').first().click({ position: { x: 300, y: 6 } })
     await page.getByRole('button', { name: '保存阅读设置', exact: true }).click()
     await page.waitForTimeout(300)

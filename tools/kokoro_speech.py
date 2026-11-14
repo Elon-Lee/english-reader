@@ -89,12 +89,17 @@ def attach_timing(data, result, request):
             if len(words) != len(sentence['words']):
                 raise ValueError('invalid narration word count')
             word_end = start
+            previous_interval = None
             for word, measured in zip(sentence['words'], words):
                 a, b = float(measured['start']), float(measured['end'])
-                if measured['text'] != word['text'] or not word_end <= a < b <= end:
+                group = measured.get('timingGroup')
+                shared = isinstance(group,str) and bool(group) and previous_interval == (a,b,group)
+                if measured['text'] != word['text'] or not math.isfinite(a) or not math.isfinite(b) or not start <= a < b <= end or (a < word_end and not shared):
                     raise ValueError('invalid narration word timeline')
                 word.update(start=a, end=b, timingSource='kokoro-predicted-duration', estimated=True)
+                if group:word['timingGroup']=group
                 word_end = b
+                previous_interval = (a,b,group)
                 timed_words += 1
     data.update(duration=duration, alignment='kokoro-sentence-audio', speechSynthesis={
         'engine': 'kokoro', 'model': 'hexgrad/Kokoro-82M', 'version': '1.0',

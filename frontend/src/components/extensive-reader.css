@@ -8,6 +8,7 @@
 .modern-reader.extensive-mode .reader-save-status { display: none; }
 .modern-reader.extensive-mode .reader-head .ant-btn { border-color: transparent; box-shadow: none; background: transparent; font-size: 13px; }
 .modern-reader.extensive-mode .reader-head .reader-focus-switch { color: var(--reader-accent); }
+.modern-reader.extensive-mode .reader-head .reader-appearance-button { color: var(--reader-accent); border-color: var(--reader-accent); background: var(--reader-selection); font-weight: 600; }
 .modern-reader.extensive-mode .reader-head .reader-finish-button { border: 1px solid var(--reader-border); border-radius: 6px; }
 .modern-reader.extensive-mode .reader-workspace { display: none; }
 .modern-reader.extensive-mode.reader-tools-open .reader-workspace { display: contents; padding: 0; }

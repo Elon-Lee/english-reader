@@ -543,6 +543,7 @@ def saas_app_run_command(target,release_path,name="shiyue-saas",port=None,restar
     if restart:options.append("--restart unless-stopped")
     options += ["--network host",f"--env-file {root}/shared/config/saas.env","-e READER_HOST=127.0.0.1",f"-e READER_PORT={port}","-e SHIYUE_RUNTIME_MODE=saas","-e SHIYUE_DEPLOYMENT_MODE=remote","-e SHIYUE_SAAS_ENABLED=1","-e MEDIA_ROOT=/app/books","-e SAAS_BACKUP_ROOT=/state/backups/saas","-e SHIYUE_PDF_OCR=/opt/shiyue/pdf_ocr","-e SHIYUE_YTDLP=/usr/local/bin/yt-dlp","-e SHIYUE_NODE=/usr/bin/node",
       f"-v {release}/reader:/app/reader:ro,z",f"-v {release}/tools:/app/tools:ro,z",f"-v {root}/shared/books:/app/books:z",f"-v {root}/shared/.local:/app/.local:z",f"-v {root}/shared/cache:/app/.cache:z",f"-v {root}/backups:/state/backups:z"]
+    options.append(f"-e SHIYUE_IMPORT_DISPATCHER={'0' if name.endswith('-candidate') else '1'}")
     # Delegate only this service's import group, never the host cgroup tree or
     # Docker socket. Docker recreates the cgroup directory after a host reboot.
     options.append('-v "$(if [ -f /sys/fs/cgroup/cgroup.controllers ]; then printf %s /sys/fs/cgroup/shiyue-imports; else printf %s /sys/fs/cgroup/memory/shiyue-imports; fi):/run/shiyue-import-cgroup:rw"')

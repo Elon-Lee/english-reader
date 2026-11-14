@@ -84,6 +84,9 @@ class ImportResourceLimitTests(unittest.TestCase):
         self.assertIn(':/run/shiyue-import-cgroup:rw', command)
         self.assertNotIn('--privileged', command)
         self.assertNotIn('docker.sock', command)
+        self.assertIn('SHIYUE_IMPORT_DISPATCHER=1',command)
+        candidate=manager.saas_app_run_command({'remote_root':'/srv/shiyue','install_recording':False},'/srv/shiyue/candidate',name='shiyue-saas-candidate')
+        self.assertIn('SHIYUE_IMPORT_DISPATCHER=0',candidate)
 
     def test_upgrade_adds_defaults_and_preserves_explicit_limit_and_secrets(self):
         with tempfile.TemporaryDirectory() as folder:

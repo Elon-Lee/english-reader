@@ -53,10 +53,26 @@ class KokoroSpeechTests(unittest.TestCase):
         sentence = {'start': 0, 'end': 2, 'words': [{'text': 'Hello'}, {'text': 'world'}]}
         tokens = [('Hello', .1, .5), (',', None, None), ('world', .6, 1.8)]
         self.assertEqual(len(word_timing(sentence, tokens)), 2)
-        for bad in [[('Hello world', .1, 1.8)], [('Hello', .1, .5)],
+        grouped=word_timing(sentence,[('Hello world', .1, 1.8)])
+        self.assertEqual([word['text'] for word in grouped],['Hello','world'])
+        self.assertEqual(grouped[0]['timingGroup'],grouped[1]['timingGroup'])
+        for bad in [[('Hello', .1, .5)],
                     [('Hello', .1, .5), ('world', .4, 1.8)],
                     [('Hello', .1, .5), ('world', .6, math.nan)]]:
             self.assertEqual(word_timing(sentence, bad), [])
+
+    def test_hyphenated_tokens_and_split_contractions_keep_native_intervals(self):
+        sentence={'id':'s-37','text':"The Stranger-man won't wait.",'start':0,'end':3,
+                  'words':[{'text':text} for text in ['The','Stranger','man',"won't",'wait']]}
+        tokens=[('The',0,.2),('Stranger-man',.2,1.2),('wo',1.3,1.5),("n't",1.5,1.6),('wait',1.7,2.8)]
+        words=word_timing(sentence,tokens)
+        self.assertEqual(len(words),5)
+        self.assertEqual((words[1]['start'],words[1]['end']),(.2,1.2))
+        self.assertEqual(words[1]['timingGroup'],words[2]['timingGroup'])
+        self.assertEqual((words[3]['start'],words[3]['end']),(1.3,1.6))
+        original={'sentences':[sentence]}
+        data=attach_timing(original,{'duration':3,'sentences':[dict(sentence,words=words)]},{'voice':'af_heart','speed':1})
+        self.assertEqual(data['sentences'][0]['words'][2]['timingGroup'],words[1]['timingGroup'])
 
     def test_attach_preserves_document_and_marks_predictions(self):
         original = {'sentences': [{'id': 's-1', 'text': 'Hello.', 'words': [{'text': 'Hello'}]}],

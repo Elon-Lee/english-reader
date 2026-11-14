@@ -2,6 +2,14 @@
 
 更新时间：2026-11-07（Asia/Shanghai）
 
+## 2026-11-14 朗读高亮、阅读设置与铺满（待统一发布）
+
+- 共享 `ReaderPage → ReaderSentence` 同时用于国内官方与国际私人PC阅读。真实本地最新《How the First Letter Was Written》第37句无单词时间，原因见import-media首节。保留原音时间与数据：已有无词时间的Kokoro句显示整句高亮；新导入连字符词用模型原始词组时间，组内词一起高亮，不伪造逐词时刻。
+- `readerSentence.mjs` 以原句空格/标点拆出可查词节点，保留原wordIndex；修复按钮紧连导致 `TheStrangerman...` 的视觉问题。非完全对应的历史分词仍按原索引显示，补实际空格。查词/收藏/同步继续走原API，未重处理或回填真实书籍。
+- “Aa”改为可见“阅读设置”及AntD书本图标，护眼主题下有醒目描边/底色；对话框同名。正文宽度最高档既有1040值现在表示“铺满”可用区域，取消工作区1680上限，不改账号偏好结构；保留其他宽度。1920px关闭工具时正文两侧32px，1280展开工具无横向溢出；不提前优化移动端。
+- 验证：23项Node（含原文标点/空格、wordIndex、词组与整句fallback）、真实Kokoro重跑37/41句成功，两站Chrome使用只读导出的151句实际书籍，验证37句整句高亮、38句实际词高亮、阅读设置保存/铺满/工具展开、1920/1280无溢出。原Kokoro双站导入/原音优先/实际解码/逐句暂停回归通过；两前端/博客构建与隔离、modern/UI/JS、Python编译/diff通过。
+- 关键文件：`ReaderPage.jsx`、`ReaderSentence.jsx`、`readerSentence.mjs` / `.test.mjs`、`styles.css`、`extensive-reader.css`；浏览器 `tools/test_reader_highlight_browser.cjs`，可用 `READER_TEST_BOOK` 指定只读导出。日志 `/private/tmp/queue-reader-{browser,real-kokoro,kokoro-browser}.log`；截图 `/private/tmp/english-reader-highlight-browser/`。发布状态见import-media/平台交接。
+
 ## 2026-11-13 本句分析免Token修复
 
 - 国内/国际共用 `saas_ai.py`，移除调用前旧邮箱/Token必填阻断，默认用现有上游免Token能力；完整可选凭据兼容。权限、缓存和失败不扣量逻辑保留。6项provider测试与4项隔离库AI回归通过；已随京东云#24同步发布源码 `5da28cc`，线上AI配置为空时两种生成均返回正确中文结果。未借用真实用户登录态做点击验收，详情以 [平台交接](../platform-operations/HANDOFF.md) 为准。

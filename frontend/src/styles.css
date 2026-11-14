@@ -317,7 +317,8 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
  .reader-study-workspace .reader-title-group h3{margin:0;font-size:19px;line-height:1.35}
  .reader-study-workspace .reader-save-status{font-size:12px;line-height:1.5;color:var(--reader-muted)}
  .reader-study-workspace .reader-head-actions .ant-btn{height:36px;font-size:13px;box-shadow:none}
- .reader-study-workspace .reader-appearance-button{height:36px;border-color:var(--reader-border);background:var(--reader-paper);color:var(--reader-ink);box-shadow:none}
+ .reader-study-workspace .reader-appearance-button{height:36px;border-color:var(--reader-accent);background:var(--reader-selection);color:var(--reader-accent);font-weight:600;box-shadow:none}
+ .reader-study-workspace.reader-width-full .reader-workspace{max-width:none}
  .reader-study-workspace .reader-focus-switch.active{color:var(--reader-accent)!important;border-color:#92a997!important;background:var(--reader-selection)!important}
  .reader-study-workspace .reader-workspace{flex:1;min-height:0;height:auto;max-height:none;width:100%;padding:0;overflow:hidden}
  .reader-study-workspace .reader-story{box-sizing:border-box;padding:16px 20px 36px;border:1px solid var(--reader-border);border-radius:12px;background:var(--reader-paper);overscroll-behavior:contain}
@@ -325,6 +326,8 @@ body { margin: 0; min-width: 320px; overflow-x: hidden; background: #f6f5f1; }
  .reader-study-workspace .reader-sentence{padding:20px 12px 20px 34px;border:0;border-bottom:1px solid var(--reader-border);border-radius:0;background:transparent!important;box-shadow:none;transition:none}
  .reader-study-workspace .reader-sentence:last-child{border-bottom-color:transparent}
  .reader-study-workspace .reader-sentence>p{margin:0;color:var(--reader-ink);font-family:Georgia,'Times New Roman',serif;font-weight:400}
+ .reader-study-workspace .reader-sentence .reader-word{margin-right:0}
+ .reader-study-workspace .reader-spoken-sentence{background:#e9906833;box-shadow:0 0 0 3px #e9906833;border-radius:3px;box-decoration-break:clone;-webkit-box-decoration-break:clone}
  .reader-study-workspace .reader-sentence>small{left:8px;top:26px;color:var(--reader-muted);font-size:12px}
  .reader-study-workspace .reader-sentence.active{background:var(--reader-selection)!important;box-shadow:inset 2px 0 #bb7656;transition:none}
  .reader-study-workspace .reader-sentence.learning-selected:not(.active){background:var(--reader-selection)!important;box-shadow:inset 2px 0 #608672}

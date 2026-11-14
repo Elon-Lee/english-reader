@@ -34,22 +34,46 @@ def speech_chunks(text, limit=0):
 
 
 def word_timing(sentence, tokens):
-    """Keep native model predictions only when they map exactly to display words."""
-    expected = [word['text'] for word in sentence['words']]
+    """Match lexical boundaries, retaining a model token's compound-word group.
+
+    A hyphenated model token may cover several display words; its measured
+    interval belongs to the entire group. Never divide it into guessed times.
+    """
+    def lexical(text):
+        return ''.join(WORD_RE.findall(text)).replace('’', "'").casefold()
+    expected = [lexical(word['text']) for word in sentence['words']]
     measured = []
     previous = float(sentence['start'])
     for text, start, end in tokens:
-        words = WORD_RE.findall(text)
-        if not words:
+        value = lexical(text)
+        if not value:
             continue
-        if len(words) != 1 or start is None or end is None:
+        if start is None or end is None:
             return []
         start, end = float(start), float(end)
         if not math.isfinite(start) or not math.isfinite(end) or not previous <= start < end <= sentence['end']:
             return []
-        measured.append({'text': words[0], 'start': start, 'end': end})
+        measured.append({'text': value, 'start': start, 'end': end})
         previous = end
-    return measured if [word['text'] for word in measured] == expected else []
+    if not all(expected) or ''.join(expected) != ''.join(word['text'] for word in measured):
+        return []
+    # Only boundaries shared by the model and the learning words split a group.
+    expected_ends, measured_ends = [], []
+    for word in expected:expected_ends.append((expected_ends[-1] if expected_ends else 0)+len(word))
+    for word in measured:measured_ends.append((measured_ends[-1] if measured_ends else 0)+len(word['text']))
+    boundaries = sorted(set(expected_ends) & set(measured_ends))
+    result=[]; first_word=first_token=0
+    for boundary in boundaries:
+        last_word=first_word
+        while expected_ends[last_word]<boundary:last_word+=1
+        last_token=first_token
+        while measured_ends[last_token]<boundary:last_token+=1
+        for index in range(first_word,last_word+1):
+            word={'text':sentence['words'][index]['text'], 'start':measured[first_token]['start'], 'end':measured[last_token]['end']}
+            if last_word>first_word:word['timingGroup']=f'kokoro-{first_word}-{last_word}'
+            result.append(word)
+        first_word,first_token=last_word+1,last_token+1
+    return result
 
 
 def synthesize(sentences, pipeline, voice, speed, audio_path, max_bytes):

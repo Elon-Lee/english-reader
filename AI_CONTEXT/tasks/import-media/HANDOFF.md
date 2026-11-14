@@ -1,10 +1,19 @@
 # 导入与媒体交接
 
-## 2026-11-14 导入进程内存限额（待统一发布）
+## 2026-11-14 线上单用户限制与全站FIFO（待统一发布）
 
-- 用户授权线上限制导入进程内存、本地可不限制。分支 `feat/import-memory-limits`；共享 `submit_complete → complete → import_resource_limits → import_resource_worker`，国内官方/国际私人导入同实现。限额开启后完整提取/下载/转写/合成进程树进入独立Linux内存cgroup，HTTP与数据库在组外；共享文件锁串行处理，两站预算不叠加，重复提交不重复创建监督线程。
+- 用户要求线上每用户同时只允许一个任务，全部导入串行；本地仍不默认限制。共享调用 `reader_server → WorkspaceImportService → import_queue → complete → import_resource_limits/worker`，覆盖国内管理员官方/国际私人、所有导入格式。新分支 `fix/import-queue-reader-highlights`，基于main `b67ea99`。
+- 用户行锁下校验上传/等待配套音频/排队/运行任务，私人/官方合并计数；创建幂等先返回旧任务，失败重试也检查，不允许失败任务绕过限制直接替换上传。完整文件显式提交处理时才分配数据库序号，未完成上传不占处理队首。
+- 增量迁移0048添加 `queue_order`/序列/索引；调度线程查询数据库FIFO，以共享PostgreSQL会话锁覆盖完整处理。排队不启动模型/处理器线程，取消/失败不挡后续任务；服务重启自动恢复已提交队列。原运行中断80分钟无进度恢复规则保留，从头重跑，不是句级续跑。内存设0仍保留线上串行。候选容器 `SHIYUE_IMPORT_DISPATCHER=0` 防止候选抢真实任务，正式进程=1。
+- 真实本地最新读物151句中22句无词时间；第37句与41句包含连字符词，模型合并token造成旧严格一对一映射放弃整句。已修复词组边界映射，保留模型真实时间范围，不均分；真实模型重跑37/41句分别16/20词完整映射。已有书籍由阅读器整句高亮兼容，不重生成音频、不回写数据；界面修复见reader交接。
+- 验证：隔离 `kokoro_import_20261114_test` 中phase8共37项通过（另补实际线上队列＋exec工作进程）；包括同账号并发创建仅一个成功、幂等、跨范围、重试、跨服务互斥/FIFO、取消队首/官方继续。15资源/朗读单元、23阅读器Node、121部署＋6博客部署、两站构建/隔离/modern/UI/JS、博客51页/19篇、Python编译/diff通过。两站Chrome使用真实37句导出验证标点/空格、整句与下一句词高亮、设置持久化、1920铺满及1280工具展开无溢出；原Kokoro导入/原音优先/实际播放与逐句边界回归通过。日志 `/private/tmp/queue-reader-*.log`。
+- 关键文件：`tools/import_queue.py`、`saas_imports.py`、`saas_migrations/0048_serial_import_queue.sql`、`reader_server.py`、`deployment/manager.py`、`kokoro_{worker,speech}.py`；验证见 `test_saas_phase8_integration.py` / `test_import_resource_limits.py` / `test_kokoro_speech.py`。
+
+## 2026-11-14 导入进程内存限额（已统一发布）
+
+- 用户授权线上限制导入进程内存、本地可不限制。分支 `feat/import-memory-limits` 已合并/推送main `b67ea99`，统一发布 `code-20261114-164352-4fe35e33` complete。共享 `submit_complete → complete → import_resource_limits → import_resource_worker`，国内官方/国际私人导入同实现。限额开启后完整提取/下载/转写/合成进程树进入独立Linux内存cgroup，HTTP与数据库在组外；共享文件锁串行处理，两站预算不叠加，重复提交不重复创建监督线程。
 - 线上 `shared/config/saas.env` 默认补 `SHIYUE_IMPORT_MEMORY_MB=1024`、`SHIYUE_IMPORT_SWAP_MB=512`、`SHIYUE_IMPORT_THREADS=1`，升级保留已配置值；本地缺省0不限额，线上显式0可关闭。配置变更通过统一升级重建生效，不新增写API或前台限额设置。模型在受限模式下按约40字符小段推理，原句内累计音频/时间轴；关闭oneDNN缓存加速并归还临时分配。本地保留原分段。说明见 `docs/KOKORO_NARRATION.md`。
-- 部署只挂载专用 `shiyue-imports` cgroup，候选发布须真实子进程入组通过；内存/Swap控制器不可用时任务失败，不退回无限制。父进程监督OOM/退出/超时、终止遗留子进程，明确限额错误；保留源文件和已登记音频，清理本次未登记朗读暂存。原鉴权/管理员/租户/权益/取消/最终事务仍复查。不是持久任务队列，重启自动恢复仍未实现。
+- 部署只挂载专用 `shiyue-imports` cgroup，候选发布须真实子进程入组通过；内存/Swap控制器不可用时任务失败，不退回无限制。父进程监督OOM/退出/超时、终止遗留子进程，明确限额错误；保留源文件和已登记音频，清理本次未登记朗读暂存。原鉴权/管理员/租户/权益/取消/最终事务仍复查。此版本原后台线程非持久；本轮FIFO替代方案见上节。
 - 已验证：真实Linux32MiB/零Swap下孙进程OOM只杀孙进程，监督进程存活；本地隔离 `_test` 数据库中真实exec工作进程官方/私人入库、越权拒绝、OOM失败与清理、排队取消、控制器不可用拒绝启动通过。33项phase8（含真实模型EPUB/PDF）、20项资源/朗读/博客部署单元、121项部署、36项HTTP smoke、两前端/博客构建及站点隔离/modern/UI/JS、Python编译/diff检查通过。调整后的清理逻辑补跑4项隔离工作进程测试通过，40字符策略另跑真实EPUB/PDF→MP3及时间轴通过；数据库仅 `127.0.0.1:55432/kokoro_import_20261114_test`。
 - 资源实测：不分段/80字符策略均在1024MiB+512MiB容器中完成前两句后局部OOM，主站健康保持。最终40字符＋关闭oneDNN加速＋归还暂存内存，在同样硬限额下3句18.2秒实际音频通过，75秒完成、`oomKilled=false`。这只验证短样本与隔离，不代表整书音质/峰值保证；硬限额过小仍会明确失败。未重试正式失败任务或处理已有书籍。日志 `/private/tmp/import-limit-*.log`。
 - 关键文件：`tools/import_resource_{limits,worker}.py`、`saas_imports.py`、`kokoro_worker.py`、`deployment/manager.py`；相关单元 `test_import_resource_limits.py`、可选Linux真实控制器 `test_import_resource_limits_linux.py`、phase8新增隔离进程/权限/取消/失败测试。

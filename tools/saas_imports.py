@@ -79,6 +79,34 @@ class WorkspaceImportService:
     def _public(task:dict[str,Any])->dict[str,Any]:
         return {"id":task["id"],"kind":task["kind"],"status":task["status"],"title":task["title"],"originalFilename":task["original_filename"],"sourceUrl":task["source_url"],"sourceAssetId":task["source_asset_id"],"outputBookId":task["output_book_id"],"progress":int(task["progress"]),"step":task["step"],"error":task["error"],"awaitingAudioUpload":bool(as_json(task["metadata_json"]).get('awaitingAudioUpload')),"createdAt":timestamp(task["created_at"]),"updatedAt":timestamp(task["updated_at"]),"completedAt":timestamp(task["completed_at"])}
 
+    def _single_active_import(self,cursor,user_id,excluding=''):
+        from import_queue import enabled
+        if not enabled(self.accounts.environment):return
+        # Every caller already holds the user row lock, including retries.
+        # Count both scopes so an admin cannot bypass the limit via another site.
+        cursor.execute("""SELECT id FROM workspace_import_tasks WHERE user_id=%s AND id<>%s
+            AND status IN ('uploading','queued','running','awaiting_processor') LIMIT 1""",(user_id,excluding))
+        if cursor.fetchone():
+            raise SaaSError('import_already_active','你已有一个上传、排队或处理中的导入任务，请等待完成或取消后再导入。',409)
+
+    def _enqueue(self,user_id,task_id):
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                task=self._task(cursor,user_id,task_id)
+                if task['status'] not in {'queued','running'}:return {'task':self._public(task),'idempotent':True}
+                if as_json(task['metadata_json']).get('awaitingAudioUpload'):
+                    raise SaaSError('companion_audio_pending','配套 MP3 尚未上传完成，请先补传完整音频。',409)
+                if task['kind']!='youtube':self._source_path(cursor,user_id,task)
+                if task.get('queue_order') is None:
+                    # Serialize allocation+commit, so a lower order cannot be
+                    # committed after a later job has already started.
+                    cursor.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('import-fifo-enqueue',))
+                    cursor.execute("""UPDATE workspace_import_tasks SET queue_order=nextval('workspace_import_queue_order_seq'),
+                        step='等待排队导入（全站串行）',updated_at=NOW() WHERE id=%s""",(task_id,))
+                    cursor.execute('SELECT * FROM workspace_import_tasks WHERE id=%s',(task_id,))
+                    task=self.accounts._one(cursor)
+                return {'task':self._public(task),'asynchronous':True,'idempotent':task['status']=='running'}
+
     def create(self,user_id:str,kind:str,title:str,filename:str,idempotency_key:str,source_url:str="",metadata:dict[str,Any]|None=None)->dict[str,Any]:
         self.assert_access(user_id)
         metadata={**(metadata or {}),"officialImport":self.official}
@@ -101,6 +129,7 @@ class WorkspaceImportService:
                     if existing:
                         if bool(as_json(existing["metadata_json"]).get("officialImport"))!=self.official:raise SaaSError("import_source_conflict","操作标识已用于其他导入。",409)
                         return {"task":self._public(existing),"idempotent":True}
+                    self._single_active_import(cursor,user_id)
                     if speech:
                         from kokoro_speech import options
                         if not options()['available']:raise SaaSError('speech_unavailable','AI 朗读尚未安装，请联系管理员。',503)
@@ -140,6 +169,10 @@ class WorkspaceImportService:
                     raise SaaSError("import_source_conflict","该任务已经上传其他源文件。",409)
                 if kind=="youtube":raise SaaSError("upload_not_required","YouTube 任务不接受文件上传。",409)
                 if task["status"] not in {"uploading","failed"}:raise SaaSError("import_task_not_uploadable","该任务当前不能上传源文件。",409)
+                self._single_active_import(cursor,user_id,task_id)
+                from import_queue import enabled
+                if enabled(self.accounts.environment) and task['status']=='failed':
+                    raise SaaSError('import_task_not_uploadable','失败任务请使用重试；需要更换源文件时请创建新任务。',409)
                 limit=UPLOAD_LIMITS.get(kind,20*1024*1024)
                 if len(data)>limit:raise SaaSError("upload_too_large","上传文件超过该类型的大小限制。",413,{"limit":limit})
                 # Avoid overwriting a prior source asset.  The media service
@@ -581,6 +614,11 @@ class WorkspaceImportService:
     def submit_complete(self,user_id:str,task_id:str,background:bool=False)->dict[str,Any]:
         """Start processing before an upload response can be lost; clients poll."""
         self.assert_access(user_id)
+        from import_queue import enabled,start_dispatcher
+        if enabled(self.accounts.environment):
+            result=self._enqueue(user_id,task_id)
+            start_dispatcher(self)
+            return result
         from import_resource_limits import ImportLimits
         limited=ImportLimits.from_environment(self.accounts.environment).enabled
         with self.accounts.transaction() as connection:
@@ -609,9 +647,12 @@ class WorkspaceImportService:
                 SUBMITTED_IMPORTS.discard(key);raise
         return {'task':self._public(task),'asynchronous':True,'idempotent':task['status']=='running'}
 
-    def complete(self,user_id:str,task_id:str)->dict[str,Any]:
+    def complete(self,user_id:str,task_id:str,_queue_claimed:bool=False)->dict[str,Any]:
         """Serialize processing and reclaim tasks abandoned for over 80 minutes."""
         self.assert_access(user_id)
+        from import_queue import enabled
+        if enabled(self.accounts.environment) and not _queue_claimed and not getattr(self,'_isolated_worker',False):
+            return self.submit_complete(user_id,task_id)
         from import_resource_limits import ImportLimits,run_limited
         limits=ImportLimits.from_environment(self.accounts.environment)
         if limits.enabled and not getattr(self,'_isolated_worker',False):
@@ -830,8 +871,9 @@ class WorkspaceImportService:
                     raise SaaSError("import_task_not_retryable","只有失败任务可以重试。",409)
                 if task["kind"]!="youtube" and not task.get("source_asset_id"):
                     raise SaaSError("import_source_missing","失败任务的源文件已不存在，请重新上传。",409)
+                self._single_active_import(cursor,user_id,task_id)
                 cursor.execute("""UPDATE workspace_import_tasks
-                    SET status='queued',progress=%s,step=%s,error='',output_book_id=NULL,completed_at=NULL,updated_at=NOW()
+                    SET status='queued',progress=%s,step=%s,error='',output_book_id=NULL,completed_at=NULL,queue_order=NULL,updated_at=NOW()
                     WHERE id=%s""",(0 if task["kind"]=="youtube" else 15,"等待重新处理",task_id))
                 cursor.execute("SELECT * FROM workspace_import_tasks WHERE id=%s",(task_id,));retrying=self.accounts._one(cursor)or{}
                 return {"task":self._public(retrying),"idempotent":False}
