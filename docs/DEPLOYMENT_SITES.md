@@ -52,6 +52,8 @@ Cloudflare 原国际回源 `http://localhost:5173` 保持不变；国内 Nginx �
 
 导入进程资源限额同样保存于 `saas.env`：`SHIYUE_IMPORT_MEMORY_MB=1024`、`SHIYUE_IMPORT_SWAP_MB=512`（额外Swap）、`SHIYUE_IMPORT_THREADS=1`。升级只补缺失值，管理员修改后通过统一升级重建服务生效；本地不设置时默认不限额。后端仅挂载宿主专用 `shiyue-imports` cgroup，完整导入进程树在限额内、HTTP与数据库留在限额外；候选必须通过实际子进程入组检查。两站共用同一串行预算，硬限额不足时明确失败并保留源文件。配置与边界详见 `docs/KOKORO_NARRATION.md`。
 
+线上每用户只允许一个上传/排队/运行任务，两站共用数据库FIFO和处理会话锁；即使内存限额设0仍串行。迁移0048仅新增队列序号/索引。生产后端启动后恢复已提交队列，运行中断沿用80分钟无进度恢复规则。候选容器显式 `SHIYUE_IMPORT_DISPATCHER=0`，防止候选抢真实任务；正式容器=1。未完成的文件/配套音频不占处理队首，排队/处理通过既有任务API轮询。
+
 前端各自只读取 `shared/config/frontend-cn.env` 或 `frontend-intl.env`，其中仅包含本站 `FRONTEND_SITE_TOKEN`，权限 0600。前端容器不读取数据库、支付密钥或另一站入口凭据。令牌由入口覆盖注入，不能相信浏览器自报站点。
 
 ## 保数据升级

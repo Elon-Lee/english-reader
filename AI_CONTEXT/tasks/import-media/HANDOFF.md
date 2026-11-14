@@ -1,6 +1,9 @@
 # 导入与媒体交接
 
-## 2026-11-14 线上单用户限制与全站FIFO（待统一发布）
+## 2026-11-14 线上单用户限制与全站FIFO（京东云#344已发布）
+
+- 已合并/推送main `a51fe79`（clean）并统一保数据发布两前端/博客/后端：**#344 complete**，`current=code-20261114-170447-01afd5cc`，17:06:59正式验收通过。数据库备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261114-170447-01afd5cc.dump`。正式迁移0048、调度=1/线上串行=真、专用cgroup1024/512MiB核对通过；无重复活动用户或排队任务，原complete1/failed1保留，未重试旧失败任务。
+- 上线20项公网HTTP/严格TLS/双站入口资产哈希、博客/国内登录/国际套餐真实Chrome无异常，后端5文件SHA与源码一致；账号/书城/内容书/订单/媒体/变体数量及占用均不变，支付与敏感运行配置摘要保持。发布前后摘要 `/private/tmp/queue-reader-production-{before,after}.json`、配置验证 `/private/tmp/queue-reader-production-verification.json`，发布/公网/浏览器日志同前缀；实际整书重新导入/长书音质未代用户操作。
 
 - 用户要求线上每用户同时只允许一个任务，全部导入串行；本地仍不默认限制。共享调用 `reader_server → WorkspaceImportService → import_queue → complete → import_resource_limits/worker`，覆盖国内管理员官方/国际私人、所有导入格式。新分支 `fix/import-queue-reader-highlights`，基于main `b67ea99`。
 - 用户行锁下校验上传/等待配套音频/排队/运行任务，私人/官方合并计数；创建幂等先返回旧任务，失败重试也检查，不允许失败任务绕过限制直接替换上传。完整文件显式提交处理时才分配数据库序号，未完成上传不占处理队首。

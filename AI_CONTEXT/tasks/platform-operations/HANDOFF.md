@@ -1,6 +1,8 @@
 # 平台运营与部署交接
 
-## 2026-11-14 全站导入FIFO与阅读器（待统一发布）
+## 2026-11-14 全站导入FIFO与阅读器（京东云#344已发布）
+
+- main `a51fe79`（clean）于17:06:59统一升级 **#344 complete**，`current=code-20261114-170447-01afd5cc`；备份 `backups/saas/pre-upgrade-code-20261114-170447-01afd5cc.dump`。迁移0048/正式调度1/1024＋512MiB、源码SHA与两站入口哈希核对通过。20项公网、三入口Chrome无异常；账号/书籍/订单/媒体数量与空间、支付及敏感配置摘要不变。无实际队列任务，未替用户重试已有失败导入；证据详见import-media首节。
 
 - 线上每用户一个上传/排队/运行任务，所有用户/两站共用数据库FIFO；新增兼容迁移0048，源文件/现有书籍不回填。生产后端启动调度线程，发布候选显式 `SHIYUE_IMPORT_DISPATCHER=0`，只在正式切换后恢复队列；内存预算仍保留1024MiB＋512MiB/1线程，预算关闭不关闭串行限制。本地缺省原处理方式。具体实现/验证见import-media，阅读设置/铺满及第37句高亮见reader交接。
 - 本轮统一发布国内、国际、博客、共享后端；121部署＋6博客部署回归、双站构建及隔离、博客51页/19篇、37phase8＋实际队列exec工作进程、36HTTP smoke与双站Chrome回归通过。发布前数据/配置摘要 `/private/tmp/queue-reader-production-before.json`，日志 `/private/tmp/queue-reader-*.log`。
