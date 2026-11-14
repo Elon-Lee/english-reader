@@ -1,10 +1,10 @@
 # 纸间微光博客与阅读子域名
 
-更新时间：2026-11-13（Asia/Shanghai）
+更新时间：2026-11-14（Asia/Shanghai）
 
 ## 国内业务备案页脚与抓取策略（本轮）
 
-- 2026-11-14：阅读页及其登录恢复骨架隐藏备案页脚，移除额外124px占位，避免全高阅读器撑开网页；登录/注册/工作台继续显示。仅国内 `SiteFrame` 样式扩展；双站Chrome验证正常/加载/失败和两种PC视口无额外页面高度，返回设置国内页脚恢复。两站/博客构建、隔离及基础检查通过，待统一发布。
+- 2026-11-14：阅读页及其登录恢复骨架隐藏备案页脚，移除额外124px占位，避免全高阅读器撑开网页；登录/注册/工作台继续显示。仅国内 `SiteFrame` 样式扩展；双站Chrome验证正常/加载/失败和两种PC视口无额外页面高度，返回设置国内页脚恢复。两站/博客构建、隔离及基础检查通过，已统一发布#345。
 - 国内扩展，已合入main；不复制共享业务。`@site.SiteFrame` 在国内登录/注册/工作台等非阅读页面底部居中展示 `蜀ICP备2026071122号-1` 并链接工信部，国际透传 children。页脚正常文档流，阅读页隐藏并保持全高布局。
 - `saas_frontend_server.py` 仅国内 app Host 返回 `/robots.txt` 的 `User-agent: * / Disallow: /`，GET/HEAD及查询串有效；该入口页面、静态资源、API和错误响应均带 `X-Robots-Tag: noindex, nofollow`。不按 User-Agent 区分响应，不新增JS校验或抓取身份检测。主域博客/IP博客预览与国际站维持既有抓取策略。
 - 标准抓取/索引指令不等于访问控制，不能保证所有爬虫遵守、已收录URL立即消失或不被检查。业务数据继续由既有鉴权保护。
@@ -12,6 +12,8 @@
 - Python编译、JS语法及diff检查通过；已完成下述#25同步发布与公网验收，无本轮未完成代码事项。不得覆盖线上云猫配置或使用 `--defer-https`。
 
 ## 最新程序发布
+
+- 2026-11-14 **#345 complete**：源码main `db3999f`（clean），`current=code-20261114-192419-b830b3d5`；国内/国际/博客/共享后端同步保数据升级。20项公网检查、双站资源哈希及真实三入口Chrome通过；线上静态资源配隔离API验证阅读页无备案/额外页面高度、非阅读页备案保留。账号/书籍/音频/配置升级前后只读核对一致；详见阅读器交接首节。
 
 - 2026-11-13 **#25 complete**，源码 `4ab76c1`（clean），`current=code-20261113-120608-54bdf2ae`。保数据同步发布两前端/博客/共享后端，完成候选双入口、迁移0045、原音检查与整体切换；备份 `/srv/shiyue/backups/saas/pre-upgrade-code-20261113-120608-54bdf2ae.dump`，包SHA-256 `2f566eb6246e5491d641c82bf8f58f7dd529fce2c2f10038f67cb6ada9c8bd5b`。
 - 严格TLS公网验证：learn根路径/登录/app/JS/API/404均有noindex,nofollow；robots GET/HEAD及两种UA正确，登录HTML对两种UA字节一致。博客首页和robots无该头，博客HTML与本地逐字一致且无业务域名；国际健康ok，两套餐cloudcat与原URL保留；国内两域HTTP308跳HTTPS。Chrome确认国内登录备案号居中及查询链接、博客隔离、国际购买弹窗要求登录且无国内页脚，页面异常0；未登录真实账号或创建支付。已登录应用页使用隔离fixture验收。报告 `/private/tmp/cn-icp-robots-production.json`，截图 `/private/tmp/cn-login-icp-production.png`，发布日志 `/private/tmp/cn-icp-robots-deploy.log`。沿用精确locale警告过滤包装，不改发布器源码。
