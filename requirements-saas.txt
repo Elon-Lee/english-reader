@@ -3,3 +3,4 @@ psycopg[binary]>=3.2,<4
 cryptography>=44,<47
 redis>=5,<7
 yt-dlp>=2026.1
+psutil>=7.0,<8

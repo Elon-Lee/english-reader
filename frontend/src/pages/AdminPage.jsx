@@ -5,12 +5,13 @@ import { BookOutlined, CheckCircleOutlined, SafetyCertificateOutlined, FileTextO
 import { getJson, postJson } from '../api/client'
 import CatalogModeration from '../components/CatalogModeration'
 import MediaAssetsAdmin from '../components/MediaAssetsAdmin'
+import ServerMetricsAdmin from '../components/ServerMetricsAdmin'
 import AuthSecuritySettings from '../components/AuthSecuritySettings'
 
 const { Paragraph, Text, Title } = Typography
 
 export default function AdminPage({ messageApi, adminData, onUpdateUserStatus, onVerifyUser, onDeleteUnverifiedUser, onCreateInvitation, onDeleteUnusedInvitations, onRevokeDevice, onExportAdminSummary, extraTabs = () => [] }) {
-  const [activeTab, setActiveTab] = useState(() => new URLSearchParams(location.search).get('adminTab') === 'catalog' ? 'catalog' : 'overview')
+  const [activeTab, setActiveTab] = useState(() => { const tab = new URLSearchParams(location.search).get('adminTab'); return ['catalog', 'media', 'server'].includes(tab) ? tab : 'overview' })
   const [detailOpen, setDetailOpen] = useState(false)
   const [detail, setDetail] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -102,6 +103,7 @@ export default function AdminPage({ messageApi, adminData, onUpdateUserStatus, o
     { key: 'auth-security', label: '认证安全', children: activeTab === 'auth-security' ? <AuthSecuritySettings messageApi={messageApi} /> : null },
     { key: 'overview', label: '概览', children: <Space direction="vertical" size={20} style={{ width: '100%' }}>{metrics}<Card title="快捷操作"><Space wrap><Button onClick={() => setInviteOpen(true)}>创建邀请码</Button><Button icon={<FileTextOutlined />} onClick={onExportAdminSummary}>导出数据</Button></Space></Card></Space> },
     { key: 'media', label: '媒体资产', children: activeTab === 'media' ? <MediaAssetsAdmin messageApi={messageApi} /> : null },
+    { key: 'server', label: '服务器观测', children: activeTab === 'server' ? <ServerMetricsAdmin /> : null },
     { key: 'catalog', label: '内容管理', children: activeTab === 'catalog' ? <CatalogModeration messageApi={messageApi} /> : null },
     { key: 'users', label: '用户管理', children: <Card title="用户管理"><Table rowKey="id" columns={columns} dataSource={users} pagination={{ pageSize: 8 }} scroll={{ x: 860 }} /></Card> },
     { key: 'invites', label: '邀请码', children: <Card title="邀请码创建记录" extra={<Space wrap><Input.Search allowClear placeholder="搜索批次备注、渠道或邀请码" value={inviteQuery} onChange={event => { setInviteQuery(event.target.value); setInvitePage(1) }} style={{ width: 290 }} /><Button danger onClick={removeExpiredInvitations}>删除过期邀请码</Button><Button type="primary" icon={<PlusOutlined />} onClick={() => setInviteOpen(true)}>创建邀请码</Button></Space>}><>{inviteError && <Alert type="error" showIcon message={inviteError} action={<Button onClick={loadInvitations}>重试</Button>} />}<Table loading={inviteLoading} rowKey="id" columns={invitationColumns} dataSource={inviteData.batches || []} pagination={false} locale={{ emptyText: <Empty description="暂无邀请码创建记录" /> }} />{inviteData.total > invitePageSize && <Pagination className="admin-invite-pagination" current={invitePage} pageSize={invitePageSize} total={inviteData.total} showSizeChanger={false} onChange={setInvitePage} />}</></Card> },

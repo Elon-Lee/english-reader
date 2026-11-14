@@ -89,6 +89,8 @@ class DeploymentReleasePipelineTests(unittest.TestCase):
             with patch.object(manager,"ROOT",root):
                 files=manager.code_files()
             self.assertIn(root/"tools/reader_server.py",files)
+            self.assertIn(root/"requirements-kokoro.txt",files)
+            self.assertIn(root/"tools/install_kokoro.sh",files)
             self.assertNotIn(root/"tools/test_old_payment.py",files)
 
     def test_frontend_build_rejects_retired_transaction_routes(self):

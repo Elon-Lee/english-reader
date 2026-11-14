@@ -638,7 +638,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         self.assertEqual(next(row for row in usage if row["feature"]=="storage_bytes")["used"],0)
         self.assertEqual(next(row for row in usage if row["feature"]=="video_library_capacity")["used"],0)
         detail=self.media.user_storage(admin)
-        self.assertEqual(detail["total"],1);video=detail["videos"][0]
+        self.assertEqual(detail["total"],1);video=detail["assets"][0]
         self.assertEqual(video["bookId"],book_id);self.assertTrue(video["contentPath"])
         self.assertEqual(video["scope"],"official")
         paths=[self.root/video["storagePath"]]+[self.root/v["storagePath"] for v in video["variants"]]
@@ -665,6 +665,43 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
         private_path=self.media.stream(owner,private_asset)["path"]
         self.workspace.delete_book(owner,private_book,"Private")
         self.assertFalse(private_path.exists())
+
+    def test_media_inventory_includes_epub_generated_mp3_and_all_formats(self):
+        owner=str(self.owner['id']);admin=str(self.admin['id'])
+        (self.root/'narrated.epub').write_bytes(b'epub-source')
+        (self.root/'narration.mp3').write_bytes(b'generated-mp3')
+        (self.root/'source.pdf').write_bytes(b'pdf')
+        original=self.media.register(owner,owner,'private','narrated.epub','audio','application/epub+zip',variants=[{'name':'audio','storagePath':'narration.mp3','contentType':'audio/mpeg'}])
+        self.media.register(admin,admin,'official','source.pdf','document','application/pdf',allow_staging=True)
+        detail=self.media.user_storage(owner)
+        self.assertEqual(detail['total'],1)
+        self.assertEqual(detail['assets'][0]['contentType'],'application/epub+zip')
+        self.assertEqual(detail['assets'][0]['variants'][0]['contentType'],'audio/mpeg')
+        self.assertEqual(detail['assets'][0]['variants'][0]['bytes'],13)
+        self.assertTrue(detail['assets'][0]['createdAt'])
+        summary=self.media.user_storage()['users']
+        self.assertEqual(next(row for row in summary if row['id']==owner)['audioCount'],1)
+        self.assertEqual(sum(row['assetCount'] for row in summary),2)
+        self.assertEqual(self.media.user_storage(owner,1,1)['assets'],[])
+        self.assertEqual(self.media.user_storage('missing')['total'],0)
+        from saas_media_analytics import media_statistics
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE media_assets SET created_at='2024-01-31 16:00:00+00'")
+                cursor.execute("UPDATE asset_variants SET created_at='2024-02-01 16:00:00+00'")
+        stats=media_statistics(self.accounts,'day','2024-02-01','2024-02-03')
+        self.assertEqual(stats['summary']['totalBytes'],27)
+        self.assertEqual(stats['summary']['originalBytes'],14)
+        self.assertEqual(stats['summary']['generatedBytes'],13)
+        self.assertEqual([(p['assets'],p['variants'],p['bytes']) for p in stats['history']],[(2,0,14),(0,1,13),(0,0,0)])
+        for period in ('month','year'):
+            history=media_statistics(self.accounts,period,'2024-01-01','2024-12-31')['history']
+            self.assertEqual(sum(p['assets'] for p in history),2)
+            self.assertEqual(sum(p['bytes'] for p in history),27)
+        self.media.delete(owner,original['id'])
+        deleted=media_statistics(self.accounts,'day','2024-02-01','2024-02-03')
+        self.assertEqual(deleted['summary']['totalBytes'],3)
+        self.assertEqual(sum(p['bytes'] for p in deleted['history']),27)
 
     def test_youtube_download_failure_releases_reservation(self):
         owner=str(self.owner["id"]);url="https://youtu.be/failure"
@@ -706,12 +743,13 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
     def test_http_text_upload_complete_and_cancel(self):
         with socket.socket() as probe:probe.bind(("127.0.0.1",0));port=probe.getsockname()[1]
         gateway_headers={'X-Shiyue-Site':'intl','X-Shiyue-Site-Token':new_id(),'X-Shiyue-Original-Host':'127.0.0.1:'+str(port)}
+        cn_gateway_token=new_id()
         class GatewayConnection(http.client.HTTPConnection):
             def request(self,method,url,body=None,headers=None,**kwargs):
                 return super().request(method,url,body,{**gateway_headers,**(headers or {})},**kwargs)
         connection_patch=patch.object(http.client,'HTTPConnection',GatewayConnection)
         connection_patch.start();self.addCleanup(connection_patch.stop)
-        root=Path(__file__).resolve().parents[1];environment={**os.environ,**self.environment,"READER_HOST":"127.0.0.1","READER_PORT":str(port),'INTL_GATEWAY_TOKEN':gateway_headers['X-Shiyue-Site-Token'],'INTL_APP_BASE_URL':'http://127.0.0.1:'+str(port),'SHIYUE_DEPLOYMENT_MODE':'local'};process=subprocess.Popen([sys.executable,str(root/"tools/reader_server.py")],cwd=root,env=environment,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True);connection=None
+        root=Path(__file__).resolve().parents[1];environment={**os.environ,**self.environment,"READER_HOST":"127.0.0.1","READER_PORT":str(port),'INTL_GATEWAY_TOKEN':gateway_headers['X-Shiyue-Site-Token'],'CN_GATEWAY_TOKEN':cn_gateway_token,'INTL_APP_BASE_URL':'http://127.0.0.1:'+str(port),'CN_APP_BASE_URL':'http://127.0.0.1:'+str(port),'SHIYUE_DEPLOYMENT_MODE':'local'};process=subprocess.Popen([sys.executable,str(root/"tools/reader_server.py")],cwd=root,env=environment,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True);connection=None
         try:
             deadline=time.time()+10
             while time.time()<deadline:
@@ -803,6 +841,9 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
             self.assertEqual(request("GET","/api/admin/content-imports")[0],401)
             self.assertEqual(request("GET","/api/admin/content-imports",headers={"Cookie":cookies})[0],403)
             self.assertEqual(request("GET","/api/admin/media-assets",headers={"Cookie":cookies})[0],403)
+            for path in ('/api/admin/media-assets/statistics','/api/admin/server-metrics'):
+                self.assertEqual(request('GET',path)[0],401)
+                self.assertEqual(request('GET',path,headers={'Cookie':cookies})[0],403)
             self.assertEqual(request("DELETE",f"/api/media/{completed['task']['sourceAssetId']}",headers={"Cookie":cookies,"X-CSRF-Token":csrf})[0],409)
             status,_,headers=request("POST","/api/auth/login",json.dumps({"email":"admin@local.test","password":"phase8 admin password"}),{"Content-Type":"application/json","X-Device-Id":"phase8-admin-http"})
             self.assertEqual(status,200)
@@ -828,6 +869,12 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
             self.assertEqual(len(request("GET","/api/admin/catalog/sources",headers=admin_headers)[1]["sources"]),1)
             status,summary,_=request("GET","/api/admin/media-assets",headers=admin_headers)
             self.assertEqual(status,200);self.assertEqual(len(summary["users"]),2)
+            for site in ('cn','intl'):
+                headers={**admin_headers,'X-Shiyue-Site':site,'X-Shiyue-Site-Token':cn_gateway_token if site=='cn' else gateway_headers['X-Shiyue-Site-Token']}
+                self.assertEqual(request('GET','/api/admin/media-assets/statistics?period=day',headers=headers)[0],200)
+                status,snapshot,_=request('GET','/api/admin/server-metrics',headers=headers)
+                self.assertEqual(status,200,snapshot)
+                self.assertGreater(snapshot['memory']['total'],0)
             self.assertEqual(request("POST","/api/admin/catalog/delete",json.dumps({"sourceBookId":done["task"]["outputBookId"],"confirmTitle":"Official HTTP"}),admin_headers)[0],200)
         finally:
             if connection:connection.close()

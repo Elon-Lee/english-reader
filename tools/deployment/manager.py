@@ -302,8 +302,8 @@ def release_metadata(release):
     return {"releaseId":release,"gitCommit":commit,"sourceDirty":dirty,"builtAt":now(),"packageFormat":2}
 
 def code_files():
-    files=[ROOT/"reader",ROOT/"deployment",ROOT/"requirements-saas.txt",ROOT/"start-reader.sh",ROOT/"start-reader-https.sh",ROOT/"services/captcha"]
-    files += [path for path in (ROOT/"tools").glob("*.py") if not path.name.startswith("test_")]+[ROOT/"tools/install_forced_aligner.sh",ROOT/"tools/deployment",ROOT/"tools/saas_migrations",ROOT/"tools/vendor/ECDICT/lemma.en.txt"]
+    files=[ROOT/"reader",ROOT/"deployment",ROOT/"requirements-saas.txt",ROOT/"requirements-kokoro.txt",ROOT/"start-reader.sh",ROOT/"start-reader-https.sh",ROOT/"services/captcha"]
+    files += [path for path in (ROOT/"tools").glob("*.py") if not path.name.startswith("test_")]+[ROOT/"tools/install_forced_aligner.sh",ROOT/"tools/install_kokoro.sh",ROOT/"tools/deployment",ROOT/"tools/saas_migrations",ROOT/"tools/vendor/ECDICT/lemma.en.txt"]
     return files
 def build_code_package(job,release):
     metadata=release_metadata(release)

@@ -996,6 +996,12 @@ class Handler(SimpleHTTPRequestHandler):
             if path=="/api/admin/platform-config":self.reply(ADMIN.platform_config());return
             if path=="/api/admin/exports/summary":self.reply(ADMIN.export_summary());return
             if path=="/api/admin/media-assets":self.reply(MEDIA.user_storage((query.get("ownerId")or[""])[0],(query.get("limit")or[20])[0],(query.get("offset")or[0])[0]));return
+            if path=="/api/admin/media-assets/statistics":
+                from saas_media_analytics import media_statistics
+                self.reply(media_statistics(SAAS,(query.get('period')or['day'])[0],(query.get('start')or[''])[0],(query.get('end')or[''])[0]));return
+            if path=="/api/admin/server-metrics":
+                from saas_server_metrics import server_metrics
+                self.reply(server_metrics(MEDIA.media_root));return
             self.reply({"error":"not found"},404)
         except SaaSError as exc:self.reply(exc.payload(),exc.status)
         except (SaaSConfigurationError,ValueError) as exc:self.reply({"code":"admin_unavailable","error":str(exc)},503)

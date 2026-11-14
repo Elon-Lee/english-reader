@@ -266,21 +266,23 @@ class MediaService:
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 if owner_id:
-                    cursor.execute("SELECT COUNT(*) AS total FROM media_assets WHERE owner_id=%s AND status='active' AND content_type LIKE 'video/%%'",(owner_id,));total=int(self.accounts._one(cursor)["total"])
-                    cursor.execute("""SELECT ma.*,cb.title,cb.source_path FROM media_assets ma LEFT JOIN content_books cb ON cb.id=ma.content_book_id
-                    WHERE ma.owner_id=%s AND ma.status='active' AND ma.content_type LIKE 'video/%%' ORDER BY ma.created_at DESC,ma.id LIMIT %s OFFSET %s""",(owner_id,page_size,start));rows=self.accounts._many(cursor);videos=[]
+                    cursor.execute("SELECT COUNT(*) AS total FROM media_assets WHERE owner_id=%s AND status='active'",(owner_id,));total=int(self.accounts._one(cursor)["total"])
+                    cursor.execute("""SELECT ma.*,cb.title,cb.source_path,cb.duration FROM media_assets ma LEFT JOIN content_books cb ON cb.id=ma.content_book_id
+                    WHERE ma.owner_id=%s AND ma.status='active' ORDER BY ma.created_at DESC,ma.id LIMIT %s OFFSET %s""",(owner_id,page_size,start));rows=self.accounts._many(cursor);assets=[]
                     for row in rows:
-                        cursor.execute("SELECT variant_name,storage_path,byte_size FROM asset_variants WHERE asset_id=%s AND deleted_at IS NULL ORDER BY variant_name",(row["id"],))
-                        videos.append({"id":row["id"],"bookId":row["content_book_id"],"title":row["title"] or row["storage_path"].rsplit('/',1)[-1],"scope":row["scope"],"originalBytes":int(row["original_bytes"]),"generatedBytes":int(row["generated_bytes"]),"storagePath":row["storage_path"],"contentPath":row["source_path"] or "","variants":[{"name":v["variant_name"],"storagePath":v["storage_path"],"bytes":int(v["byte_size"])} for v in self.accounts._many(cursor)]})
-                    return {"videos":videos,"total":total}
+                        cursor.execute("SELECT variant_name,storage_path,byte_size,content_type,created_at FROM asset_variants WHERE asset_id=%s AND deleted_at IS NULL ORDER BY variant_name",(row["id"],))
+                        assets.append({"id":row["id"],"bookId":row["content_book_id"],"title":row["title"] or row["storage_path"].rsplit('/',1)[-1],"filename":Path(row['storage_path']).name,"scope":row["scope"],"kind":row['kind'],"contentType":row['content_type'],"createdAt":timestamp(row['created_at']),"originalBytes":int(row["original_bytes"]),"generatedBytes":int(row["generated_bytes"]),"storagePath":row["storage_path"],"contentPath":row["source_path"] or "","variants":[{"name":v["variant_name"],"storagePath":v["storage_path"],"bytes":int(v["byte_size"]),"contentType":v['content_type'],"duration":float(row['duration']) if row.get('duration') and str(v['content_type']).startswith(('audio/','video/')) else None,"createdAt":timestamp(v['created_at'])} for v in self.accounts._many(cursor)]})
+                    return {"assets":assets,"total":total}
                 cursor.execute("SELECT COUNT(DISTINCT owner_id) AS total FROM media_assets WHERE status='active'");total=int(self.accounts._one(cursor)["total"])
                 cursor.execute("""SELECT u.id,u.email,u.display_name,SUM(ma.original_bytes+ma.generated_bytes) AS total_bytes,
                 COALESCE(SUM(ma.original_bytes+ma.generated_bytes) FILTER (WHERE ma.scope='private'),0) AS private_bytes,
                 COALESCE(SUM(ma.original_bytes+ma.generated_bytes) FILTER (WHERE ma.scope='official'),0) AS official_bytes,
-                COUNT(*) FILTER (WHERE ma.content_type LIKE 'video/%%') AS video_count
+                COUNT(*) AS asset_count,
+                COUNT(*) FILTER (WHERE ma.content_type LIKE 'video/%%') AS video_count,
+                COUNT(*) FILTER (WHERE ma.content_type LIKE 'audio/%%' OR EXISTS(SELECT 1 FROM asset_variants v WHERE v.asset_id=ma.id AND v.deleted_at IS NULL AND v.content_type LIKE 'audio/%%')) AS audio_count
                 FROM users u JOIN media_assets ma ON ma.owner_id=u.id AND ma.status='active'
                 GROUP BY u.id ORDER BY total_bytes DESC,u.id LIMIT %s OFFSET %s""",(page_size,start))
-                return {"users":[{"id":r["id"],"email":r["email"],"displayName":r["display_name"],"totalBytes":int(r["total_bytes"]),"privateBytes":int(r["private_bytes"]),"officialBytes":int(r["official_bytes"]),"videoCount":int(r["video_count"])} for r in self.accounts._many(cursor)],"total":total}
+                return {"users":[{"id":r["id"],"email":r["email"],"displayName":r["display_name"],"totalBytes":int(r["total_bytes"]),"privateBytes":int(r["private_bytes"]),"officialBytes":int(r["official_bytes"]),"assetCount":int(r['asset_count']),"audioCount":int(r['audio_count']),"videoCount":int(r["video_count"])} for r in self.accounts._many(cursor)],"total":total}
 
     def delete(self,actor_id:str,asset_id:str,is_admin:bool=False)->dict[str,Any]:
         with self.accounts.transaction() as connection:

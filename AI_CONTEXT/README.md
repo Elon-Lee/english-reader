@@ -22,6 +22,8 @@
 
 ## 跨任务状态
 
+- 2026-11-14 共享后台媒体资产已移除仅视频过滤，补齐 EPUB/PDF 与生成 MP3 明细、总空间及日/月/年增长图；新增 CPU/内存/磁盘服务器观测。已本地重载，双站验证通过，未发布。详见 [后台观测交接](tasks/admin-observability/HANDOFF.md)。
+
 - 2026-11-14 Kokoro-82M 英文 EPUB/PDF 可选 AI 朗读已在本地接入并重载后台，可在本地管理员内容导入试用；真实模型、PDF OCR、双站浏览器与完整 HTTP smoke 验证通过，尚未发布。国内官方/国际私人导入共用，原音路径保留。验收与云端安装条件见 [导入交接](tasks/import-media/HANDOFF.md)。
 
 - 最新程序发布为2026-11-13 **#28 complete**：`current=code-20261113-175831-0b004ac5`、源码 `7750427`（clean），国内/国际/博客/共享后端同步保数据升级，迁移0047。国际套餐支持原价＋实际售价、自动一位小数折扣，通过独立版本调价保护历史交易和权益；国内隔离保持。公网22项检查、Chrome及配置/数据核对通过；后台已出现真实调价审计，未由发布脚本调价或付款。详见 [商业交接](tasks/public-commerce/HANDOFF.md)。
@@ -58,6 +60,7 @@
 | 文件与 YouTube 导入、媒体处理 | `tasks/import-media/HANDOFF.md` |
 | 本地安装、启停、登录与排错 | `tasks/local-development/HANDOFF.md` |
 | 运营后台、AI 配置、远程部署 | `tasks/platform-operations/HANDOFF.md` |
+| 媒体资产、空间与导入增长统计、服务器观测 | `tasks/admin-observability/HANDOFF.md` |
 | 国内/国际入口并行、共享业务与国际商业功能恢复 | `tasks/dual-entry-commerce/HANDOFF.md` |
 | 移动端适配 | `tasks/mobile/HANDOFF.md` |
 | 国际商业与支付、国内关闭边界 | `tasks/public-commerce/HANDOFF.md`、`tasks/payments/HANDOFF.md` |
