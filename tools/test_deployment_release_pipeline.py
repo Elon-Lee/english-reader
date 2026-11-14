@@ -23,6 +23,14 @@ class SyntaxRemote:
 
 
 class DeploymentReleasePipelineTests(unittest.TestCase):
+    def test_upgrade_rebuilds_dependencies_before_candidate_activation(self):
+        source=inspect.getsource(manager.start_saas_upgrade)
+        self.assertLess(source.index('ensure_remote_saas_image(job,remote,target,release)'),source.index('activation=activate_saas_release'))
+        self.assertIn('server_metrics("/app/books")',inspect.getsource(manager.activate_saas_release))
+        remote=SyntaxRemote()
+        manager.ensure_remote_saas_image(Job(),remote,{'remote_root':'/srv/shiyue'},'code-test')
+        self.assertIn('/releases/code-test/deployment/docker/Dockerfile.saas',remote.scripts[0])
+
     def test_jdk_failure_stops_before_frontend_build_and_packaging(self):
         with patch.object(manager, 'release_metadata', return_value={}), \
                 patch.object(manager, 'build_captcha_assets', side_effect=ValueError('请安装 JDK 17')), \

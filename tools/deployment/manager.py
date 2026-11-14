@@ -1037,7 +1037,11 @@ for attempt in $(seq 1 60); do docker exec shiyue-postgres pg_isready -U "$POSTG
 docker exec shiyue-redis redis-cli -a "$REDIS_PASSWORD" ping 2>/dev/null | grep -q PONG
 """
     remote.ssh(script)
-    job.update(57,"构建 SaaS 运行镜像")
+    ensure_remote_saas_image(job,remote,target,release)
+
+def ensure_remote_saas_image(job,remote,target,release):
+    release_path=f"{target['remote_root']}/releases/{release}"
+    job.write("构建共享后端运行镜像，更新声明依赖")
     remote.ssh(f"set -e; docker build -f {shlex.quote(release_path)}/deployment/docker/Dockerfile.saas -t {shlex.quote(SAAS_IMAGE)} {shlex.quote(release_path)}; docker image inspect {shlex.quote(SAAS_IMAGE)} >/dev/null")
 
 def ensure_remote_captcha(job,remote,target,release):
@@ -1342,6 +1346,7 @@ def activate_saas_release(job,remote,target,release):
  if [ "$healthy" -ne 1 ]; then docker logs --tail 200 shiyue-saas-candidate >&2 || true; docker logs --tail 200 shiyue-saas-frontend-candidate >&2 || true; exit 5; fi
  {saas_migration_check_command("shiyue-saas-candidate")}
  {aligner_check_command("shiyue-saas-candidate")}
+ docker exec shiyue-saas-candidate python3 -c 'import sys; sys.path.insert(0,"/app/tools"); from saas_server_metrics import server_metrics; server_metrics("/app/books")'
  cat /tmp/shiyue-saas-candidate-health.json
  cleanup_candidates
  trap - EXIT
@@ -1470,6 +1475,7 @@ def start_saas_upgrade(target_id,site_domains=None,defer_https=False):
         certificate='' if target.get('intl_domain') else ensure_remote_tls(job,remote,target)
         target['_settings_backup']=backup_remote_site_settings(remote,target,release)
         try:
+            ensure_remote_saas_image(job,remote,target,release)
             ensure_remote_saas_config(job,remote,target)
             sync_remote_smtp_config(job,remote,target)
             ensure_remote_captcha(job,remote,target,release)
