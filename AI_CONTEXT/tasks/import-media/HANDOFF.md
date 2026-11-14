@@ -1,13 +1,13 @@
 # 导入与媒体交接
 
-## 2026-11-14 媒体资产明细补齐（本地完成，未发布）
+## 2026-11-14 媒体资产明细补齐（京东云#342已发布）
 
 - 后台此前仅列 `video/*`，文档及其MP3变体被过滤；已展示所有有效资源，展开EPUB/PDF可查看音频格式、大小、时长与路径。占用/日月年增长及服务器观测见 [后台观测交接](../admin-observability/HANDOFF.md)。未重新生成或修改已有音频。
 - 阅读页“AI 合成朗读”提示和标题标签已移除，生成元数据及时间轴策略保留；浏览器验收改为断言提示不存在，双站播放/逐句边界通过。
 - 用户反馈播放加载失败后，本地实际生成MP3完整ffmpeg解码通过，鉴权音频Range返回206及正确MIME/Content-Range，官方reader返回正确audio变体；此前用私人reader查询已发布官方书籍得到404不属于音频损坏。重载后独立浏览器打开实际官方书籍，MP3加载/解码/播放通过（674.675秒），阅读页提示已移除。当前未复现原报错，不宣称已定位并修复播放根因。
-- 用户已授权合并main与京东云统一保数据发布；首次Linux离线环境发现spaCy直接依赖Click、较新Typer不再间接安装，已显式补充 `click>=8.1,<9`。先通过服务器实际CPU合成预检再切换正式版本，安装器/依赖声明随程序包发布，模型和Linux venv保存在 `shared/.local/kokoro`。
+- 已合并/推送main并统一保数据发布京东云 **#342 complete**，源码 `e0b4dbc`（clean），`current=code-20261114-134956-a0563d38`；国内/国际/博客/后端、媒体统计/服务器观测与Kokoro同时上线。Linux实际CPU离线合成3.15秒样本通过（独立限额预检耗时91.67秒，不代表长书吞吐）；模型、四音色、许可及Linux venv持久保存 `shared/.local/kokoro`，正式进程 `options.available=true`。首次环境缺Click已显式补充 `click>=8.1,<9`，运行依赖按新镜像安装。发布后数据/配置保持，详情见后台观测交接。
 
-## 2026-11-14 Kokoro-82M 无配套 MP3 的英文朗读（本地接入，未发布）
+## 2026-11-14 Kokoro-82M 无配套 MP3 的英文朗读（已随#342发布）
 
 - 用户已授权尝试接入 Kokoro。分支 `feat/kokoro-document-narration`，基线 `0fc3640`；属于共享导入/阅读器核心，国内管理员官方导入及国际付费私人导入共用，不开放国内普通用户私人导入。
 - EPUB/PDF 无本次/已匹配配套 MP3 时，可选“AI 生成朗读”；默认仅正文，四种美/英男女音色及生成语速。既有原音、已有书籍、PDF/EPUB 原文排版不重处理。模型缺失显示不可用，检查失败可重试，后台任务继续按原列表轮询。
@@ -18,7 +18,7 @@
 - 本地后台已在确认无活动导入后重载，原有账号/书籍保留；真实 PDF OCR 已安装至 `.local/bin/pdf_ocr`。可在 `http://127.0.0.1:4173` 的管理员内容导入选择无 MP3 的英文 EPUB/PDF 试用。
 - 关键文件：`tools/kokoro_{speech,worker}.py`、`tools/setup_kokoro.py`、`tools/install_kokoro.sh`、`requirements-kokoro.txt`、`saas_imports.py`、`saas_media.py`、私人/官方 reader、`ImportModal.jsx`、`ReaderPage.jsx`、`readerTiming.mjs`。
 - 验证通过：36项相关单元、12项阅读时间轴、33项导入集成（含真实模型/真实 EPUB/PDF OCR）及11项补充取消/容量/事务回滚/上传完整性；完整 HTTP smoke 36项。双站构建、源码/产物隔离、modern/UI/JS、Python 编译及 diff 检查通过；原双站 Chrome 回归和新增 Kokoro 浏览器验收通过，覆盖可用/不可用/失败重试、原音优先、AI 标识、实际音频解码播放及逐句暂停边界。日志 `/private/tmp/kokoro-*.log`，截图 `/private/tmp/english-reader-kokoro-browser/`；构建产物不提交。
-- 尚未：云端安装及同步发布；整本长书音质与目标服务器性能验收。不得以当前短样本宣称整书生成质量或吞吐保证。
+- 尚未：整本长书音质与目标服务器吞吐验收。Linux云端安装及统一发布已完成，不得以当前短样本宣称整书生成质量或吞吐保证。
 
 ## 2026-11-13 双站私人导入与空间（已发布京东云#27）
 
