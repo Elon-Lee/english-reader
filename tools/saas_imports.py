@@ -38,6 +38,8 @@ from reading_document import build_reading_document
 
 IMPORT_FEATURES={}
 UPLOAD_LIMITS={"text":20*1024*1024,"document":100*1024*1024,"mp3":2*1024*1024*1024,"video":20*1024*1024*1024}
+SUBMITTED_IMPORTS=set()
+SUBMITTED_IMPORTS_LOCK=threading.Lock()
 
 
 class WorkspaceImportService:
@@ -579,6 +581,8 @@ class WorkspaceImportService:
     def submit_complete(self,user_id:str,task_id:str,background:bool=False)->dict[str,Any]:
         """Start processing before an upload response can be lost; clients poll."""
         self.assert_access(user_id)
+        from import_resource_limits import ImportLimits
+        limited=ImportLimits.from_environment(self.accounts.environment).enabled
         with self.accounts.transaction() as connection:
             with connection.cursor() as cursor:
                 task=self._task(cursor,user_id,task_id)
@@ -586,18 +590,32 @@ class WorkspaceImportService:
                     raise SaaSError('companion_audio_pending','配套 MP3 尚未上传完成，请重新选择文档和音频上传。',409)
                 cursor.execute("SELECT 1 FROM asset_variants WHERE asset_id=%s AND variant_name='audio' AND deleted_at IS NULL",(task.get('source_asset_id'),))
                 paired=task['kind'] in {'text','document'} and (bool(cursor.fetchone()) or bool(as_json(task['metadata_json']).get('matchedAudioAssetId')) or bool(as_json(task['metadata_json']).get('speechSynthesis')))
-        if (not paired and not background) or task['status'] not in {'queued','running'}:return self.complete(user_id,task_id)
+                if limited and task['status']=='queued':
+                    cursor.execute("UPDATE workspace_import_tasks SET step='等待导入处理（已启用内存限额）',updated_at=NOW() WHERE id=%s",(task_id,))
+        if (not paired and not background and not limited) or task['status'] not in {'queued','running'}:return self.complete(user_id,task_id)
+        key=(id(self.accounts),self.official,user_id,task_id)
         def process():
             try:self.complete(user_id,task_id)
             except Exception:
                 # _complete_locked persists failures for the polling client.
                 pass
-        threading.Thread(target=process,daemon=True,name=f'book-align-{task_id}').start()
+            finally:
+                with SUBMITTED_IMPORTS_LOCK:SUBMITTED_IMPORTS.discard(key)
+        with SUBMITTED_IMPORTS_LOCK:
+            if key in SUBMITTED_IMPORTS:return {'task':self._public(task),'asynchronous':True,'idempotent':True}
+            SUBMITTED_IMPORTS.add(key)
+            try:threading.Thread(target=process,daemon=True,name=f'book-align-{task_id}').start()
+            except Exception:
+                SUBMITTED_IMPORTS.discard(key);raise
         return {'task':self._public(task),'asynchronous':True,'idempotent':task['status']=='running'}
 
     def complete(self,user_id:str,task_id:str)->dict[str,Any]:
         """Serialize processing and reclaim tasks abandoned for over 80 minutes."""
         self.assert_access(user_id)
+        from import_resource_limits import ImportLimits,run_limited
+        limits=ImportLimits.from_environment(self.accounts.environment)
+        if limits.enabled and not getattr(self,'_isolated_worker',False):
+            return run_limited(self,user_id,task_id,limits)
         connection=self.accounts._connect()
         key=f"import-complete:{user_id}:{task_id}"
         try:

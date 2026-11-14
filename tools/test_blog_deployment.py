@@ -87,6 +87,7 @@ class BlogDeploymentTests(unittest.TestCase):
                 'ensure_remote_tls':'certificate',
                 'backup_remote_site_settings':'/srv/shiyue/backups/saas/settings-test',
                 'ensure_remote_saas_config':None,'sync_remote_smtp_config':None,
+                'ensure_remote_saas_image':None,
                 'ensure_remote_captcha':None,'ensure_remote_aligner':None,
                 'activate_saas_release':{'candidate':'ok'},
             }

@@ -543,6 +543,9 @@ def saas_app_run_command(target,release_path,name="shiyue-saas",port=None,restar
     if restart:options.append("--restart unless-stopped")
     options += ["--network host",f"--env-file {root}/shared/config/saas.env","-e READER_HOST=127.0.0.1",f"-e READER_PORT={port}","-e SHIYUE_RUNTIME_MODE=saas","-e SHIYUE_DEPLOYMENT_MODE=remote","-e SHIYUE_SAAS_ENABLED=1","-e MEDIA_ROOT=/app/books","-e SAAS_BACKUP_ROOT=/state/backups/saas","-e SHIYUE_PDF_OCR=/opt/shiyue/pdf_ocr","-e SHIYUE_YTDLP=/usr/local/bin/yt-dlp","-e SHIYUE_NODE=/usr/bin/node",
       f"-v {release}/reader:/app/reader:ro,z",f"-v {release}/tools:/app/tools:ro,z",f"-v {root}/shared/books:/app/books:z",f"-v {root}/shared/.local:/app/.local:z",f"-v {root}/shared/cache:/app/.cache:z",f"-v {root}/backups:/state/backups:z"]
+    # Delegate only this service's import group, never the host cgroup tree or
+    # Docker socket. Docker recreates the cgroup directory after a host reboot.
+    options.append('-v "$(if [ -f /sys/fs/cgroup/cgroup.controllers ]; then printf %s /sys/fs/cgroup/shiyue-imports; else printf %s /sys/fs/cgroup/memory/shiyue-imports; fi):/run/shiyue-import-cgroup:rw"')
     if recording:options += [f"-v {root}/shared/whisper/ggml-base.en.bin:/opt/shiyue/models/ggml-base.en.bin:ro,z","-e SHIYUE_WHISPER_CLI=/opt/shiyue/whisper/whisper-cli","-e SHIYUE_WHISPER_MODEL=/opt/shiyue/models/ggml-base.en.bin"]
     options.append(shlex.quote(image or SAAS_IMAGE));return " \\\n  ".join(options)
 
@@ -804,6 +807,10 @@ def ensure_remote_saas_config(job,remote,target):
 from urllib.parse import urlsplit
 path=Path('/config/saas.env')
 lines=path.read_text().splitlines(keepends=True)
+for key,default in [('SHIYUE_IMPORT_MEMORY_MB','1024'),('SHIYUE_IMPORT_SWAP_MB','512'),('SHIYUE_IMPORT_THREADS','1')]:
+    if not any(line.startswith(key+'=') for line in lines):
+        if lines and not lines[-1].endswith('\\n'):lines[-1]+='\\n'
+        lines.append(key+'='+default+'\\n')
 if not {bool(target.get('intl_domain'))!r}:
     lines=[line for line in lines if not line.lstrip().startswith(('ALIPAY_','PADDLE_','MBDPAY_','MBD_','CLOUDCAT_'))]
 lines=[line for line in lines if not line.startswith('SMTP_FROM_NAME=')]
@@ -832,6 +839,7 @@ path.write_text(''.join(lines))
       "POSTGRES_DB":"shiyue","POSTGRES_USER":"shiyue","POSTGRES_PASSWORD":postgres_password,
       "DATABASE_URL":f"postgresql://shiyue:{postgres_password}@127.0.0.1:5432/shiyue","REDIS_PASSWORD":redis_password,"REDIS_URL":f"redis://:{redis_password}@127.0.0.1:6379/0",
       "SESSION_SECRET":session_secret,"APP_BASE_URL":frontend_url(target),"SHIYUE_SAAS_AUTO_MIGRATE":"1","BOOTSTRAP_ADMIN_EMAIL":"","BOOTSTRAP_ADMIN_PASSWORD":"","SMTP_FROM_NAME":"纸间微光",
+      "SHIYUE_IMPORT_MEMORY_MB":"1024","SHIYUE_IMPORT_SWAP_MB":"512","SHIYUE_IMPORT_THREADS":"1",
     }
     with tempfile.TemporaryDirectory(prefix="shiyue-saas-env-") as temp:
         path=Path(temp)/"saas.env";path.write_text("".join(f"{key}={value}\n" for key,value in values.items()),encoding="utf-8");os.chmod(path,0o600)
@@ -1347,6 +1355,7 @@ def activate_saas_release(job,remote,target,release):
  {saas_migration_check_command("shiyue-saas-candidate")}
  {aligner_check_command("shiyue-saas-candidate")}
  docker exec shiyue-saas-candidate python3 -c 'import sys; sys.path.insert(0,"/app/tools"); from saas_server_metrics import server_metrics; server_metrics("/app/books")'
+ docker exec shiyue-saas-candidate python3 -c 'import sys,json; sys.path.insert(0,"/app/tools"); from import_resource_limits import preflight; print(json.dumps(preflight()))'
  cat /tmp/shiyue-saas-candidate-health.json
  cleanup_candidates
  trap - EXIT

@@ -73,7 +73,7 @@ class HttpsEntryIntegrationTests(unittest.TestCase):
                 'remote_root': str(root), 'host': '192.0.2.1', 'use_https': 1,
                 'public_domain': 'rynenglish.com',
             })
-            self.assertEqual(env.read_text(), original + 'APP_BASE_URL=https://rynenglish.com\nSMTP_FROM_NAME=纸间微光\n')
+            self.assertEqual(env.read_text(), original + 'APP_BASE_URL=https://rynenglish.com\nSHIYUE_IMPORT_MEMORY_MB=1024\nSHIYUE_IMPORT_SWAP_MB=512\nSHIYUE_IMPORT_THREADS=1\nSMTP_FROM_NAME=纸间微光\n')
             self.assertEqual(env.stat().st_mode & 0o777, 0o600)
 
     def test_upgrade_rediscovers_remote_entry_before_base_url_changes(self):

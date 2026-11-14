@@ -50,6 +50,8 @@ Cloudflare 原国际回源 `http://localhost:5173` 保持不变；国内 Nginx �
 
 共享后端使用权限 0600 的 `shared/config/saas.env`。双入口升级保留已有数据库、会话和支付凭据，并在远端进程内生成缺失的 `CN_GATEWAY_TOKEN`、`INTL_GATEWAY_TOKEN`；生成值不进入部署命令或日志。`CN_APP_BASE_URL` 与 `INTL_APP_BASE_URL` 分别使用已配置的可信 HTTPS 域名。
 
+导入进程资源限额同样保存于 `saas.env`：`SHIYUE_IMPORT_MEMORY_MB=1024`、`SHIYUE_IMPORT_SWAP_MB=512`（额外Swap）、`SHIYUE_IMPORT_THREADS=1`。升级只补缺失值，管理员修改后通过统一升级重建服务生效；本地不设置时默认不限额。后端仅挂载宿主专用 `shiyue-imports` cgroup，完整导入进程树在限额内、HTTP与数据库留在限额外；候选必须通过实际子进程入组检查。两站共用同一串行预算，硬限额不足时明确失败并保留源文件。配置与边界详见 `docs/KOKORO_NARRATION.md`。
+
 前端各自只读取 `shared/config/frontend-cn.env` 或 `frontend-intl.env`，其中仅包含本站 `FRONTEND_SITE_TOKEN`，权限 0600。前端容器不读取数据库、支付密钥或另一站入口凭据。令牌由入口覆盖注入，不能相信浏览器自报站点。
 
 ## 保数据升级

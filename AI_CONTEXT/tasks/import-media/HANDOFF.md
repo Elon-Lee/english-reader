@@ -1,5 +1,23 @@
 # 导入与媒体交接
 
+## 2026-11-14 导入进程内存限额（待统一发布）
+
+- 用户授权线上限制导入进程内存、本地可不限制。分支 `feat/import-memory-limits`；共享 `submit_complete → complete → import_resource_limits → import_resource_worker`，国内官方/国际私人导入同实现。限额开启后完整提取/下载/转写/合成进程树进入独立Linux内存cgroup，HTTP与数据库在组外；共享文件锁串行处理，两站预算不叠加，重复提交不重复创建监督线程。
+- 线上 `shared/config/saas.env` 默认补 `SHIYUE_IMPORT_MEMORY_MB=1024`、`SHIYUE_IMPORT_SWAP_MB=512`、`SHIYUE_IMPORT_THREADS=1`，升级保留已配置值；本地缺省0不限额，线上显式0可关闭。配置变更通过统一升级重建生效，不新增写API或前台限额设置。模型在受限模式下按约40字符小段推理，原句内累计音频/时间轴；关闭oneDNN缓存加速并归还临时分配。本地保留原分段。说明见 `docs/KOKORO_NARRATION.md`。
+- 部署只挂载专用 `shiyue-imports` cgroup，候选发布须真实子进程入组通过；内存/Swap控制器不可用时任务失败，不退回无限制。父进程监督OOM/退出/超时、终止遗留子进程，明确限额错误；保留源文件和已登记音频，清理本次未登记朗读暂存。原鉴权/管理员/租户/权益/取消/最终事务仍复查。不是持久任务队列，重启自动恢复仍未实现。
+- 已验证：真实Linux32MiB/零Swap下孙进程OOM只杀孙进程，监督进程存活；本地隔离 `_test` 数据库中真实exec工作进程官方/私人入库、越权拒绝、OOM失败与清理、排队取消、控制器不可用拒绝启动通过。33项phase8（含真实模型EPUB/PDF）、20项资源/朗读/博客部署单元、121项部署、36项HTTP smoke、两前端/博客构建及站点隔离/modern/UI/JS、Python编译/diff检查通过。调整后的清理逻辑补跑4项隔离工作进程测试通过，40字符策略另跑真实EPUB/PDF→MP3及时间轴通过；数据库仅 `127.0.0.1:55432/kokoro_import_20261114_test`。
+- 资源实测：不分段/80字符策略均在1024MiB+512MiB容器中完成前两句后局部OOM，主站健康保持。最终40字符＋关闭oneDNN加速＋归还暂存内存，在同样硬限额下3句18.2秒实际音频通过，75秒完成、`oomKilled=false`。这只验证短样本与隔离，不代表整书音质/峰值保证；硬限额过小仍会明确失败。未重试正式失败任务或处理已有书籍。日志 `/private/tmp/import-limit-*.log`。
+- 关键文件：`tools/import_resource_{limits,worker}.py`、`saas_imports.py`、`kokoro_worker.py`、`deployment/manager.py`；相关单元 `test_import_resource_limits.py`、可选Linux真实控制器 `test_import_resource_limits_linux.py`、phase8新增隔离进程/权限/取消/失败测试。
+
+## 2026-11-14 国内 Kokoro 导入超时排查（未修改程序）
+
+- 属于共享导入/朗读核心，国内管理员官方导入与国际私人导入调用相同 `saas_imports.py → kokoro_speech.py → kokoro_worker.py`；后续修复须覆盖两入口。
+- 正式任务 `8bae7f35303b4165bebe54c8f7717c1a` 北京时间14:11:52创建，上传202成功，启用 `af_heart` / 1.0速 Kokoro；14:28:03以40%及 `connection timeout expired` 失败。源EPUB40,623字节仍在磁盘、资产active；未重试、重传或改写任务/书籍。
+- 已确认主机内存耗尽：2GiB RAM / 1GiB Swap，sar14:20显示内存96.85%、Swap99.74%、I/O等待73.36%；内核OOM记录Swap剩余0，杀死PID17593（python，RSS1,521,544KiB，另有148,297个换出页）。该进程身份与合成子进程相符，但未保留完整命令行，不能仅凭进程名断言所有内存均来自推理。
+- 同时段PostgreSQL出现认证超时、autovacuum启动延误、检查点耗时319秒；任务检查/进度写入需要新数据库连接，内存/换页压力导致数据库响应迟缓，最终呈现连接超时。此处不是文件上传超时；任务40%不能用于判断具体已生成句数。后台与数据库容器未重启，检查时连接正常、可用内存约1.4GiB、磁盘余26GiB、无活动导入。
+- 待处理：降低/实测模型加载和合成峰值，给合成进程资源隔离与主站保留余量，改进OOM/数据库暂时不可用的错误识别。不能靠延长连接超时或直接重试宣称解决；短句离线预检不代表与正式服务共存时的资源验收。此轮只读排查及文档更新，未更改线上配置或发布。
+- 证据：本机 `/private/tmp/cn-import-timeout-{incident,memory,oom,server}.log`；只读SQL核对任务、源文件、数据库会话及超时设置，`git diff --check`。未修改程序，未重新运行构建/业务测试。
+
 ## 2026-11-14 媒体资产明细补齐（京东云#342已发布）
 
 - 后台此前仅列 `video/*`，文档及其MP3变体被过滤；已展示所有有效资源，展开EPUB/PDF可查看音频格式、大小、时长与路径。占用/日月年增长及服务器观测见 [后台观测交接](../admin-observability/HANDOFF.md)。未重新生成或修改已有音频。

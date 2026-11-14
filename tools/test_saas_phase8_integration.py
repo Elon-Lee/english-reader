@@ -87,6 +87,93 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
             with connection.cursor() as cursor:cursor.execute("INSERT INTO email_verifications(id,user_id,token_hash,expires_at) VALUES(%s,%s,%s,%s)",(new_id(),user_id,token_hash(raw),utcnow()+timedelta(days=1)))
         self.accounts.verify_email(raw)
 
+    def test_limited_worker_keeps_private_and_official_permissions(self):
+        # Exercise the real exec'd worker and PostgreSQL contract on macOS.
+        # Kernel enforcement is separately tested on Linux with a real cgroup.
+        from unittest.mock import Mock
+        from import_resource_limits import MemoryCgroup
+        cgroup=Path(self.temp.name)/'test-cgroup';cgroup.mkdir(exist_ok=True)
+        (cgroup/'cgroup.procs').write_text('')
+        settings={'SHIYUE_IMPORT_MEMORY_MB':'256','SHIYUE_IMPORT_SWAP_MB':'0',
+                  'SHIYUE_IMPORT_CGROUP':str(cgroup),'SHIYUE_IMPORT_LOCK':str(Path(self.temp.name)/'import-budget.lock')}
+        with patch.dict(self.environment,settings):
+            for official,user in ((False,str(self.owner['id'])),(True,str(self.admin['id']))):
+                service=WorkspaceImportService(self.accounts,self.resources,self.media,official=official)
+                task=service.create(user,'text','Limited import','limited.txt','limited-'+str(official))['task']['id']
+                service.upload(user,task,'limited.txt',b'A quiet morning. The reader opens a book.','text/plain')
+                group=Mock(spec=MemoryCgroup,root=cgroup)
+                group.counters.return_value=(0,0)
+                with patch('import_resource_limits.MemoryCgroup',return_value=group):
+                    result=service.complete(user,task)['task']
+                    self.assertEqual(result['status'],'complete')
+                    self.assertTrue(service.complete(user,task)['idempotent'])
+                with self.assertRaises(SaaSError):service.complete(str(self.other['id']),task)
+                with self.accounts.transaction() as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute('SELECT visibility FROM content_books WHERE id=%s',(result['outputBookId'],))
+                        self.assertEqual(cursor.fetchone()[0],'draft' if official else 'private')
+                self.assertNotEqual((cgroup/'cgroup.procs').read_text(),str(os.getpid()))
+
+    def test_limited_worker_oom_persists_clear_failure_and_cleans_only_staging(self):
+        from unittest.mock import Mock
+        from import_resource_limits import MemoryCgroup
+        owner=str(self.owner['id'])
+        task=self.imports.create(owner,'text','OOM fixture','limited.txt','limited-oom')['task']['id']
+        uploaded=self.imports.upload(owner,task,'limited.txt',b'A quiet morning.','text/plain')
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                source=self.imports._source_path(cursor,owner,self.imports._task(cursor,owner,task))
+        staged=source.parent/'.kokoro-interrupted';staged.mkdir();(staged/'audio.wav').write_bytes(b'incomplete')
+        orphan=source.parent/(new_id()+'.mp3');orphan.write_bytes(b'unregistered')
+        registered=source.parent/(new_id()+'.mp3');registered.write_bytes(b'existing audio')
+        self.media.add_variants(owner,uploaded['sourceAssetId'],[{'name':'audio','storagePath':registered.relative_to(self.root.resolve()).as_posix(),'contentType':'audio/mpeg'}])
+        group=Mock(spec=MemoryCgroup,root=Path(self.temp.name))
+        group.counters.side_effect=[(0,0),(1,1)]
+        process=Mock(pid=999999);process.wait.return_value=-9;process.poll.return_value=-9
+        settings={'SHIYUE_IMPORT_MEMORY_MB':'256','SHIYUE_IMPORT_LOCK':str(Path(self.temp.name)/'import-budget.lock')}
+        with patch.dict(self.environment,settings),patch('import_resource_limits.MemoryCgroup',return_value=group), \
+                patch('import_resource_limits.subprocess.Popen',return_value=process),self.assertRaises(SaaSError) as error:
+            self.imports.complete(owner,task)
+        self.assertEqual(error.exception.code,'import_memory_limit')
+        failed=next(item for item in self.imports.list(owner)['tasks'] if item['id']==task)
+        self.assertEqual(failed['status'],'failed');self.assertIn('256 MiB',failed['error'])
+        self.assertTrue(source.is_file());self.assertTrue(registered.is_file())
+        self.assertFalse(staged.exists());self.assertFalse(orphan.exists())
+
+    def test_limited_queued_import_can_cancel_without_starting_a_worker(self):
+        import fcntl
+        import threading
+        owner=str(self.owner['id'])
+        task=self.imports.create(owner,'text','Waiting','waiting.txt','limited-wait')['task']['id']
+        self.imports.upload(owner,task,'waiting.txt',b'A quiet morning.','text/plain')
+        lock=Path(self.temp.name)/'import-budget-wait.lock'
+        finished=threading.Event();complete=self.imports.complete
+        def run(*args):
+            try:return complete(*args)
+            finally:finished.set()
+        with patch.dict(self.environment,{'SHIYUE_IMPORT_MEMORY_MB':'256','SHIYUE_IMPORT_LOCK':str(lock)}), \
+                lock.open('a') as guard,patch.object(self.imports,'complete',side_effect=run), \
+                patch('import_resource_limits.subprocess.Popen') as processor:
+            fcntl.flock(guard,fcntl.LOCK_EX)
+            response=self.imports.submit_complete(owner,task)
+            self.assertTrue(response['asynchronous'])
+            self.imports.cancel(owner,task)
+            self.assertTrue(finished.wait(5))
+            processor.assert_not_called()
+        self.assertEqual(next(item for item in self.imports.list(owner)['tasks'] if item['id']==task)['status'],'cancelled')
+
+    def test_limited_setup_failure_marks_task_failed_and_never_runs_unbounded(self):
+        owner=str(self.owner['id'])
+        task=self.imports.create(owner,'text','Unavailable','unavailable.txt','limited-unavailable')['task']['id']
+        self.imports.upload(owner,task,'unavailable.txt',b'A quiet morning.','text/plain')
+        with patch.dict(self.environment,{'SHIYUE_IMPORT_MEMORY_MB':'256','SHIYUE_IMPORT_LOCK':str(Path(self.temp.name)/'setup.lock')}), \
+                patch('import_resource_limits.MemoryCgroup') as group,patch('import_resource_limits.subprocess.Popen') as processor:
+            group.return_value.configure.side_effect=OSError('read-only cgroup')
+            with self.assertRaises(SaaSError) as error:self.imports.complete(owner,task)
+            self.assertEqual(error.exception.code,'import_limit_unavailable')
+            processor.assert_not_called()
+        self.assertEqual(next(item for item in self.imports.list(owner)['tasks'] if item['id']==task)['status'],'failed')
+
     @staticmethod
     def speech_epub():
         content=io.BytesIO()

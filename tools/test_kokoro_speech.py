@@ -8,11 +8,20 @@ import unittest
 from unittest.mock import patch
 
 from kokoro_speech import attach_timing, options, reader_speech, validate_request
-from kokoro_worker import word_timing
+from kokoro_worker import speech_chunks, word_timing
 from saas_auth import SaaSError
 
 
 class KokoroSpeechTests(unittest.TestCase):
+    def test_bounded_chunks_preserve_words_and_local_default(self):
+        text='The children gather by the old wooden bridge, listen to the birds, and share stories.'
+        self.assertEqual(speech_chunks(text),text)
+        chunks=speech_chunks(text,32)
+        self.assertGreater(len(chunks),1)
+        self.assertTrue(all(len(chunk)<=32 for chunk in chunks))
+        self.assertEqual(' '.join(chunks),text)
+        self.assertEqual(speech_chunks('an-unusually-long-word',4),['an-unusually-long-word'])
+
     def test_only_explicit_document_requests_are_accepted(self):
         self.assertIsNone(validate_request(None, 'document', 'a.epub', {}))
         self.assertEqual(validate_request({'engine': 'kokoro'}, 'document', 'a.pdf', {}),

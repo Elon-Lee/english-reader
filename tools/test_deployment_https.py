@@ -56,6 +56,7 @@ class DeploymentHttpsTests(unittest.TestCase):
                 self.assertEqual(dict(line.split('=',1) for line in env.read_text().splitlines()), {
                     'SESSION_SECRET':'test-session-secret','DATABASE_URL':'test-database',
                     'APP_BASE_URL':expected,'SMTP_FROM_NAME':'纸间微光',
+                    'SHIYUE_IMPORT_MEMORY_MB':'1024','SHIYUE_IMPORT_SWAP_MB':'512','SHIYUE_IMPORT_THREADS':'1',
                 })
                 self.assertEqual(env.stat().st_mode & 0o777, 0o600)
                 remote.scp.assert_not_called()
