@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -120,7 +121,7 @@ class MediaService:
                 cursor.execute("INSERT INTO security_events(id,user_id,event_type,metadata_json) VALUES(%s,%s,'media_registered',%s::jsonb)",(new_id(),owner_id,json.dumps({"assetId":asset_id,"scope":scope,"bytes":total,"actorId":actor_id})))
                 return {"id":asset_id,"scope":scope,"ownerId":owner_id,"storagePath":primary["storage_path"],"originalBytes":primary["byte_size"],"generatedBytes":generated,"totalBytes":total,"variants":[{"name":item["variant_name"],"bytes":item["byte_size"]} for item in parsed_variants]}
 
-    def add_variants(self, actor_id: str, asset_id: str, variants: list[dict[str, Any]]) -> dict[str, Any]:
+    def add_variants(self, actor_id: str, asset_id: str, variants: list[dict[str, Any]], *, connection=None) -> dict[str, Any]:
         """Attach generated files to an existing imported source asset.
 
         Import processors register the uploaded source immediately, then create
@@ -138,7 +139,9 @@ class MediaService:
             name=str(value.get("name","")).strip()
             if not name or len(name)>100 or name in names:raise SaaSError("invalid_media_variant","媒体变体名称无效或重复。",400)
             names.add(name);parsed.append({"variant_name":name,**self._file_record(value.get("storagePath"),str(value.get("contentType","")or""))})
-        with self.accounts.transaction() as connection:
+        # Import finalization can attach generated media and publish the book
+        # in one transaction, including cancellation and storage checks.
+        with (nullcontext(connection) if connection is not None else self.accounts.transaction()) as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT id FROM users WHERE id=%s FOR UPDATE",(actor_id,))
                 cursor.execute("SELECT * FROM media_assets WHERE id=%s FOR UPDATE",(asset_id,));asset=self.accounts._one(cursor)

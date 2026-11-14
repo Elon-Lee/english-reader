@@ -1158,6 +1158,10 @@ class Handler(SimpleHTTPRequestHandler):
                 self.reply(service.list(user_id,(query.get("limit")or[100])[0],(query.get("page")or[1])[0]));return
             if path==base+"/match-audio":
                 query=parse_qs(route.query);self.reply(service.match_audio(user_id,(query.get("filename")or[""])[0]));return
+            if path==base+'/speech-options':
+                service.assert_access(user_id)
+                from kokoro_speech import options
+                self.reply(options());return
             if path.endswith('/audio-upload'):
                 task_id=unquote(path[len(base+'/'):-len('/audio-upload')].rstrip('/'))
                 self.reply(service.audio_upload().status(user_id,task_id));return

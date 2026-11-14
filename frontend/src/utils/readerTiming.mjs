@@ -12,7 +12,7 @@ export function buildReaderTimeline(sentences) {
   const words = sentences.map((sentence,index) => {
     const tokens = sentence.words || [], start = sentenceStart(sentence) ?? 0
     const end = sentenceEnd(sentence,sentences[index+1]) ?? start + Math.max(1,tokens.length*.42)
-    const acoustic=sentence.timingPolicy==='acoustic-only'
+    const acoustic=sentence.timingPolicy==='acoustic-only'||sentence.timingPolicy==='kokoro-sentence-audio'
     return tokens.map((word,wordIndex) => ({
       index:wordIndex,
       start:mediaSeconds(word.start ?? word.startTime) ?? (acoustic?null:start + (end-start)*wordIndex/Math.max(1,tokens.length)),

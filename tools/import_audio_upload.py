@@ -70,6 +70,8 @@ class CompanionAudioUpload:
                     'received':state.get('received',{}),'finalized':bool(receipt),'task':self.imports._public(task)}
 
     def _validate(self,user_id,task,filename,total):
+        if as_json(task['metadata_json']).get('speechSynthesis'):
+            raise SaaSError('speech_audio_conflict','AI 朗读任务不能上传配套 MP3。',409)
         if type(total) is not int or not 0<total<=MAX_AUDIO_BYTES:
             raise SaaSError('invalid_audio_upload','MP3 文件为空或超过大小限制。',413)
         if task['status']!='queued' or task['kind'] not in {'text','document'}:

@@ -46,7 +46,8 @@ class DualEntryFrontendTests(unittest.TestCase):
             self.assertTrue(endpoint in text, f'missing international API: {endpoint}')
         self.assertIn(SOURCE / 'pages/ReaderPage.jsx', graph)
         self.assertIn(SOURCE / 'components/AuthCaptcha.jsx', graph)
-        self.assertNotIn('speechSynthesis', text)
+        self.assertNotIn('SpeechSynthesisUtterance', text)
+        self.assertIsNone(re.search(r'(?:window\.)?speechSynthesis\.(?:speak|cancel|getVoices)\s*\(',text))
 
     def test_two_builds_have_distinct_output_and_public_assets(self):
         package = json.loads((ROOT / 'package.json').read_text())

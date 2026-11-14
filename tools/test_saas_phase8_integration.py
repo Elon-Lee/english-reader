@@ -87,6 +87,175 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
             with connection.cursor() as cursor:cursor.execute("INSERT INTO email_verifications(id,user_id,token_hash,expires_at) VALUES(%s,%s,%s,%s)",(new_id(),user_id,token_hash(raw),utcnow()+timedelta(days=1)))
         self.accounts.verify_email(raw)
 
+    @staticmethod
+    def speech_epub():
+        content=io.BytesIO()
+        with zipfile.ZipFile(content,'w') as archive:
+            archive.writestr('META-INF/container.xml','<container><rootfiles><rootfile full-path="book.opf"/></rootfiles></container>')
+            archive.writestr('book.opf','<package><manifest><item id="one" href="one.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/></spine></package>')
+            archive.writestr('one.xhtml','<html><body><p>A quiet morning is a good time to read a book.</p><p>The story begins in a small village near the sea.</p></body></html>')
+        return content.getvalue()
+
+    def speech_task(self,service=None,user=None,key='speech-task'):
+        service=service or self.imports;user=user or str(self.owner['id'])
+        with patch('kokoro_speech.options',return_value={'available':True}):
+            task=service.create(user,'document','AI narration','narration.epub',key,metadata={'speechSynthesis':{'engine':'kokoro','voice':'af_heart'}})['task']['id']
+        service.upload(user,task,'narration.epub',self.speech_epub(),'application/epub+zip')
+        return task
+
+    def speech_stub(self,service,data,source,task_id,user_id,request):
+        # Test-only output exercises atomic registration; real inference has its own opt-in test.
+        from kokoro_speech import attach_timing
+        attach_timing(data,{'duration':len(data['sentences']), 'sentences':[
+            {'id':s['id'],'start':i,'end':i+1,'words':[]} for i,s in enumerate(data['sentences'])]},request)
+        target=source.parent/'test-generated.mp3';target.write_bytes(b'test-only-generated-audio')
+        return {'name':'audio','storagePath':target.relative_to(service.media.media_root).as_posix(),'contentType':'audio/mpeg'}
+
+    def test_speech_import_is_atomic_idempotent_and_owner_scoped(self):
+        owner=str(self.owner['id']);task=self.speech_task()
+        with patch('kokoro_speech.generate',side_effect=self.speech_stub) as generator:
+            result=self.imports.complete(owner,task)['task']
+            self.assertEqual(result['status'],'complete')
+            self.assertTrue(self.imports.complete(owner,task)['idempotent'])
+            generator.assert_called_once()
+        book=self.workspace.reader(owner,result['outputBookId'])['book']
+        self.assertTrue(book['speechSynthesis']['synthetic']);self.assertEqual(book['resourceType'],'audio')
+        self.assertEqual(book['readingDocument']['format'],'epub')
+        self.assertEqual(book['sentences'][1]['start'],1)
+        self.assertFalse(any('start' in word for s in book['sentences'] for word in s['words']))
+        with self.assertRaises(SaaSError):self.workspace.reader(str(self.other['id']),book['id'])
+        asset=book['mediaAssets'][0]
+        with self.assertRaises(SaaSError):self.media.stream(str(self.other['id']),asset['id'],'audio')
+        self.assertGreater(asset['bytes'],len(self.speech_epub()))
+        self.workspace.delete_book(owner,book['id'],book['title'])
+        self.assertFalse(list(self.root.rglob('test-generated.mp3')))
+
+    def test_speech_cancellation_and_quota_failure_remove_unpublished_audio(self):
+        owner=str(self.owner['id'])
+        for mode in ('cancel','quota','after-attach'):
+            task=self.speech_task(key='speech-'+mode)
+            def generate(*args):
+                variant=self.speech_stub(*args)
+                if mode=='cancel':self.imports.cancel(owner,task)
+                return variant
+            with patch('kokoro_speech.generate',side_effect=generate):
+                if mode=='quota':
+                    with patch.object(self.media,'_private_bytes',return_value=1024**3):
+                        with self.assertRaises(SaaSError) as error:self.imports.complete(owner,task)
+                        self.assertEqual(error.exception.code,'quota_exceeded')
+                elif mode=='after-attach':
+                    register=self.media.add_variants
+                    def register_then_fail(*args,**kwargs):
+                        register(*args,**kwargs)
+                        raise SaaSError('test_publish_failure','测试最终入库失败',422)
+                    with patch.object(self.media,'add_variants',side_effect=register_then_fail):
+                        with self.assertRaises(SaaSError):self.imports.complete(owner,task)
+                else:
+                    with self.assertRaises(SaaSError):self.imports.complete(owner,task)
+            state=next(t for t in self.imports.list(owner)['tasks'] if t['id']==task)
+            self.assertEqual(state['status'],'cancelled' if mode=='cancel' else 'failed')
+            with self.accounts.transaction() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT COUNT(*) FROM asset_variants WHERE asset_id=%s AND variant_name='audio'",(state['sourceAssetId'],))
+                    self.assertEqual(cursor.fetchone()[0],0)
+            self.assertFalse(list((self.root/'private-uploads'/owner/task).rglob('test-generated.mp3')))
+            if mode=='quota':
+                self.imports.retry(owner,task)
+                with patch('kokoro_speech.generate',side_effect=self.speech_stub):
+                    self.assertEqual(self.imports.complete(owner,task)['task']['status'],'complete')
+
+    def test_speech_missing_runtime_and_failure_are_actionable(self):
+        owner=str(self.owner['id'])
+        with patch('kokoro_speech.options',return_value={'available':False}):
+            with self.assertRaises(SaaSError) as error:
+                self.imports.create(owner,'document','AI','book.epub','speech-unavailable',metadata={'speechSynthesis':{'engine':'kokoro'}})
+            self.assertEqual(error.exception.code,'speech_unavailable')
+        task=self.speech_task()
+        with patch('kokoro_speech.generate',side_effect=SaaSError('speech_generation_failed','生成失败',422)):
+            with self.assertRaises(SaaSError):self.imports.complete(owner,task)
+        self.assertEqual(self.imports.list(owner)['tasks'][0]['status'],'failed')
+        self.assertEqual(self.workspace.list_books(owner)['books'],[])
+
+    def test_speech_rejects_companion_upload_and_runs_official_import_without_subscription(self):
+        owner=str(self.owner['id']);task=self.speech_task()
+        with self.assertRaises(SaaSError) as conflict:self.imports.upload_audio(owner,task,'narration.mp3',b'original')
+        self.assertEqual(conflict.exception.code,'speech_audio_conflict')
+        import hashlib
+        with self.assertRaises(SaaSError) as conflict:
+            self.imports.audio_upload().put(owner,task,'narration.mp3',1,0,hashlib.sha256(b'x').hexdigest(),b'x')
+        self.assertEqual(conflict.exception.code,'speech_audio_conflict')
+        official=WorkspaceImportService(self.accounts,self.resources,self.media,official=True)
+        admin=str(self.admin['id']);task=self.speech_task(official,admin,'official-speech')
+        with self.assertRaises(SaaSError):self.imports.complete(admin,task)
+        with patch('kokoro_speech.generate',side_effect=self.speech_stub):
+            result=official.complete(admin,task)['task']
+        with self.accounts.transaction() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT visibility,data_json FROM content_books WHERE id=%s',(result['outputBookId'],))
+                row=self.accounts._one(cursor);self.assertEqual(row['visibility'],'draft')
+                self.assertTrue(row['data_json']['speechSynthesis']['synthetic'])
+        self.assertEqual(self.workspace.list_books(admin)['books'],[])
+        catalog=CatalogService(self.accounts,self.resources)
+        reviewed=catalog.review(admin,result['outputBookId'],'licensed','published')['book']
+        reader=catalog.reader(owner,reviewed['id'],trial=True)['book']
+        self.assertTrue(reader['speechSynthesis']['synthetic'])
+        self.assertTrue(all(v['contentType'].startswith('audio/') for a in reader['mediaAssets'] for v in a['variants']))
+
+    @unittest.skipUnless(os.environ.get('SHIYUE_RUN_KOKORO_TEST')=='1','Opt in to real local Kokoro inference')
+    def test_real_kokoro_epub_and_pdf_generate_playable_audio_with_timeline(self):
+        from kokoro_speech import options
+        self.assertTrue(options()['available'])
+        owner=str(self.owner['id'])
+        stream=b'BT /F1 20 Tf 60 730 Td (A quiet morning is a good time to read a book.) Tj 0 -40 Td (The story begins in a small village near the sea.) Tj ET'
+        objects=[b'<< /Type /Catalog /Pages 2 0 R >>',b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+                 b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+                 b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+                 b'<< /Length '+str(len(stream)).encode()+b' >>\nstream\n'+stream+b'\nendstream']
+        pdf=b'%PDF-1.4\n';offsets=[0]
+        for index,item in enumerate(objects,1):
+            offsets.append(len(pdf));pdf+=f'{index} 0 obj\n'.encode()+item+b'\nendobj\n'
+        xref=len(pdf);pdf+=b'xref\n0 6\n0000000000 65535 f \n'
+        pdf+=b''.join(f'{offset:010d} 00000 n \n'.encode() for offset in offsets[1:])
+        pdf+=f'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode()
+        pdf_service=(WorkspaceImportService(self.accounts,self.resources,self.media,pdf_ocr=Path(os.environ['SHIYUE_KOKORO_TEST_PDF_OCR']))
+                     if os.environ.get('SHIYUE_KOKORO_TEST_PDF_OCR') else self.pdf_imports)
+        for filename,content,service in [('narration.epub',self.speech_epub(),self.imports),('narration.pdf',pdf,pdf_service)]:
+            with self.subTest(filename=filename):
+                task=service.create(owner,'document','Real narration',filename,'real-'+filename,metadata={'speechSynthesis':{'engine':'kokoro','voice':'bf_emma' if filename.endswith('pdf') else 'af_heart'}})['task']['id']
+                service.upload(owner,task,filename,content)
+                result=service.complete(owner,task)['task'];self.assertEqual(result['status'],'complete')
+                book=self.workspace.reader(owner,result['outputBookId'])['book']
+                self.assertTrue(book['speechSynthesis']['synthetic']);self.assertGreater(book['duration'],1)
+                self.assertTrue(all(0<=s['start']<s['end']<=book['duration'] for s in book['sentences']))
+                asset=self.media.stream(owner,book['mediaAssets'][0]['id'],'audio')
+                self.assertGreater(asset['target']['byte_size'],1000)
+                self.assertGreater(float(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','default=nk=1:nw=1',str(asset['path'])],text=True)),1)
+                self.assertTrue(service.complete(owner,task)['idempotent'])
+
+    @unittest.skipUnless(os.environ.get('SHIYUE_RUN_KOKORO_TEST')=='1','Opt in to real local Kokoro cancellation')
+    def test_real_kokoro_cancellation_stops_process_and_cleans_temporary_audio(self):
+        import threading
+        owner=str(self.owner['id']);task=self.speech_task(key='real-cancel')
+        launched=threading.Event();processes=[];spawn=subprocess.Popen
+        def capture(command,*args,**kwargs):
+            process=spawn(command,*args,**kwargs)
+            if any(str(arg).endswith('kokoro_worker.py') for arg in command):
+                processes.append(process);launched.set()
+            return process
+        with patch('kokoro_speech.subprocess.Popen',side_effect=capture):
+            result=self.imports.submit_complete(owner,task)
+            self.assertTrue(result['asynchronous'])
+            self.assertTrue(launched.wait(15))
+            self.imports.cancel(owner,task)
+            deadline=time.monotonic()+15
+            while time.monotonic()<deadline:
+                if processes[0].poll() is not None and not list(self.root.rglob('.kokoro-*')):break
+                time.sleep(.05)
+            else:self.fail('Cancelled Kokoro worker did not stop and clean temporary files')
+        self.assertEqual(self.imports.list(owner)['tasks'][0]['status'],'cancelled')
+        self.assertEqual(self.workspace.list_books(owner)['books'],[])
+        self.assertFalse(list(self.root.rglob('*.mp3')))
+
     def test_text_task_upload_complete_idempotency_and_owner_isolation(self):
         owner,other=str(self.owner["id"]),str(self.other["id"])
         created=self.imports.create(owner,"text","我的测试文本","lesson.md","text-task-1")
@@ -567,6 +736,13 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
                     response=client.getresponse();return response.status,json.loads(response.read()),response.getheaders()
                 finally:client.close()
             owner_headers={"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf}
+            self.assertEqual(request('GET','/api/workspace/imports/speech-options')[0],401)
+            status,speech_options,_=request('GET','/api/workspace/imports/speech-options',headers=owner_headers)
+            self.assertEqual(status,200);self.assertIsInstance(speech_options['available'],bool)
+            self.assertEqual({v['value'] for v in speech_options['voices']},{'af_heart','am_michael','bf_emma','bm_george'})
+            speech_payload=json.dumps({'kind':'document','filename':'speech.epub','idempotencyKey':'http-speech-csrf','metadata':{'speechSynthesis':{'engine':'kokoro'}}})
+            self.assertEqual(request('POST','/api/workspace/imports',speech_payload,{key:value for key,value in owner_headers.items() if key!='X-CSRF-Token'})[0],403)
+            self.assertEqual(request('GET','/api/admin/content-imports/speech-options',headers=owner_headers)[0],403)
             status,short_task,_=request('POST','/api/workspace/imports',json.dumps({'kind':'text','title':'Short upload','filename':'short.txt','idempotencyKey':'http-short','metadata':{'awaitingAudioUpload':True}}),owner_headers)
             self.assertEqual(status,201)
             short_id=short_task['task']['id']
@@ -633,6 +809,7 @@ subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=green:s=32
             cookies="; ".join(value.split(";",1)[0] for name,value in headers if name.lower()=="set-cookie")
             csrf=next(value.split("=",1)[1] for value in cookies.split("; ") if value.startswith("shiyue_csrf="))
             admin_headers={"Content-Type":"application/json","Cookie":cookies,"X-CSRF-Token":csrf}
+            self.assertEqual(request('GET','/api/admin/content-imports/speech-options',headers=admin_headers)[0],200)
             self.assertEqual(request("POST","/api/admin/content-imports","{}",{"Content-Type":"application/json","Cookie":cookies})[0],403)
             status,created,_=request("POST","/api/admin/content-imports",json.dumps({"kind":"text","title":"Official HTTP","filename":"official.txt","idempotencyKey":"http-official"}),admin_headers)
             self.assertEqual(status,201,created);official_id=created["task"]["id"]

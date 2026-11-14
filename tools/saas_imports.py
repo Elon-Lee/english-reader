@@ -78,10 +78,14 @@ class WorkspaceImportService:
         return {"id":task["id"],"kind":task["kind"],"status":task["status"],"title":task["title"],"originalFilename":task["original_filename"],"sourceUrl":task["source_url"],"sourceAssetId":task["source_asset_id"],"outputBookId":task["output_book_id"],"progress":int(task["progress"]),"step":task["step"],"error":task["error"],"awaitingAudioUpload":bool(as_json(task["metadata_json"]).get('awaitingAudioUpload')),"createdAt":timestamp(task["created_at"]),"updatedAt":timestamp(task["updated_at"]),"completedAt":timestamp(task["completed_at"])}
 
     def create(self,user_id:str,kind:str,title:str,filename:str,idempotency_key:str,source_url:str="",metadata:dict[str,Any]|None=None)->dict[str,Any]:
+        self.assert_access(user_id)
         metadata={**(metadata or {}),"officialImport":self.official}
         kind=str(kind or "").strip().casefold();key=str(idempotency_key or "").strip();filename=Path(str(filename or "")).name
         if kind not in {"text","document","mp3","video","youtube"}:raise SaaSError("invalid_import_kind","不支持的导入类型。",400)
         metadata['awaitingAudioUpload']=kind in {'text','document'} and metadata.get('awaitingAudioUpload') is True
+        from kokoro_speech import validate_request
+        speech=validate_request(metadata.get('speechSynthesis'),kind,filename,metadata)
+        if speech:metadata['speechSynthesis']=speech
         if not key or len(key)>255:raise SaaSError("invalid_idempotency_key","操作标识无效。",400)
         if kind=="youtube" and not self._valid_youtube_url(source_url):raise SaaSError("invalid_import_source","请输入有效的 YouTube 地址。",400)
         reservation=None
@@ -95,6 +99,9 @@ class WorkspaceImportService:
                     if existing:
                         if bool(as_json(existing["metadata_json"]).get("officialImport"))!=self.official:raise SaaSError("import_source_conflict","操作标识已用于其他导入。",409)
                         return {"task":self._public(existing),"idempotent":True}
+                    if speech:
+                        from kokoro_speech import options
+                        if not options()['available']:raise SaaSError('speech_unavailable','AI 朗读尚未安装，请联系管理员。',503)
                     context=self.resources._context(cursor,user_id)
                     if not self.official:self.resources.assert_private_import(context)
                     task_id=new_id();status="queued" if kind=="youtube" else "uploading";step="等待上传源文件" if status=="uploading" else "等待 PostgreSQL 原生处理器"
@@ -175,6 +182,8 @@ class WorkspaceImportService:
                 with self.accounts.transaction() as connection:
                     with connection.cursor() as cursor:
                         task=self._task(cursor,user_id,task_id)
+                        if as_json(task['metadata_json']).get('speechSynthesis'):
+                            raise SaaSError('speech_audio_conflict','AI 朗读任务不能上传配套 MP3。',409)
                         if task['status']!='queued' or task['kind'] not in {'text','document'}:
                             raise SaaSError('audio_upload_not_allowed','请先上传文档，完成处理后不能替换原音。',409)
                         source=self._source_path(cursor,user_id,task)
@@ -576,7 +585,7 @@ class WorkspaceImportService:
                 if as_json(task['metadata_json']).get('awaitingAudioUpload'):
                     raise SaaSError('companion_audio_pending','配套 MP3 尚未上传完成，请重新选择文档和音频上传。',409)
                 cursor.execute("SELECT 1 FROM asset_variants WHERE asset_id=%s AND variant_name='audio' AND deleted_at IS NULL",(task.get('source_asset_id'),))
-                paired=task['kind'] in {'text','document'} and (bool(cursor.fetchone()) or bool(as_json(task['metadata_json']).get('matchedAudioAssetId')))
+                paired=task['kind'] in {'text','document'} and (bool(cursor.fetchone()) or bool(as_json(task['metadata_json']).get('matchedAudioAssetId')) or bool(as_json(task['metadata_json']).get('speechSynthesis')))
         if (not paired and not background) or task['status'] not in {'queued','running'}:return self.complete(user_id,task_id)
         def process():
             try:self.complete(user_id,task_id)
@@ -620,7 +629,7 @@ class WorkspaceImportService:
         no user-row lock held.  The final transaction rechecks task state so a
         concurrent cancellation cannot publish a book after cancellation.
         """
-        reservation_id=None;pending_variant_paths=[]
+        reservation_id=None;pending_variant_paths=[];speech_variants=[]
         try:
             with self.accounts.transaction() as connection:
                 with connection.cursor() as cursor:
@@ -720,10 +729,19 @@ class WorkspaceImportService:
                         target.unlink(missing_ok=True);raise
                     audio={'storage_path':relative}
                 if audio:
+                    if as_json(task['metadata_json']).get('speechSynthesis'):
+                        raise SaaSError('speech_audio_conflict','已有配套音频，不能覆盖为 AI 朗读。',409)
                     data['audio']=f"/api/media/{work['source_asset_id']}?variant=audio"
                     data['duration']=float(self.audio_duration(self.media._safe_path(audio['storage_path'])[1]))
                     source_type=data['sourceType']='audio'
                     data=self._align_document_audio(data,self.media._safe_path(audio['storage_path'])[1],task_id,user_id)
+                elif as_json(task['metadata_json']).get('speechSynthesis'):
+                    from kokoro_speech import generate,validate_request
+                    request=validate_request(as_json(task['metadata_json'])['speechSynthesis'],work['kind'],source.name,as_json(task['metadata_json']))
+                    variant=generate(self,data,source,task_id,user_id,request)
+                    speech_variants=[variant];pending_variant_paths.append(variant['storagePath'])
+                    data['audio']=f"/api/media/{work['source_asset_id']}?variant=audio"
+                    source_type=data['sourceType']='audio'
             metadata=as_json(task.get("metadata_json")) if task.get("metadata_json") else {}
             data["series"]=str(metadata.get("series") or (data.get("youtube") or {}).get("channel") or "私人导入")
             data["level"]=str(metadata.get("level") or "")
@@ -743,6 +761,8 @@ class WorkspaceImportService:
                     if not self.official:
                         self.resources.assert_private_import(context)
                         self.resources.assert_media_capacity(cursor,user_id,context,media_kind)
+                    if speech_variants:
+                        self.media.add_variants(user_id,work['source_asset_id'],speech_variants,connection=connection)
                     cursor.execute("""INSERT INTO content_books(id,owner_id,title,english_title,series,level,topics,source_type,source_path,status,visibility,cover_url,page_base_url,audio_url,pdf_url,video_url,duration,alignment,data_json,quality_json,created_at,updated_at)
                     VALUES(%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,'ready','private',%s,'',%s,'',%s,%s,%s,%s::jsonb,'{}'::jsonb,NOW(),NOW())""",(book_id,user_id,title,title,str(data.get("series") or (data.get("youtube") or {}).get("channel") or "私人导入"),str(data.get("level") or ""),json.dumps(data.get("topics") or [],ensure_ascii=False),source_type,f"workspace/{user_id}/{task_id}",str(data.get("cover","")or""),str(data.get("audio","")or""),str(data.get("video","")or""),float(data.get("duration",0)or 0),str(data.get("alignment","")or""),json.dumps(data,ensure_ascii=False)))
                     cursor.execute("UPDATE media_assets SET content_book_id=%s,kind=%s WHERE id=%s",(book_id,source_type,work["source_asset_id"]))
@@ -754,9 +774,10 @@ class WorkspaceImportService:
                         cursor.execute("UPDATE media_assets SET catalog_book_id=%s WHERE id=%s",(catalog_id,work["source_asset_id"]))
                         self.resources._audit(cursor,user_id,user_id,"catalog_import",{"sourceBookId":book_id,"catalogBookId":catalog_id})
                     alignment=data.get('audioAlignment') or {}
-                    completed_step=(f"导入完成 · 原音单词对齐 {alignment['coverage']:.1%}" if alignment else '导入完成')
+                    completed_step=('导入完成 · AI 合成朗读' if data.get('speechSynthesis') else f"导入完成 · 原音单词对齐 {alignment['coverage']:.1%}" if alignment else '导入完成')
                     cursor.execute("UPDATE workspace_import_tasks SET status='complete',output_book_id=%s,progress=100,step=%s,completed_at=NOW(),updated_at=NOW() WHERE id=%s",(book_id,completed_step,task_id))
                     cursor.execute("SELECT * FROM workspace_import_tasks WHERE id=%s",(task_id,));completed=self.accounts._one(cursor)or{}
+            pending_variant_paths=[]
             reservation_id=completed.get("quota_reservation_id")
         except Exception as exc:
             for relative in pending_variant_paths:

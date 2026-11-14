@@ -45,6 +45,16 @@ test('acoustic alignment skips untimed words and holds highlighting through paus
   assert.equal(timelineWord(timeline,0,10),3)
   assert.deepEqual(timeline.words[0].map(w=>w.index),[1,3])
 })
+test('Kokoro sentence audio never invents timings for unmapped words',()=>{
+  const timeline=buildReaderTimeline([
+    {start:0,end:2,timingPolicy:'kokoro-sentence-audio',words:[{text:'Unknown'},{text:'name'}]},
+    {start:2,end:4,timingPolicy:'kokoro-sentence-audio',words:[{text:'Hello',start:2.2,end:2.8,estimated:true},{text:'world',start:3,end:3.8,estimated:true}]},
+  ])
+  assert.equal(timelineSentence(timeline,1),0)
+  assert.equal(timelineWord(timeline,0,1),-1)
+  assert.equal(timelineWord(timeline,1,2.3),0)
+  assert.equal(timelineWord(timeline,1,3.3),1)
+})
 test('imported audio highlights until the next word or sentence begins, including backward seeks',()=>{
   const timeline=buildReaderTimeline([
     {start:10.202,end:12.105,timingPolicy:'acoustic-only',words:[

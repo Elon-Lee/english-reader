@@ -1,0 +1,6 @@
+# Optional isolated Python 3.11 runtime; never install into the SaaS venv.
+kokoro==0.9.4
+numpy==1.26.4
+transformers==4.46.3
+spacy==3.7.5
+soundfile>=0.12,<1

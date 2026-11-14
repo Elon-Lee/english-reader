@@ -1,0 +1,66 @@
+# EPUB/PDF 的 Kokoro 朗读试用
+
+## 使用范围
+
+- 国内管理员的官方内容导入、国际有导入权益用户的私人导入，共用一份实现。
+- 选择英文 EPUB/PDF 且没有本次配套 MP3、没有匹配的已上传 MP3 时，可选“AI 生成朗读”；默认仍为仅导入正文。
+- 四种英文音色：`af_heart`、`am_michael`、`bf_emma`、`bm_george`。生成语速可选 0.85/1/1.15；服务端允许 0.75–1.25。
+- 新生成的 MP3 作为源文档的 `audio` 变体登记，走既有鉴权、Range、存储计费、书籍删除、官方审核与试读裁剪。已有书籍不重处理。
+- 阅读器显示“AI 合成朗读”；逐句时间来自每句生成音频的样本长度。单词时间来自模型预测并标记 `estimated:true`；无法完整映射的句子只保留句级时间，不均分单词时间。
+
+## 安装
+
+模型不加入 SaaS 必需依赖，也不在用户导入时联网下载。由管理员在实际运行服务的环境中安装：
+
+```sh
+sh tools/install_kokoro.sh
+```
+
+默认使用现有 `.local/saas-venv/bin/python` 创建独立 `.local/kokoro/venv`，要求 Python 3.11。可显式指定解释器与持久目录：
+
+```sh
+PYTHON311=/usr/bin/python3.11 SHIYUE_KOKORO_HOME=/persistent/kokoro sh tools/install_kokoro.sh
+```
+
+服务进程使用同一 `SHIYUE_KOKORO_HOME`；需要时可指定 `SHIYUE_KOKORO_PYTHON`。默认目录无需额外配置。模型环境需 FFmpeg（含 libmp3lame）及 FFprobe，PDF 沿用已有 OCR 安装。本地生成支持项目既有 `.local/local-dev/tools/ffmpeg/bin` 回退。
+
+安装器固定 `hexgrad/Kokoro-82M` revision `f3ff3571791e39611d31c381e3a41a3af07b4987`，保存原始模型卡、音色说明和 Apache-2.0 许可副本；安装 spaCy 英文模型后执行离线合成。只有成功才写 `ready.json`，导入选项接口才报告可用。大模型、虚拟环境、合成样本均在 Git 忽略的 `.local/` 中。
+
+云端为独立外部条件：需要在容器内安装 Linux 对应的虚拟环境，并挂载持久模型目录、配置环境变量；不能拷贝 macOS venv。现有部署没有自动打包或安装 Kokoro，也没有因此发布线上。
+
+## 处理与接口
+
+- `GET /api/workspace/imports/speech-options`：有私人导入权益的登录用户；国内私人 API 继续 404。
+- `GET /api/admin/content-imports/speech-options`：登录管理员。
+- 创建任务仍使用现有 POST，metadata 可带：
+
+```json
+{"speechSynthesis":{"engine":"kokoro","voice":"af_heart","speed":1}}
+```
+
+- 不新增写路由。创建、上传、处理、最终入库沿用 CSRF、所有者/官方范围和资源检查；创建与补传均拒绝同时配置原音和 AI 朗读。
+- 后台子进程逐句生成 24kHz PCM，然后转为 64kbps MP3。进度、成功、失败、取消、重试继续由现有任务列表轮询展示。
+- 同一后端进程最多一个 Kokoro 生成任务，其他任务等待；每约两秒复查取消与权限，结束时复查实际容量。生成音频登记和读物发布在同一事务提交，失败或取消清理本次未登记文件。
+- 试用上限为 500,000 字符、12 小时音频、4 小时处理时间；WAV 暂存最多 2GiB，生成预算按当前可用存储限制。长书建议分册。
+- 原有任务线程不是持久队列；服务进程重启后不自动恢复逐句生成，需沿用现有中断恢复/重试机制。整本书的音质、漏读率、吞吐和目标服务器峰值内存尚无验收结论。
+
+## 验证
+
+常规：
+
+```sh
+PYTHONPATH=tools .local/saas-venv/bin/python -m unittest tools.test_kokoro_speech
+node --test frontend/src/utils/readerTiming.test.mjs
+npm run build:sites
+npm run test:sites
+npm run test:sites:built
+```
+
+导入集成只设置 `SHIYUE_SAAS_TEST_DATABASE_URL` 到名称以 `_test` 结尾的专用 PostgreSQL 数据库，禁止正式库。`SHIYUE_RUN_KOKORO_TEST=1` 启用真实模型；`SHIYUE_KOKORO_TEST_PDF_OCR` 可指向真实 PDF OCR 可执行文件，否则 PDF 提取使用已有测试夹具。
+
+```sh
+PYTHONPATH=tools SHIYUE_RUN_KOKORO_TEST=1 .local/saas-venv/bin/python -m unittest tools.test_saas_phase8_integration
+./start-reader.sh --saas-smoke 8795
+```
+
+浏览器：构建两站后运行 `node tools/test_kokoro_browser.cjs`，通过 `PLAYWRIGHT_MODULE` 指向已安装的 playwright-core。使用隔离 API 夹具和 `.local/kokoro/preflight.wav`，覆盖可用性/失败重试、两站导入参数、原音优先和阅读器音频解码；不写真实用户数据。
